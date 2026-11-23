@@ -434,22 +434,29 @@ function SourcedMultiSelect({ source, value, onChange, ...props }: {
 }): ReactElement {
   const options = useQuery({ queryKey: ["schema-options", source], queryFn: () => loadSchemaOptions(source) });
   const selected = Array.isArray(value) ? value : [];
-  const selectedKeys = selected.map(schemaOptionKey);
+  const previous = new Map(selected.map((item) => [schemaOptionKey(item), item]));
   const stale = options.isSuccess
     ? selected.flatMap((item) => {
         const problem = unavailableSchemaOption(source, item);
         return problem ? [`${schemaOptionLabel(source, item)} ${problem.replace(/\.$/, "")}`] : [];
       })
     : [];
+  const catalog = options.data || [];
+  // A saved choice that is unavailable or gone from the catalog stays listed
+  // and selectable while chosen, so the operator can remove it.
+  const listed = [
+    ...catalog.map((option) => ({ ...option, disabled: option.disabled && !previous.has(option.key) })),
+    ...selected.filter((item) => !catalog.some((option) => option.key === schemaOptionKey(item))).map((item) => ({
+      key: schemaOptionKey(item), value: item, label: schemaOptionLabel(source, item), disabled: false, reason: "no longer in the catalog",
+    })),
+  ];
   return <>
-    <select {...props} multiple value={selectedKeys} disabled={props.disabled || !options.isSuccess}
+    <select {...props} multiple value={[...previous.keys()]} disabled={props.disabled || !options.isSuccess}
       onChange={(event) => {
         const chosen = new Set(Array.from(event.currentTarget.selectedOptions).map((option) => option.value));
-        // Keep a saved unavailable choice visible until the operator removes it.
-        const kept = selected.filter((item) => !options.data?.some((option) => option.key === schemaOptionKey(item)));
-        onChange([...kept, ...(options.data || []).filter((option) => chosen.has(option.key) && !option.disabled).map((option) => option.value)]);
+        onChange(listed.filter((option) => chosen.has(option.key) && !option.disabled).map((option) => previous.get(option.key) ?? option.value));
       }}>
-      {(options.data || []).map((option) => (
+      {listed.map((option) => (
         <option key={option.key} value={option.key} disabled={option.disabled}>
           {option.reason ? `${option.label} — unavailable: ${option.reason}` : option.label}
         </option>

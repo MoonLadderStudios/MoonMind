@@ -183,8 +183,9 @@ Semantic hints describe meaning; MoonMind chooses presentation.
 An array whose choices belong to a server catalog names that catalog with
 `x-moonmind-options` instead of copying an `enum`. `framework-packs` reads the
 standards catalog, so a newly registered pack is a choice without a frontend
-change; an unavailable entry shows its reason, cannot be chosen, and a saved
-selection of one fails validation until removed.
+change; an unavailable entry shows its reason and cannot be chosen. A saved
+selection that is unavailable or gone from the catalog stays listed so the
+operator can deselect it, and fails validation until removed.
 
 Custom fields are namespaced with `x-moonmind-*`. They contain no executable code, credentials, secret defaults, or credential-bearing URLs. Unknown harmless presentation hints may be ignored with a diagnostic. A required semantic binding, target discriminator, or authority contract must instead be understood and validated before execution. Missing support cannot degrade into an editable field that broadens authority.
 

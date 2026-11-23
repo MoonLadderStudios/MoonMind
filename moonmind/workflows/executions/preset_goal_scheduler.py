@@ -46,9 +46,12 @@ def _jira_project_key(goal: str) -> str:
     return match.group(1).upper() if match else "MM"
 
 
-def _issue_key(goal: str) -> str | None:
-    match = _JIRA_ISSUE_KEY_PATTERN.search(goal)
-    return match.group(1).upper() if match else None
+def _issue_key(goal: str, *, ignore: frozenset[str] = frozenset()) -> str | None:
+    for match in _JIRA_ISSUE_KEY_PATTERN.finditer(goal):
+        key = match.group(1).upper()
+        if key not in ignore:
+            return key
+    return None
 
 
 def _github_issue_ref(goal: str) -> tuple[str, int] | None:
@@ -76,6 +79,14 @@ _STANDARD_NAMES = (
     ("nj-dge-readiness", ("nj dge", "new jersey dge", "new jersey division of gaming")),
     ("ukgc-rts-security", ("ukgc", "remote technical standards")),
     ("owasp-asvs-l1", ("asvs", "owasp", "general best practices", "best practices")),
+)
+# Standard names shaped like Jira keys (GLI-19) name a standard, not an issue,
+# in a goal that asks for a security plan.
+_ISSUE_SHAPED_STANDARD_NAMES = frozenset(
+    name.upper()
+    for _, names in _STANDARD_NAMES
+    for name in names
+    if _JIRA_ISSUE_KEY_PATTERN.fullmatch(name)
 )
 
 
@@ -147,7 +158,11 @@ def schedule_preset_from_goal(goal: str) -> GoalPresetSchedule | None:
         return None
 
     lowered = normalized_goal.lower()
-    issue_key = _issue_key(normalized_goal)
+    names_security_plan = _SECURITY_PLAN_PATTERN.search(lowered) is not None
+    issue_key = _issue_key(
+        normalized_goal,
+        ignore=_ISSUE_SHAPED_STANDARD_NAMES if names_security_plan else frozenset(),
+    )
     github_issue = _github_issue_ref(normalized_goal)
     wants_breakdown = _contains_any(
         lowered,
@@ -194,7 +209,7 @@ def schedule_preset_from_goal(goal: str) -> GoalPresetSchedule | None:
         )
 
     if (
-        _SECURITY_PLAN_PATTERN.search(lowered)
+        names_security_plan
         and not wants_breakdown
         and not wants_implementation
         and not wants_orchestration

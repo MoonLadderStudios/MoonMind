@@ -433,3 +433,43 @@ async def test_proposed_typed_inputs_are_drafts_for_operator_review(environment)
     assert "standards[1].profile: names a field outside the standard's inputs" in str(
         raised.value
     )
+
+
+async def test_retain_after_an_update_plans_against_the_context_packs(
+    environment, monkeypatch
+):
+    """An update between planning steps cannot strand a draft of the sealed packs."""
+    from moonmind.security import framework_registry
+    from moonmind.security.framework_packs import parse_declared_pack
+
+    service = environment.service
+    context_outputs = await planned_context(service)
+    context = context_outputs["planningContext"]
+    original = framework_registry.installed_pack
+
+    def updated(pack_id):
+        raw, pack = original(pack_id)
+        if pack_id != "owasp-asvs-l1":
+            return raw, pack
+        document = json.loads(raw)
+        document["revision"] = f"{pack.revision}-updated"
+        changed = json.dumps(document).encode()
+        return changed, parse_declared_pack(changed)
+
+    monkeypatch.setattr(framework_registry, "installed_pack", updated)
+    draft_ref = await recurring.put(
+        service, harness_response(context), workflow_id=WORKFLOW
+    )
+    outputs = await invoke(
+        service,
+        step_inputs("retain", previousOutputs={"securityPlanDraftRef": draft_ref}),
+        key="retain",
+    )
+    plan = await recurring.read(
+        service, outputs["securityPlanRef"], principal=f"workflow:{WORKFLOW}"
+    )
+    identity = ("packId", "edition", "revision", "sha256")
+    assert [{k: s[k] for k in identity} for s in plan["standards"]] == [
+        {k: s[k] for k in identity} for s in context["standards"]
+    ]
+    assert outputs["planningContextRef"] == context_outputs["planningContextRef"]

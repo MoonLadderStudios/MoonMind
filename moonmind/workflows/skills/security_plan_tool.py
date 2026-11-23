@@ -109,16 +109,44 @@ def _web_api_pack_bytes() -> bytes:
     return (skill.parent / "references" / "web-api.json").read_bytes()
 
 
-async def _resolve_standards(execution, selections, period, now):
-    """Exact pack identity, bytes and availability for each admitted standard."""
+async def _retained_pack_ref(execution, sha256: str) -> str:
+    saved = await execution.saved(kind="security.framework-pack", key=sha256)
+    if saved is None:
+        raise ValueError(
+            "the planning context's retained pack is missing; rerun planning"
+        )
+    return saved[0]
+
+
+async def _resolve_standards(execution, selections, period, now, retained=None):
+    """Exact pack identity, bytes and availability for each admitted standard.
+
+    A retained planning context pins each standard to the pack bytes it sealed,
+    so a later step plans against them even after an update installs another
+    revision.
+    """
     from moonmind.security.framework_registry import INSTALLED_PACK_IDS, installed_pack
 
+    pinned = {
+        (row["packId"], row["edition"]): row
+        for row in (retained or {}).get("standards", [])
+    }
     standards, packs, refs, errors = [], {}, [], []
     for index, selection in enumerate(selections):
         pack_id = selection_id(selection)
         declared = getattr(selection, "artifact_ref", None)
+        row = pinned.get((pack_id, selection.edition))
         try:
-            if declared:
+            if row is not None:
+                chosen = SimpleNamespace(
+                    pack_id=pack_id,
+                    edition=selection.edition,
+                    revision=row["revision"],
+                    artifact_ref=row.get("artifactRef")
+                    or await _retained_pack_ref(execution, row["sha256"]),
+                    sha256=row["sha256"],
+                )
+            elif declared:
                 chosen = selection
             elif pack_id in INSTALLED_PACK_IDS:
                 _, installed = installed_pack(pack_id)
@@ -172,7 +200,10 @@ async def _resolve_standards(execution, selections, period, now):
                 pack,
                 sha256=digest,
                 period=period,
-                artifact_ref=chosen.artifact_ref,
+                # An installed pack's identity names no artifact.
+                artifact_ref=(
+                    row.get("artifactRef") if row is not None else chosen.artifact_ref
+                ),
             )
         except SecurityPlanError as exc:
             errors.extend(exc.diagnostics)
@@ -186,7 +217,7 @@ async def _resolve_standards(execution, selections, period, now):
 
 
 async def _context(execution, request, snapshot, subject_type, selections, now):
-    """The retained planning context; an unchanged retry reuses it."""
+    """The retained planning context; later steps and retries reuse it exactly."""
     key = context_key(snapshot, subject_type, selections)
     saved = await execution.saved(kind="security.plan-context", key=key)
     period = plan_period(snapshot, now)
@@ -196,7 +227,7 @@ async def _context(execution, request, snapshot, subject_type, selections, now):
 
         period = EvidencePeriod.model_validate(document["standards"][0]["period"])
     standards, packs, pack_refs = await _resolve_standards(
-        execution, selections, period, now
+        execution, selections, period, now, retained=saved[1] if saved else None
     )
     if saved:
         return saved[0], saved[1], standards, packs, pack_refs

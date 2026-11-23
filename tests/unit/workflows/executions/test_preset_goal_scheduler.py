@@ -123,3 +123,19 @@ def test_security_wording_keeps_existing_goal_mappings() -> None:
     for goal, slug in cases.items():
         schedule = schedule_preset_from_goal(goal)
         assert schedule is not None and schedule.slug == slug, goal
+
+
+def test_a_standard_named_like_an_issue_key_selects_the_security_plan() -> None:
+    schedule = schedule_preset_from_goal(
+        "Create a security plan for my application against GLI-19"
+    )
+
+    assert schedule is not None
+    assert schedule.slug == "security-plan"
+    assert schedule.issue_key is None
+    assert [item["id"] for item in schedule.inputs["standards"]] == ["gli-19-readiness"]
+
+    # A real issue key keeps Jira precedence beside a standard's name.
+    issue = schedule_preset_from_goal("Security plan against GLI-19 for MM-747.")
+    assert issue is not None
+    assert issue.slug == "jira-implement" and issue.issue_key == "MM-747"

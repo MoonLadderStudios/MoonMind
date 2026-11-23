@@ -378,7 +378,7 @@ The deterministic story-output tool consumes only eligible reconciled stories. D
 
 Start Workflow validates fields and preset inputs/context, expands unexpanded presets, checks the final policy/plan, and submits through normal admission. Errors name the workflow control or task input and preserve the draft.
 
-A goal-only request without authored steps, plan, tool/Skill, or explicit preset maps conservatively to a seeded preset: Jira keys to Jira implementation/orchestration, issue references to GitHub implementation, breakdown goals to breakdown orchestration, a named security plan or assessment without implementation wording to `security-plan` (prefilling only the subject type and standards the text names), and other implementation goals to MoonSpec Orchestrate. Goal selection never widens the publication mode.
+A goal-only request without authored steps, plan, tool/Skill, or explicit preset maps conservatively to a seeded preset: Jira keys to Jira implementation/orchestration, issue references to GitHub implementation, breakdown goals to breakdown orchestration, a named security plan or assessment without implementation wording to `security-plan` (prefilling only the subject type and standards the text names; there a key-shaped standard name such as GLI-19 is a standard, not a Jira key), and other implementation goals to MoonSpec Orchestrate. Goal selection never widens the publication mode.
 
 `presetSchedule` records goal source, selected slug, content digest, and reason; the ordinary compiler resolves the rest. Explicit execution shape overrides goal inference.
 

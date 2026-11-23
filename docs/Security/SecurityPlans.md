@@ -148,13 +148,15 @@ no scanner, cloud, web or network job.
    exact bytes as `securityPlanDraftRef`.
 3. `security.plan` with `phase: retain` derives the trusted content, adds the
    questions the run cannot answer (such as the evidence period when the
-   environment records none) and validates. A draft that changes the subject
-   type, adds or drops a standard, alters a pack identity or makes an
-   operator's requirement choice is rejected, as is any draft that fails the
-   validation above. A valid plan is retained and sealed with its packs,
-   project snapshot, context and draft, and its readable plan and gap list
-   become the run's primary report. A rejected draft is kept, sealed under a
-   `security.plan-diagnostics` record and a readable report of the diagnostics.
+   environment records none) and validates against the packs the context
+   retained, so an update installed between the steps does not move them. A
+   draft that changes the subject type, adds or drops a standard, alters a
+   pack identity or makes an operator's requirement choice is rejected, as is
+   any draft that fails the validation above. A valid plan is retained and
+   sealed with its packs, project snapshot, context and draft, and its
+   readable plan and gap list become the run's primary report. A rejected
+   draft is kept, sealed under a `security.plan-diagnostics` record and a
+   readable report of the diagnostics.
 
 Nobody answers questions inside the run: missing inputs become open points and
 gaps, and the operator corrects them by editing and rerunning. The saved

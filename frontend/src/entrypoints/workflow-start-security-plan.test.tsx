@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { useState } from 'react';
 import { act, fireEvent } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from 'vitest';
 
 import type { BootPayload } from '../boot/parseBootPayload';
-import { sourcedOptionErrors } from '../components/SchemaCapabilityFields';
+import { SchemaCapabilityFields, sourcedOptionErrors } from '../components/SchemaCapabilityFields';
 import { loadSchemaOptions } from '../lib/schemaOptionSources';
 import { DashboardApp } from './dashboard-app';
 import { renderWithClient, screen, waitFor, within } from '../utils/test-utils';
@@ -122,4 +123,29 @@ it('refuses a saved standard that has since become unavailable', async () => {
     .toBe('ISO/IEC 27001 · 2022 · rev 1 is unavailable: framework pack is draft, not operative. Register an operative edition.');
   expect(sourcedOptionErrors('standards', schema.standards!, [{ id: 'retired-pack', edition: '1' }])).toBe('retired-pack is no longer in the catalog.');
   expect(sourcedOptionErrors('standards', schema.standards!, [])).toBe('Choose at least 1 standards.');
+});
+
+it('lists a saved standard the catalog no longer offers so the operator can remove it', async () => {
+  const schema = preset.inputSchema as Record<string, unknown> & { properties: Record<string, unknown> };
+  const current = { id: 'owasp-asvs-l1', edition: '5.0.0' };
+  function Form() {
+    const [values, setValues] = useState<Record<string, unknown>>({ standards: [{ id: 'retired-pack', edition: '1' }, current] });
+    return <><SchemaCapabilityFields fields={[['standards', schema.properties.standards]]} detail={{ inputSchema: schema }} values={values}
+      errors={{}} disabled={false} repositoryOptions={[]} branchOptions={[]}
+      onChange={(name, value) => setValues((previous) => ({ ...previous, [name]: value }))} />
+      <output data-testid="values">{JSON.stringify(values)}</output></>;
+  }
+  ({ unmount } = renderWithClient(<Form />));
+  const standards = await screen.findByRole('listbox', { name: 'Standards' }) as HTMLSelectElement;
+  await waitFor(() => expect(standards.options).toHaveLength(4));
+  const retired = Array.from(standards.options).find((option) => option.textContent?.includes('retired-pack'))!;
+  expect(retired.textContent).toContain('no longer in the catalog');
+  expect(retired.selected).toBe(true);
+  expect(retired.disabled).toBe(false);
+
+  retired.selected = false;
+  await act(async () => { fireEvent.change(standards); });
+  expect(JSON.parse(screen.getByTestId('values').textContent!)).toEqual({ standards: [current] });
+  await waitFor(() => expect(standards.options).toHaveLength(3));
+  expect(screen.queryByText(/retired-pack/)).toBeNull();
 });
