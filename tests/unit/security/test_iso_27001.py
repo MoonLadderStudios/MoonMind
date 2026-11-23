@@ -5,6 +5,7 @@ Requirement-level equivalence with the retired per-pack evaluator is in
 saved request shape and the Statement of Applicability behavior directly.
 """
 
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -98,9 +99,9 @@ def normalized(request=None):
     return normalize_installed_framework({"framework": framework})["frameworkPacks"][0]
 
 
-def evaluate(request=None, availability=None, previous=None):
+def evaluate(request=None, availability=None, previous=None, pack=None):
     chosen = normalized(request)
-    pack = installed_pack(PACK_ID)[1]
+    pack = pack or installed_pack(PACK_ID)[1]
     return evaluate_readiness(
         pack,
         pack_behavior(pack),
@@ -140,6 +141,28 @@ def test_pack_covers_management_system_and_all_reference_identifiers():
     assert profile["risks"].type == profile["controls"].type == "structured"
 
 
+def test_restricted_distribution_omits_annex_a_titles_from_the_soa():
+    from moonmind.security.framework_packs import (
+        parse_declared_pack,
+        readiness_metadata,
+    )
+
+    data = json.loads(installed_pack(PACK_ID)[0])
+    data["distribution"] = "restricted"
+    pack = parse_declared_pack(json.dumps(data).encode())
+    metadata = readiness_metadata(pack, evaluate(pack=pack))
+    decisions = {
+        row["controlId"]: row
+        for row in metadata["statementOfApplicability"]["decisions"]
+    }
+    assert decisions["A.8.8"]["title"] == "A.8.8"
+    # Operator-authored additional controls are not licensed pack text.
+    assert decisions["EXTRA.1"]["title"] == "Tenant-independent restore drill"
+    text = json.dumps(metadata)
+    annex = [row.title for row in pack.requirements if row.category == "annex_a"]
+    assert [title for title in annex if title in text] == []
+
+
 def test_saved_request_moves_documentary_evidence_to_requirement_choices():
     chosen = normalized(
         selection(
@@ -156,6 +179,43 @@ def test_saved_request_moves_documentary_evidence_to_requirement_choices():
     # its Statement of Applicability decision.
     extra = chosen["profile"]["controls"]["EXTRA.1"]
     assert extra["organisationalEvidence"][0]["purpose"] == "design"
+
+
+def admitted(framework):
+    from moonmind.security.assessments import AssessmentRequest
+
+    return AssessmentRequest.model_validate(
+        {
+            "scope": {"assets": ["isms"]},
+            "tools": [],
+            "budget": {
+                "baseSeconds": 60,
+                "maxSeconds": 120,
+                "progressStallSeconds": 60,
+            },
+            "credentialRefs": [],
+            "networkRefs": [],
+            "framework": framework,
+        }
+    )
+
+
+def test_saved_requirement_choice_evidence_is_admitted():
+    # The preset documents organisationalEvidence as a requirement choice field.
+    framework = selection(
+        requirementEvidence={"9.2": [reviewed_evidence("design")]}
+    ).model_dump(mode="json", by_alias=True)
+    framework["requirementChoices"] = {
+        "9.2": {"organisationalEvidence": [reviewed_evidence()]},
+        "EXTRA.1": {"organisationalEvidence": [reviewed_evidence("adoption")]},
+    }
+    [chosen] = admitted(framework).selected_packs
+    evidence = chosen.requirement_choices["9.2"].organisational_evidence
+    assert [row.purpose for row in evidence] == ["occurrence", "design"]
+    # An additional control's choice evidence moves to its SoA decision.
+    assert "EXTRA.1" not in chosen.requirement_choices
+    [extra] = chosen.profile["controls"]["EXTRA.1"]["organisationalEvidence"]
+    assert extra["purpose"] == "adoption"
 
 
 def test_saved_evidence_for_an_unknown_requirement_is_refused():

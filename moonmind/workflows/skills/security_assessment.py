@@ -1202,6 +1202,18 @@ def _previous_pack(previous, pack):
     return (exact or (same if len(same) == 1 else [None]))[0]
 
 
+def _names_requirements(record, ids) -> bool:
+    """Whether a collected record names any of these requirements.
+
+    A record whose requirement IDs cannot be read stays with every pack, so a
+    malformed record remains visible as invalid evidence.
+    """
+    named = record.get("requirementIds") if isinstance(record, dict) else None
+    if not isinstance(named, list):
+        return True
+    return any(isinstance(key, str) and key in ids for key in named)
+
+
 def profile_inputs(pack, profile):
     """A pack's validated profile, or None when the profile is invalid."""
     from moonmind.security.pack_readiness import profile_model
@@ -1522,6 +1534,7 @@ class AssessmentExecution:
 
         behavior = pack_behavior(pack)
         collected = list(context["collected"])
+        ids = {row.id for row in pack.requirements}
         records, invalid = [], []
         for ref in dict.fromkeys([*selection.evidence_refs, *collected]):
             if ref not in evidence:
@@ -1530,6 +1543,11 @@ class AssessmentExecution:
                     evidence[ref] = json.loads(body)
                 except (UnicodeError, json.JSONDecodeError, RecursionError):
                     evidence[ref] = None
+            if ref not in selection.evidence_refs and not _names_requirements(
+                evidence[ref], ids
+            ):
+                # Collected for another selected pack, not invalid evidence here.
+                continue
             try:
                 records.append(parse_evidence(behavior, evidence[ref], ref))
             except ValueError:

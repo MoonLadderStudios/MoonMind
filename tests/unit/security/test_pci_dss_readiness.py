@@ -654,3 +654,69 @@ def test_report_states_readiness_only_and_external_validation_unverified():
     assert "- 6.3.3: **inconclusive** (partial)" in text
     assert "MoonMind checks: 2" in text
     assert "compliant" not in text.replace("Report on Compliance", "")
+
+
+# -- Collected review evidence is judged only by the packs it names --------
+
+
+@pytest.mark.asyncio
+async def test_review_evidence_collected_for_other_packs_is_not_invalid_here():
+    from moonmind.security.frameworks import FrameworkPackSelection
+    from moonmind.workflows.skills.security_assessment import AssessmentExecution
+    from tests.artifact_access import access_for_test
+
+    # Change-control review evidence names ISO/SOC 2 requirements and lacks
+    # the typed fields that PCI DSS evidence records carry.
+    collected = {
+        "kind": "technical_assessment",
+        "requirementIds": ["8.32", "CC8.1"],
+        "systems": ["app"],
+        "period": PERIOD,
+        "method": "evidence",
+        "description": "Synthetic change-control sources",
+        "provenance": {
+            "sourceRef": "art_change_root",
+            "issuer": "Synthetic reader",
+            "version": "1",
+            "recordedOn": DAY,
+        },
+        "artifactRef": "art_change_root",
+    }
+
+    class Artifacts:
+        async def read(self, *, artifact_id, access):
+            return None, json.dumps(collected).encode()
+
+    execution = AssessmentExecution(
+        Artifacts(),
+        principal="workflow:assessment",
+        context={"namespace": "default", "workflow_id": "assessment", "run_id": "r"},
+        access=access_for_test("workflow:assessment"),
+    )
+    current = pack()
+    selection = FrameworkPackSelection.model_validate(
+        {
+            "packId": PACK_ID,
+            "edition": current.edition,
+            "revision": current.revision,
+            "period": PERIOD,
+            "profile": SERVICE_PROVIDER,
+        }
+    )
+    result, _ = await execution.pack_readiness(
+        current,
+        selection,
+        AssessmentScope(assets=["app"]),
+        {},
+        {"8.32", "CC8.1"},
+        context={
+            "collected": ("art_change_review",),
+            "now": NOW,
+            "previous": None,
+            "previousRef": None,
+        },
+    )
+    assert not any(
+        request.get("artifactRef") == "art_change_review"
+        for request in result.context["evidenceRequests"]
+    )

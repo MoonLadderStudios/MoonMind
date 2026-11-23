@@ -130,7 +130,13 @@ Controls = Annotated[dict[Text, ApplicabilityDecision], Field(max_length=160)]
 
 
 def _annex(pack) -> dict[str, str]:
-    return {row.id: row.title for row in pack.requirements if row.category == "annex_a"}
+    # Restricted distribution keeps licensed control titles in the pack artifact.
+    restricted = pack.distribution == "restricted"
+    return {
+        row.id: row.id if restricted else row.title
+        for row in pack.requirements
+        if row.category == "annex_a"
+    }
 
 
 def _controls(state) -> dict[str, ApplicabilityDecision]:
@@ -618,11 +624,12 @@ def _saved_inputs(profile, choices, leftover, ids):
     controls = dict(controls) if isinstance(controls, dict) else {}
     for key in [key for key in choices if key not in ids]:
         if key in controls:
+            choice = choices.pop(key)
             decision = dict(controls[key])
             decision.update(
                 {
                     name: value
-                    for name, value in choices.pop(key).items()
+                    for name, value in choice.items()
                     if name
                     in {
                         "systems",
@@ -633,6 +640,11 @@ def _saved_inputs(profile, choices, leftover, ids):
                     }
                 }
             )
+            if choice.get("organisationalEvidence"):
+                leftover[key] = [
+                    *choice["organisationalEvidence"],
+                    *leftover.get(key, []),
+                ]
             controls[key] = decision
     for key, requests in leftover.items():
         if key not in controls:

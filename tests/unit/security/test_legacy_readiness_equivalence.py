@@ -345,10 +345,10 @@ def test_requirement_conclusions_match_the_frozen_legacy_evaluator(scenario):
     result = evaluated(scenario)
     projected = PROJECTIONS[scenario["family"]](scenario, result)
     expected_statuses = legacy_statuses(expected)
-    assert projected.pop("statuses") == expected_statuses
-    assert projected.pop("readiness") == READINESS.get(
-        expected["readiness"], expected["readiness"]
-    )
+    statuses = projected.pop("statuses")
+    readiness = projected.pop("readiness")
+    assert statuses == expected_statuses
+    assert readiness == READINESS.get(expected["readiness"], expected["readiness"])
     if scenario["family"] == "iso":
         soa = expected["statementOfApplicability"]
         soa["decisions"]["changed"] = {

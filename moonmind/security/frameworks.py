@@ -358,8 +358,10 @@ class FrameworkAssessmentInput(FrameworkContract):
     pack_id: Text
     system_inputs: Annotated[dict[str, Any], Field(max_length=64)]
     period: EvidencePeriod
+    # Saved choices migrate to an installed pack's declared choices, so they
+    # accept that shape, including requirement-local documentary evidence.
     requirement_choices: Annotated[
-        dict[Text, RequirementChoice], Field(max_length=256)
+        dict[Text, DeclaredRequirementChoice], Field(max_length=256)
     ] = Field(default_factory=dict)
     evidence_refs: Annotated[list[Text], Field(max_length=64)] = Field(
         default_factory=list
