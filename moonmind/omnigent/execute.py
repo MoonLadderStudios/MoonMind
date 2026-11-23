@@ -137,6 +137,19 @@ _SESSION_HOST_LOSS_GRACE_SECONDS = 180.0
 # re-sent for this long instead of failing the attempt on a refused connection.
 _OMNIGENT_SERVER_OUTAGE_GRACE_SECONDS = 120.0
 _TERMINAL_RECONCILIATION_INTERVAL_SECONDS = 30.0
+# Frames that only show the session is alive. Omnigent sends heartbeats only on
+# an idle stream, and a native TUI repainting behind a prompt keeps the stream
+# busy with terminal activity instead, so all of these drive the periodic
+# snapshot read that the turn's budgets depend on. Lifecycle frames such as
+# ``session.status`` are turn edges with their own handling.
+_LIVENESS_FRAME_TYPES = frozenset(
+    {
+        "response.heartbeat",
+        "session.heartbeat",
+        "session.terminal.activity",
+        "response.elicitation_request",
+    }
+)
 # Live journals persist in bounded chunks: a flush rewrites only the open
 # chunk, so per-event durable work never grows with the journal length.
 _JOURNAL_CHUNK_MAX_EVENTS = 256
@@ -4066,6 +4079,20 @@ async def run_omnigent_execution(
                             **start_watchdog.heartbeat_fields(),
                         }
                     )
+                    frame_type = normalized_bridge_event.event["type"]
+                    if (
+                        frame_type in _LIVENESS_FRAME_TYPES
+                        and asyncio.get_running_loop().time()
+                        >= next_terminal_reconciliation_at
+                    ):
+                        # Liveness frames are the only stream evidence while a
+                        # native harness works, waits on a prompt, or never
+                        # starts; evaluate the turn's budgets and inactive-turn
+                        # reconciliation without waiting for a terminal frame.
+                        if await observe_marked_turn(
+                            frame_type.replace(".", "_") + "_snapshot"
+                        ):
+                            break
                     if normalized in {"awaiting_approval", "intervention_requested"}:
                         heartbeat_status["value"] = normalized
                         _safe_heartbeat(
@@ -4077,21 +4104,6 @@ async def run_omnigent_execution(
                             }
                         )
                         continue
-                    if normalized_bridge_event.event["type"] in {
-                        "response.heartbeat",
-                        "session.heartbeat",
-                    }:
-                        loop_time = asyncio.get_running_loop().time()
-                        if loop_time >= next_terminal_reconciliation_at:
-                            # Heartbeats are the only stream evidence while a
-                            # native harness works (or never starts); evaluate
-                            # the start budget and inactive-turn reconciliation
-                            # without waiting for a terminal frame.
-                            if await observe_marked_turn(
-                                normalized_bridge_event.event["type"].replace(".", "_")
-                                + "_snapshot"
-                            ):
-                                break
                     if normalized in {
                         "completed",
                         "failed",
