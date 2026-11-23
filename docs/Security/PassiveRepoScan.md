@@ -518,24 +518,28 @@ private inspection remains **Unverified**. No human-role system is involved.
 ## GLI interactive-gaming readiness
 
 Choose **GLI-19 and GLI-GSF Readiness** in Create (`security-gli-readiness`), or
-pass `framework.packId: gli-19-readiness` to `security.assess`. The preset uses
-the same evaluator, artifact authorization, comparisons and report export.
-Saved preset inputs retain assessed systems, jurisdiction basis, requirement
-choices and evidence references.
+pass `framework.packId: gli-19-readiness` to `security.assess`. GLI-19/GSF is an
+installed [declared framework pack](FrameworkPacks.md#readiness-evidence-for-profile-packs)
+on the shared requirement evaluator, so it can run beside New Jersey DGE and
+operator packs in one plan. Saved `framework.packId` presets, reruns and
+schedules keep working: the request boundary maps them to the installed pack.
+Create shows the pack's typed profile fields, and saved `system_inputs` load
+into them.
 
 The pack records [GLI-19 v4.0, revised November 3, 2026](https://gaminglabs.com/wp-content/uploads/2026/11/GLI-19-v4.0-Standards-for-Interactive-Gaming-Systems.pdf),
 GSF-1 common controls v1.1, and GSF-2 technical assessment, GSF-3 vendor controls
-and GSF-5 online controls v1.0. Each section-level readiness requirement has
-an original summary, source section, evidence category and assessed-business
-responsibility. These summaries identify the examined readiness scope; they
-do not replace the full standards or laboratory evaluation criteria.
+and GSF-5 online controls v1.0, each as a module with its own edition and source.
+Each section-level requirement has an original summary, source section,
+evidence type, subject type and assessed-business responsibility. These
+summaries identify the examined readiness scope; they do not replace the full
+standards or laboratory evaluation criteria.
 
-`systemInputs` records `entityName`, `entityType` (`operator`, `rgs`, or
-`ancillary_provider`), `productType` and `systems`. The system identifiers must
-fit the assessment's admitted `scope.assets`. Operators and RGS products using
-`interactive_gaming` select GLI-19 and GSF-1/2/5. Ancillary providers using
-`ancillary_service` select GSF-1/2/3 only when `directlyAffectsGaming: false`;
-unknown impact remains unresolved. [GSF-3](https://gaminglabs.com/wp-content/uploads/2024/06/GLI-GSF-3-v1.0-Gaming-Information-Security-GIS-Vendors-Audit-FINAL.pdf)
+The profile records `entityName`, `entityType` (`operator`, `rgs`, or
+`ancillary_provider`), `productType` and `systems`, which must fit the admitted
+`scope.assets`. Operators and RGS products using `interactive_gaming` select
+GLI-19 and GSF-1/2/5. Ancillary providers using `ancillary_service` select
+GSF-1/2/3 only when `directlyAffectsGaming: false`; unknown impact remains
+unresolved. [GSF-3](https://gaminglabs.com/wp-content/uploads/2024/06/GLI-GSF-3-v1.0-Gaming-Information-Security-GIS-Vendors-Audit-FINAL.pdf)
 does not automatically apply to an RGS. `gaming_device` and `event_wagering`
 require the GLI-11 and GLI-33 product profiles respectively; this pack reports
 that boundary without claiming product coverage from shared security controls.
@@ -545,53 +549,38 @@ approval. `jurisdictionBasis` contains `jurisdiction`, `status` (`unknown`,
 `adopted`, or `not_adopted`), `edition`, `adoptedOn`, `effectiveOn`,
 `recordVersion`, `sourceRef` and an explanatory `reason`. No real jurisdiction's
 adoption is assumed. Missing provenance, a different adopted edition, or dates
-that do not cover the assessment period leave applicability incomplete. A
-record marked `not_adopted` remains visible as comparison information.
+that do not cover the assessment period leave applicability incomplete.
 
-Set `period.start` and `period.end`. `requirementChoices`, keyed by IDs such as
-`GLI-GSF-2:B` or `GLI-19:5.2`, can select `systems` and a different `period`.
-Omitted choices use all assessed systems and the assessment period. Explicit
-`notApplicableReason` exclusions stay visible. For partner-owned duties, set
-`responsibleEntity: partner` and `responsibilityReason` identifying the partner
-and agreement; absent evidence is still requested. These responsibilities
-describe the assessed business, not MoonMind accounts or human roles.
+`requirementChoices`, keyed by IDs such as `GLI-GSF-2:B` or `GLI-19:5.2`, can
+select `systems`, a `period`, an explicit `notApplicableReason`, or
+`responsibleEntity: partner` with a `responsibilityReason` naming the partner
+and agreement; absent evidence is still requested. Evidence records need
+`evidenceType`, `outcome`, the GLI `edition` and a `provenance.standard` naming
+the module and edition, for example `GLI-GSF-2 v1.0`. Regulator evidence also
+names `jurisdiction`; laboratory and regulator records use `external_audit`. An
+interview alone cannot satisfy a technical, game/RNG, laboratory or regulator
+requirement. Link existing security, game-math and RNG observations through
+`provenance.sourceRef`.
 
-Each `evidenceRefs` artifact uses the shared scoped evidence record: `kind`,
-`requirementIds`, `systems`, `period`, `method`, `description` and `provenance`
-(`sourceRef`, `issuer`, `version`, `recordedOn`, `standard`). GLI also requires
-`evidenceType` (`technical`, `organizational`, `game_math`, `rng`, `laboratory`,
-or `regulator`), `outcome` (`passed`, `failed`, `incomplete`) and GLI `edition`.
-`standard` identifies the cited module and edition, for example
-`GLI-GSF-2 v1.0`. Regulator evidence also names `jurisdiction`. Technical results
-use `technical_assessment` or scoped `control_evidence`; laboratory and
-regulator records use `external_audit`. An interview alone cannot satisfy a
-technical, game/RNG, laboratory or regulator requirement. Link existing security,
-game-math and RNG observations through `provenance.sourceRef`; native artifact
-references are authorized and sealed alongside the evidence record. An uploaded
-document without this scope produces a request for a usable record.
-
-Matching evidence is reported as `evidence_recorded`. A clean vulnerability
-scan cannot fill operational, mathematical, RNG or laboratory gaps. `prepared`
-means supplied evidence covers the selected readiness requirements; certification
-and jurisdiction approval remain `not_performed`. Organizational, laboratory
-and regulator verification remain **Unverified**, with the evidence owner, gap
-and next action recorded even in a complete synthetic fixture.
-
-The retained JSON and Markdown exports include edition, module selection,
-jurisdiction basis, scope, exclusions, partner responsibilities, evidence links,
-unresolved requirements and external verification. Reassessments can supply
-`previousAssessmentRef` to link the previous retained framework report. Edition,
-adoption-record and evidence changes produce new result identities while earlier
-reports remain unchanged; these assessment editions never pin an agent runtime.
+A clean vulnerability scan cannot fill operational, mathematical, RNG or
+laboratory gaps. `prepared` means supplied evidence covers the selected
+readiness requirements; certification and jurisdiction approval remain
+`not_performed`. Organisational, laboratory, regulator and customer
+qualification remain separate **Unverified** claims, each with who can verify
+it and the next feasible check. The report keeps the module selection,
+jurisdiction basis, scope, exclusions, partner responsibilities, evidence links
+and unresolved requirements. Reassessments link `previousAssessmentRef`; earlier
+reports, including retained `gli-readiness/v1` reports, remain unchanged, and
+these editions never pin an agent runtime.
 
 ## New Jersey DGE readiness
 
 Choose **New Jersey DGE Readiness** in the shared catalog, or use
-`framework.packId: nj-dge-readiness` with `security.assess`. Saved presets,
-requirement-specific systems/periods, evidence requests, and restricted JSON and
-Markdown exports use the same path as the UKGC pack. No submission is transmitted.
+`framework.packId: nj-dge-readiness` with `security.assess`. Like GLI it is an
+installed declared pack with typed profile fields; saved presets, reruns and
+schedules map to it at the request boundary. No submission is transmitted.
 
-Set `systemInputs.entityName`, `entityType`, `systems` and `applicabilityBasis`.
+Set the profile's `entityName`, `entityType`, `systems` and `applicabilityBasis`.
 The basis identifies the licence, content contract and system inventory used to
 choose scope. `casino_licensee` needs `offersInternetGaming` for
 `nj.internet.annual` ([13:69O-1.2(q)](https://www.law.cornell.edu/regulations/new-jersey/N-J-A-C-13-69O-1-2));
@@ -600,11 +589,11 @@ choose scope. `casino_licensee` needs `offersInternetGaming` for
 For `rgs_content_provider`, `nj.rgs.annual` applies only when
 `providesContentToOtherOperator` is true
 ([13:69O-3.1(a)(4)](https://www.law.cornell.edu/regulations/new-jersey/N-J-A-C-13-69O-3-1)).
-`unrelated_supplier` inherits none of these annual obligations. Missing activity
-inputs leave applicability Unverified. Omitted `annualRules` evaluates all three;
-an explicit list limits the annual rules selected, with unselected rules visible.
-These are annual system-integrity and security assessments, not an expressly
-specified penetration-test-only obligation.
+`unrelated_supplier` inherits none of these annual obligations. These rules are
+pack data; missing activity inputs leave applicability Unverified. Omitted
+`annualRules` evaluates all three; an explicit list limits the annual rules
+selected, with unselected rules visible. These are annual system-integrity and
+security assessments, not an expressly specified penetration-test-only obligation.
 
 `auditRef` names an artifact containing `kind` (`synthetic` or `external`) and
 `assessments`. Each entry has an annual `requirementId`, `scope`, `systems`,
@@ -619,28 +608,26 @@ cannot supply an independent professional opinion.
 
 Other requirement IDs are `nj.rgs.internal-controls`, `nj.rgs.games-releases`,
 `nj.rgs.incidents`, `nj.rgs.transactions`, `nj.rgs.integration` and
-`nj.partner.player-accounts`. Evidence artifacts use the scoped record fields
-described above, with `kind: control_evidence` and method `evidence` or
-`observation`. Add `divisionApprovalRef` for controls and games/releases,
-`operatorEvidenceRef` for transactions, integration and partner-owned accounts,
-and `incidentDisposition` (`events_reported` or `no_reportable_incidents`).
-Reported incidents also need a `notificationRef` covering operator and Division
-notifications. Identify the partner and responsibility boundary in the evidence
-description. Certificates, technical assessments and generic audit records never
-supply these missing approvals or partner records. All supporting artifact
-references are authorized and retained with the report.
+`nj.partner.player-accounts`. Evidence records use `kind: control_evidence` and
+method `evidence` or `observation`. Add `divisionApprovalRef` for controls and
+games/releases, `operatorEvidenceRef` for transactions, integration and
+partner-owned accounts, and `incidentDisposition` (`events_reported` or
+`no_reportable_incidents`); reported incidents also need a `notificationRef`.
+Certificates, technical assessments and generic audit records never supply these
+missing approvals or partner records. An exclusion stays for review.
 
-Reports snapshot the selected source publications, amendment notes, review date,
-entity basis, systems, periods and evidence. The source snapshot is not a DGE
-technical-standard version. The [DGE rule index](https://www.njoag.gov/about/divisions-and-offices/division-of-gaming-enforcement-home/new-jersey-casino-control-act-and-regulations/)
+The pack's edition is its source snapshot date, 2026-11-07. Each cited rule is a
+module recording its publication and amendment notes; the
+[DGE rule index](https://www.njoag.gov/about/divisions-and-offices/division-of-gaming-enforcement-home/new-jersey-casino-control-act-and-regulations/)
 and [Technical Services Bureau](https://www.njoag.gov/about/divisions-and-offices/division-of-gaming-enforcement-home/slot-laboratory-tsb/)
-remain references for current codification and guidance; direct retrieval was
-unavailable at the recorded review. Source completeness and GLI adoption remain
-Unverified: the historical CHAPTER69O PDF alone is insufficient, and no newest
-GLI edition is assumed adopted. Later source or evidence updates create a new
-preparation without changing retained reports. `prepared` describes recorded
-evidence coverage. Private assessor, customer/operator and Division verification
-remains **Unverified**, including for complete synthetic fixtures.
+modules stay marked Unverified because direct retrieval was unavailable at the
+recorded review. Source completeness, GLI adoption, the independent
+professional assessment, laboratory testing, Division approval and
+customer/operator verification are separate **Unverified** claims with their
+next feasible checks, including for complete synthetic fixtures. Later source or
+evidence updates create a new result without changing retained reports, and a
+retained `framework-audit-preparation/v1` report still serves as
+`previousAssessmentRef`.
 
 ## Composable security review
 

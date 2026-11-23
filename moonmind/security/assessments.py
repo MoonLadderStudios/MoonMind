@@ -34,6 +34,7 @@ from moonmind.security.frameworks import (
     FrameworkPackSelection,
     OrganisationalEvidenceRequest,
     OrganisationalEvidenceResult,
+    normalize_installed_framework,
     selected_framework_packs,
 )
 from moonmind.security.identity_lifecycle import IdentityLifecycleInput
@@ -51,7 +52,9 @@ MAX_RETAINED_REPORT_BYTES = 8 * 1024 * 1024
 Text = AssessmentText
 Items = Annotated[list[Text], Field(max_length=4096)]
 Evidence = Annotated[list[Text], Field(min_length=1, max_length=64)]
-PackMetadata = Annotated[dict[str, Any], Field(max_length=32)]
+# Redistributable packs carry their content, comparison state and, for packs
+# with profile inputs, readiness context and cited inputs.
+PackMetadata = Annotated[dict[str, Any], Field(max_length=48)]
 CoverageStatus = Literal[
     "complete", "partial", "authentication_failed", "unsupported", "failed"
 ]
@@ -561,6 +564,25 @@ class ControlSupportingEvidence(Contract):
     expires_at: AwareDatetime | None = None
 
 
+class RequirementReadiness(Contract):
+    """Profile-pack readiness for one requirement; never certification or approval."""
+
+    status: Literal[
+        "evidence_recorded",
+        "incomplete",
+        "partner_owned",
+        "exclusion_for_review",
+        "excluded",
+        "not_applicable",
+        "not_selected",
+        "applicability_missing",
+        "Unverified",
+    ]
+    systems: Items
+    evidence_refs: Annotated[Items, Field(max_length=64)] = Field(default_factory=list)
+    exclusion_reason: Text | None = None
+
+
 class ControlRequirement(Contract):
     organisational_evidence: Annotated[
         list[OrganisationalEvidenceRequest], Field(max_length=32)
@@ -583,6 +605,9 @@ class ControlRequirement(Contract):
     owner: Text | None = None
     responsibility_reason: Text | None = None
     reviewer: Text | None = None
+    readiness: RequirementReadiness | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def validate_objectives(self):
@@ -951,6 +976,11 @@ class AssessmentRequest(Contract):
     def selected_packs(self):
         return selected_framework_packs(self.framework_pack, self.framework_packs)
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_installed_framework(cls, data):
+        return normalize_installed_framework(data)
+
     @model_validator(mode="after")
     def validate_admission(self):
         packs = self.selected_packs
@@ -974,6 +1004,7 @@ class AssessmentRequest(Contract):
             not self.tools
             and not self.review_ref
             and not self.framework
+            and not packs
             and not self.methodology
         ):
             raise ValueError(

@@ -35,6 +35,17 @@ if TYPE_CHECKING:
 MAX_PACK_BYTES = 2 * 1024 * 1024
 
 Identifiers = Annotated[list[Identifier], Field(min_length=1, max_length=64)]
+# Requirement IDs keep their published section names, which can contain spaces
+# (GLI-GSF-1 "Appendix A"); exported control identities depend on them.
+RequirementIdentifier = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:/ -]{0,127}$"
+    ),
+]
+RequirementIdentifiers = Annotated[
+    list[RequirementIdentifier], Field(min_length=1, max_length=64)
+]
 ArtifactRef = Annotated[str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")]
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 # Catalog editions can name amendments, such as ISO/IEC 27001 "2022+Amd1:2024".
@@ -95,13 +106,154 @@ class PackObjective(ControlObjective):
     rule_ids: Annotated[list[Identifier], Field(min_length=1, max_length=32)]
 
 
-class PackRequirement(FrameworkRequirement):
+def _absent(value) -> bool:
+    return value is None or value == [] or value is False
+
+
+ProfileName = Annotated[
+    str, StringConstraints(strip_whitespace=True, pattern=r"^[a-z][A-Za-z0-9]{0,63}$")
+]
+ConditionValue = bool | Identifier | Annotated[list[Identifier], Field(max_length=16)]
+
+
+class ProfileField(FrameworkContract):
+    """One typed profile input a built-in or declared pack needs from the operator.
+
+    ``role`` gives a field generic meaning: ``systems`` bounds requirement scope,
+    ``jurisdiction_basis`` records adoption without inferring it from
+    publication, ``applicability_basis`` explains why rules apply, and
+    ``selection`` lists the selectable requirements the operator chose.
+    """
+
+    name: ProfileName
+    type: Literal[
+        "text", "boolean", "choice", "choices", "text_list", "jurisdiction_basis"
+    ]
+    title: AssessmentText | None = Field(default=None, exclude_if=_absent)
+    choices: Annotated[list[RequirementIdentifier], Field(max_length=64)] = Field(
+        default_factory=list, exclude_if=_absent
+    )
+    role: (
+        Literal[
+            "entity_name",
+            "entity_type",
+            "product_type",
+            "systems",
+            "jurisdiction_basis",
+            "applicability_basis",
+            "selection",
+        ]
+        | None
+    ) = Field(default=None, exclude_if=_absent)
+    # A required field that is missing becomes an evidence request, never a guess.
+    required: bool = Field(default=False, exclude_if=_absent)
+    request_id: Identifier | None = Field(default=None, exclude_if=_absent)
+    prompt: Text | None = Field(default=None, exclude_if=_absent)
+    # Applicability reason when a rule cannot be decided without this field.
+    unknown_reason: Text | None = Field(default=None, exclude_if=_absent)
+
+    @model_validator(mode="after")
+    def validate_field(self):
+        if (self.type in {"choice", "choices"}) != bool(self.choices):
+            raise ValueError("choice profile fields, and only they, list choices")
+        _unique(self.choices, "profile choice")
+        expected = {
+            "systems": "text_list",
+            "jurisdiction_basis": "jurisdiction_basis",
+            "selection": "choices",
+        }.get(self.role)
+        if expected and self.type != expected:
+            raise ValueError(f"{self.role} profile field must have type {expected}")
+        if self.required and not (self.request_id and self.prompt):
+            raise ValueError("required profile field needs a request ID and prompt")
+        return self
+
+
+class PackProfile(FrameworkContract):
+    fields: Annotated[list[ProfileField], Field(min_length=1, max_length=32)]
+    request_source: Text
+    request_section: Text | None = Field(default=None, exclude_if=_absent)
+
+    @model_validator(mode="after")
+    def unique_fields(self):
+        _unique([row.name for row in self.fields], "profile field")
+        _unique([row.role for row in self.fields if row.role], "profile role")
+        return self
+
+    def field(self, role):
+        return next((row for row in self.fields if row.role == role), None)
+
+
+class PackModule(FrameworkContract):
+    """A separately edited source, such as a GLI-GSF module or a cited NJ rule."""
+
     id: Identifier
+    edition: Text
+    published_on: date | None = Field(default=None, exclude_if=_absent)
+    source: PackSource
+    applicability: Text | None = Field(default=None, exclude_if=_absent)
+    source_status: Literal["reviewed", "Unverified"] = "reviewed"
+    status_reason: Text | None = Field(default=None, exclude_if=_absent)
+
+    @model_validator(mode="after")
+    def unverified_reason(self):
+        if self.source_status == "Unverified" and not self.status_reason:
+            raise ValueError("an Unverified module source needs its reason")
+        return self
+
+
+class ExternalClaim(FrameworkContract):
+    """An assurance only an outside party can give; it always stays Unverified."""
+
+    id: Identifier
+    evidence_type: Identifier | None = Field(default=None, exclude_if=_absent)
+    gap: Text
+    verifiable_by: Text
+    next_step: Text
+
+
+class ApplicabilityText(FrameworkContract):
+    applicable: Text
+    basis_missing: Text
+    not_applicable: Text
+    not_selected: Text
+
+
+EVIDENCE_TYPES = frozenset(
+    {
+        "deterministic_check",
+        "technical",
+        "organizational",
+        "organisational",
+        "game_math",
+        "rng",
+        "laboratory",
+        "regulator",
+        "external_audit",
+    }
+)
+
+
+class PackRequirement(FrameworkRequirement):
+    id: RequirementIdentifier
     title: AssessmentText
     summary: Text
     sources: Annotated[list[PackSource], Field(max_length=16)] = Field(
         default_factory=list
     )
+    subject_types: Annotated[list[Identifier], Field(max_length=8)] = Field(
+        default_factory=list, exclude_if=_absent
+    )
+    # Any listed condition set applies. Each set maps profile fields to an
+    # expected value or values; a missing input leaves applicability Unverified.
+    applicable_when: Annotated[
+        list[
+            Annotated[
+                dict[ProfileName, ConditionValue], Field(min_length=1, max_length=8)
+            ]
+        ],
+        Field(max_length=8),
+    ] = Field(default_factory=list, exclude_if=_absent)
     required_evidence_methods: Annotated[
         list[Literal["deterministic_check", "enquiry", "evidence", "observation"]],
         Field(max_length=4),
@@ -128,7 +280,7 @@ class MappingTarget(FrameworkContract):
     id: Identifier
     framework_id: Identifier
     edition: MappingEdition
-    requirement_ids: Identifiers
+    requirement_ids: RequirementIdentifiers
 
     @model_validator(mode="after")
     def unique_requirements(self):
@@ -139,9 +291,9 @@ class MappingTarget(FrameworkContract):
 
 class FrameworkMapping(FrameworkContract):
     id: Identifier
-    from_requirement_ids: Identifiers
+    from_requirement_ids: RequirementIdentifiers
     target_id: Identifier
-    to_requirement_ids: Identifiers
+    to_requirement_ids: RequirementIdentifiers
     relation: Literal["equivalent", "partial", "subset", "superset", "related"]
     rationale: Text
     source: PackSource
@@ -202,6 +354,28 @@ class VersionedFrameworkPack(FrameworkContract):
     mappings: Annotated[list[FrameworkMapping], Field(max_length=256)] = Field(
         default_factory=list
     )
+    # Built-in readiness content. Every field is omitted when absent, so packs
+    # that do not use it keep their existing content digests.
+    sector: Text | None = Field(default=None, exclude_if=_absent)
+    jurisdiction: Text | None = Field(default=None, exclude_if=_absent)
+    conclusions: Text | None = Field(default=None, exclude_if=_absent)
+    profile: PackProfile | None = Field(default=None, exclude_if=_absent)
+    modules: Annotated[list[PackModule], Field(max_length=32)] = Field(
+        default_factory=list, exclude_if=_absent
+    )
+    # A judgement that cannot be data, registered behind the standards registry.
+    behavior: Identifier | None = Field(default=None, exclude_if=_absent)
+    applicability_text: ApplicabilityText | None = Field(
+        default=None, exclude_if=_absent
+    )
+    exclusion_review: bool = Field(default=False, exclude_if=_absent)
+    external_claims: Annotated[list[ExternalClaim], Field(max_length=16)] = Field(
+        default_factory=list, exclude_if=_absent
+    )
+    evidence_guidance: Text | None = Field(default=None, exclude_if=_absent)
+    limitations: Annotated[list[Text], Field(max_length=8)] = Field(
+        default_factory=list, exclude_if=_absent
+    )
 
     @model_validator(mode="after")
     def validate_references(self):
@@ -210,6 +384,7 @@ class VersionedFrameworkPack(FrameworkContract):
         _unique(self.amendments, "amendment")
         ids = {row.id for row in self.requirements}
         _unique([row.id for row in self.requirements], "requirement")
+        self._validate_profile_content(ids)
         _unique([row.id for row in self.mapping_targets], "mapping target")
         _unique([row.id for row in self.mappings], "mapping")
         # A framework/edition pair has exactly one catalog. Different editions
@@ -244,6 +419,43 @@ class VersionedFrameworkPack(FrameworkContract):
             raise ValueError("effective interval must be ordered")
         return self
 
+    def _validate_profile_content(self, ids):
+        modules = {row.id for row in self.modules}
+        _unique([row.id for row in self.modules], "module")
+        _unique([row.id for row in self.external_claims], "external claim")
+        for row in self.requirements:
+            if modules and row.module not in modules:
+                raise ValueError("requirement names an undeclared module")
+        fields = {row.name: row for row in self.profile.fields} if self.profile else {}
+        selection = self.profile.field("selection") if self.profile else None
+        if selection and set(selection.choices) - ids:
+            raise ValueError("profile selection names unknown requirements")
+        for row in self.requirements:
+            for conditions in row.applicable_when:
+                for name, expected in conditions.items():
+                    field = fields.get(name)
+                    if field is None or field.type not in {"boolean", "choice"}:
+                        raise ValueError(
+                            "applicability condition names no boolean or choice profile field"
+                        )
+                    values = expected if isinstance(expected, list) else [expected]
+                    if field.type == "boolean" and any(
+                        not isinstance(v, bool) for v in values
+                    ):
+                        raise ValueError(
+                            "boolean applicability condition needs true or false"
+                        )
+                    if field.type == "choice" and set(values) - set(field.choices):
+                        raise ValueError(
+                            "applicability condition names an unknown choice"
+                        )
+        if (
+            any(row.applicable_when for row in self.requirements) or selection
+        ) and self.applicability_text is None:
+            raise ValueError("profile applicability rules need applicabilityText")
+        if self.behavior and self.profile is None:
+            raise ValueError("a registered behavior needs declared profile inputs")
+
     def source_documents(self) -> dict[str, str]:
         """Operator-owned source artifacts and the exact digest each was read at."""
         documents: dict[str, str] = {}
@@ -251,6 +463,7 @@ class VersionedFrameworkPack(FrameworkContract):
             self.source,
             *(source for row in self.requirements for source in row.sources),
             *(mapping.source for mapping in self.mappings),
+            *(module.source for module in self.modules),
         ]
         for source in sources:
             if source.artifact_ref is None:
@@ -333,7 +546,13 @@ def compile_framework_plan(
     period: EvidencePeriod,
     choices: dict,
     now: datetime,
+    readiness=None,
 ) -> tuple[ControlAssessmentPlan, list[str]]:
+    """Compile pack requirements into the shared control plan.
+
+    A pack with profile inputs passes its ``evaluate_readiness`` result, whose
+    applicability, scope and recorded evidence each requirement carries.
+    """
     from moonmind.security.assessments import (
         AssessmentScope,
         ControlAssessmentPlan,
@@ -344,12 +563,22 @@ def compile_framework_plan(
     validate_pack_effectivity(pack, now, period)
     if set(choices) - {row.id for row in pack.requirements}:
         raise ValueError("choices name unknown framework requirement")
+    if (pack.profile is None) != (readiness is None):
+        raise ValueError("profile packs, and only they, compile from readiness inputs")
     restricted = pack.distribution == "restricted"
     diagnostics = (
         ["Restricted pack text omitted; retained identity and content digests only."]
         if restricted
         else []
     )
+    if readiness is not None:
+        return (
+            _compile_readiness(pack, readiness, scope=scope, restricted=restricted),
+            diagnostics
+            + [
+                "Readiness requirements conclude from profile inputs and recorded evidence; no executable objective checks are declared, so no requirement is concluded satisfied."
+            ],
+        )
     rows = []
     for requirement in pack.requirements:
         choice = DeclaredRequirementChoice.model_validate(
@@ -426,6 +655,87 @@ def compile_framework_plan(
     return ControlAssessmentPlan(requirements=rows), diagnostics
 
 
+def _compile_readiness(pack, readiness, *, scope, restricted):
+    from moonmind.security.assessments import (
+        AssessmentScope,
+        ControlAssessmentPlan,
+        ControlRequirement,
+        RequirementReadiness,
+    )
+    from moonmind.security.pack_readiness import APPLICABLE, UNDETERMINED
+
+    rows = []
+    for requirement in pack.requirements:
+        row = readiness.rows[requirement.id]
+        status = row["status"]
+        # Requirement rows need a population; an empty profile system list is
+        # already an evidence request, so the admitted scope stands in for it.
+        assets = row["systems"] or scope.assets
+        if set(assets) - set(scope.assets) or set(assets) & set(scope.exclusions):
+            raise ValueError("requirement systems outside admitted scope")
+        rows.append(
+            ControlRequirement(
+                id=requirement.id,
+                framework_id=pack.id,
+                framework_edition=pack.edition,
+                title=requirement.id if restricted else requirement.title,
+                scope=AssessmentScope(
+                    assets=assets,
+                    exclusions=scope.exclusions,
+                    repository_exceptions=scope.repository_exceptions,
+                ),
+                period=row["period"],
+                applicability=(
+                    "applicable"
+                    if status in APPLICABLE
+                    else "undetermined" if status in UNDETERMINED else "not_applicable"
+                ),
+                applicability_reason=(
+                    "Restricted pack applicability reason omitted."
+                    if restricted
+                    else row["reason"]
+                    or "Requirement applicability has not been determined for the admitted scope."
+                ),
+                objectives_complete=False,
+                objective_basis=(
+                    "Restricted pack objective basis omitted."
+                    if restricted
+                    else requirement.objective_basis
+                ),
+                objectives=[],
+                owner=row["responsibleEntity"],
+                responsibility_reason=row["responsibilityReason"],
+                readiness=RequirementReadiness(
+                    status=status,
+                    systems=row["systems"],
+                    evidence_refs=row["evidenceRefs"],
+                    exclusion_reason=row["exclusionReason"],
+                ),
+            )
+        )
+    return ControlAssessmentPlan(requirements=rows)
+
+
+def readiness_metadata(pack, readiness) -> dict:
+    """Per-framework readiness context retained beside the pack metadata."""
+    context = dict(readiness.context)
+    context["requirementStatuses"] = {
+        key: row["status"] for key, row in readiness.rows.items()
+    }
+    if pack.distribution == "restricted":
+        # Licensed prompts and claim text stay in the authorized pack artifact.
+        context["evidenceRequests"] = [
+            {key: value for key, value in row.items() if key != "prompt"}
+            for row in context["evidenceRequests"]
+        ]
+        context["externalClaims"] = {
+            key: {k: v for k, v in claim.items() if k not in {"gap", "nextStep"}}
+            for key, claim in context["externalClaims"].items()
+        }
+        context["limitations"] = []
+    return context
+
+
 def _digest(value) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
@@ -460,6 +770,8 @@ def retained_pack_metadata(
         ),
         "textOmitted": pack.distribution == "restricted",
     }
+    if pack.profile is not None:
+        result["profileDigest"] = _digest(data["profile"])
     if documents := pack.source_documents():
         # Identity and digest only: a later policy revision is detectable even
         # when restricted distribution omits every title and summary.
@@ -495,6 +807,17 @@ def retained_pack_metadata(
 def compare_pack_metadata(current: dict, previous: dict | None) -> list[str]:
     if previous is None:
         return []
+    if previous.get("legacySchema"):
+        from moonmind.security.legacy_framework_reports import compare_legacy_report
+
+        return compare_legacy_report(current, previous)
+    changes = []
+    inputs = (current.get("readiness") or {}).get("profile")
+    prior = (previous.get("readiness") or {}).get("profile")
+    if inputs is not None and prior is not None and inputs != prior:
+        changes.append(
+            "Framework profile inputs changed; reassess applicability before comparing conclusions."
+        )
     keys = (
         "id",
         "edition",
@@ -511,8 +834,9 @@ def compare_pack_metadata(current: dict, previous: dict | None) -> list[str]:
         "reviewedOn",
         "sha256",
         "sourceDocuments",
+        "profileDigest",
     )
-    return [
+    return changes + [
         f"Framework assessment intelligence changed: {key}; this is not remediation evidence."
         for key in keys
         if current.get(key) != previous.get(key)
@@ -547,6 +871,12 @@ def compare_selected_frameworks(packs, history):
                 if pack.get("previousAssessmentRef") == ref:
                     pack["previousAssessmentStatus"] = "available"
                     pack["intelligenceChanges"] = compare_pack_metadata(pack, prior)
+                    if prior.get("legacySchema"):
+                        from moonmind.security.legacy_framework_reports import (
+                            render_legacy_summary,
+                        )
+
+                        pack["previousReportSummary"] = render_legacy_summary(prior)
         missing = [
             {"id": ident, "edition": edition, "status": "unverified"}
             for ident, edition in by_key

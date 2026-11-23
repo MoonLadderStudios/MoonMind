@@ -1,4 +1,8 @@
-"""Synthetic New Jersey preset -> assessment -> retained export journey (#5196)."""
+"""Synthetic New Jersey preset -> assessment -> retained export journey.
+
+New Jersey DGE is installed declared-pack data on the shared control evaluator
+(#5196, #5435). Saved requests still pass ``framework.packId``.
+"""
 
 import copy
 import json
@@ -49,6 +53,21 @@ async def read(service, ref):
     )[1]
 
 
+async def control(service, result):
+    return json.loads(await read(service, result["controlAssessmentRef"]))
+
+
+def rows(report):
+    return {
+        row["requirement"]["id"]: {
+            **row["requirement"]["readiness"],
+            "reason": row["requirement"]["applicabilityReason"],
+            "conclusion": row["conclusion"],
+        }
+        for row in report["requirements"]
+    }
+
+
 @pytest.mark.parametrize(
     "profile, expected",
     [
@@ -63,9 +82,11 @@ async def test_entity_applicability_through_native_export(
     data = fixture()
     data["framework"]["systemInputs"] = data["profiles"][profile]
     result = await invoke(environment.service, request_payload(data))
-    report = json.loads(await read(environment.service, result["frameworkRef"]))
-    assert set(report["reportingConditions"]["applicableAnnualRules"]) == expected
-    assert report["reportingConditions"]["annualReportToDivision"] == bool(expected)
+    readiness = (await control(environment.service, result))["frameworkPack"][
+        "readiness"
+    ]
+    assert set(readiness["reportingConditions"]["applicableAnnualRules"]) == expected
+    assert readiness["reportingConditions"]["annualReportToDivision"] == bool(expected)
     assert result["publicationOutcome"] == "published"
 
 
@@ -89,16 +110,20 @@ async def test_synthetic_export_preset_and_direct_share_scoped_requirements(
     payload = expanded["steps"][0]["tool"]["inputs"]
     first = await invoke(service, payload)
     second = await invoke(service, request_payload(data), key="direct")
-    assert first["frameworkReadiness"] == "prepared"
+    assert first["frameworkPack"]["readiness"] == "prepared"
     assert first["publicationOutcome"] == "published"
-    report = json.loads(await read(service, first["frameworkRef"]))
-    direct = json.loads(await read(service, second["frameworkRef"]))
+    report = await control(service, first)
+    direct = await control(service, second)
     assert direct["requirements"] == report["requirements"]
-    assert direct["evidenceRequests"] == report["evidenceRequests"] == []
-    assert report["externalAssurance"]["status"] == "Unverified"
-    assert report["reportingConditions"]["submissionPerformed"] is False
+    readiness = report["frameworkPack"]["readiness"]
+    assert direct["frameworkPack"]["readiness"]["evidenceRequests"] == []
+    assert readiness["evidenceRequests"] == []
+    assert all(
+        c["status"] == "Unverified" for c in readiness["externalClaims"].values()
+    )
+    assert readiness["reportingConditions"]["submissionPerformed"] is False
     bundle = first["reportBundle"]
-    assert bundle["structured_ref"]["artifact_id"] == first["frameworkRef"]
+    assert bundle["structured_ref"]["artifact_id"] == first["controlAssessmentRef"]
     assert bundle["sensitivity"] == "restricted"
     text = await read(service, bundle["primary_report_ref"]["artifact_id"])
     for needle in (
@@ -111,12 +136,12 @@ async def test_synthetic_export_preset_and_direct_share_scoped_requirements(
     ):
         assert needle in text
     proof = await service.verified_dependencies(
-        root_artifact_id=first["frameworkRef"],
+        root_artifact_id=first["controlAssessmentRef"],
         access=access_for_test("workflow:assessment"),
     )
     assert set(expected_refs) <= {d.artifact_id for d in proof.dependencies}
     retry = await invoke(service, payload)
-    assert retry["frameworkRef"] == first["frameworkRef"]
+    assert retry["controlAssessmentRef"] == first["controlAssessmentRef"]
 
 
 async def test_incomplete_annual_and_partner_evidence_survives_clean_scan(environment):
@@ -129,15 +154,20 @@ async def test_incomplete_annual_and_partner_evidence_survives_clean_scan(enviro
     scanned = await invoke(service, payload, key="clean-scan")
     assert scanned["scanOutcome"] == "completed"
     assert sum(scanned["counts"].values()) == 0
-    assert scanned["evidenceRequests"] == first["evidenceRequests"]
-    assert scanned["frameworkReadiness"] == "incomplete"
-    ids = {r["id"] for r in scanned["evidenceRequests"]}
+    requests = (await control(service, scanned))["frameworkPack"]["readiness"][
+        "evidenceRequests"
+    ]
+    assert (
+        requests
+        == (await control(service, first))["frameworkPack"]["readiness"][
+            "evidenceRequests"
+        ]
+    )
+    assert scanned["frameworkPack"]["readiness"] == "incomplete"
+    ids = {r["id"] for r in requests}
     assert "annual.nj.rgs.annual.divisionApprovalRef" in ids
     assert "annual.nj.rgs.annual.independence" in ids
-    assert any(
-        r["requirementId"] == "nj.partner.player-accounts"
-        for r in scanned["evidenceRequests"]
-    )
+    assert any(r.get("requirementId") == "nj.partner.player-accounts" for r in requests)
 
 
 async def test_missing_approval_incident_operator_evidence_exported_with_sources(
@@ -163,21 +193,27 @@ async def test_missing_approval_incident_operator_evidence_exported_with_sources
     certificate = await put(service, b"unstructured synthetic GLI certificate")
     data["framework"]["evidenceRefs"] = [await put(service, scan), certificate]
     result = await invoke(service, request_payload(data))
-    report = json.loads(await read(service, result["frameworkRef"]))
-    rows = {r["id"]: r for r in report["requirements"]}
+    report = await control(service, result)
+    readiness = report["frameworkPack"]["readiness"]
+    by_id = rows(report)
     for id in ("nj.rgs.games-releases", "nj.rgs.incidents", "nj.rgs.integration"):
-        assert rows[id]["status"] == "incomplete"
-        assert rows[id]["source"] and rows[id]["reason"]
-        assert any(r["requirementId"] == id for r in report["evidenceRequests"])
-    assert any(r.get("artifactRef") == certificate for r in report["evidenceRequests"])
-    assert report["externalAssurance"]["status"] == "Unverified"
-    assert all(r["status"] != "DGE-approved" for r in rows.values())
+        assert by_id[id]["status"] == "incomplete"
+        assert by_id[id]["reason"]
+        assert any(
+            r.get("requirementId") == id and r["source"]
+            for r in readiness["evidenceRequests"]
+        )
+    assert any(
+        r.get("artifactRef") == certificate for r in readiness["evidenceRequests"]
+    )
+    assert readiness["externalClaims"]["regulator"]["status"] == "Unverified"
+    assert all(row["conclusion"] != "satisfied" for row in by_id.values())
 
 
 async def test_source_and_scope_snapshot_retained_after_updates_and_publication_retry(
-    environment,
+    environment, monkeypatch
 ):
-    from moonmind.security import nj_dge
+    from moonmind.security import framework_registry
 
     service = environment.service
     data, _ = await materialize(service)
@@ -188,12 +224,24 @@ async def test_source_and_scope_snapshot_retained_after_updates_and_publication_
     ):
         first = await invoke(service, payload)
     assert first["publicationOutcome"] == "failed"
-    original = await read(service, first["frameworkRef"])
+    original = await read(service, first["controlAssessmentRef"])
     retry = await invoke(service, payload)
     assert retry["publicationOutcome"] == "published"
-    assert retry["frameworkRef"] == first["frameworkRef"]
-    changed_pack = nj_dge.NJ_DGE_PACK.model_copy(deep=True)
-    changed_pack.rule_sources[0].edition = "Synthetic newer source snapshot"
+    assert retry["controlAssessmentRef"] == first["controlAssessmentRef"]
+    raw, pack = framework_registry.installed_pack("nj-dge-readiness")
+    newer = json.loads(raw)
+    newer["revision"] = "2"
+    newer["modules"][0]["edition"] = "Synthetic newer source snapshot"
+    real = framework_registry.installed_pack
+    monkeypatch.setattr(
+        framework_registry,
+        "installed_pack",
+        lambda pack_id: (
+            (json.dumps(newer).encode(), pack.model_validate(newer))
+            if pack_id == "nj-dge-readiness"
+            else real(pack_id)
+        ),
+    )
     changed = copy.deepcopy(payload)
     newer_evidence = dict(
         data["evidence"][2], description="Synthetic newer incident evidence snapshot"
@@ -202,22 +250,26 @@ async def test_source_and_scope_snapshot_retained_after_updates_and_publication_
     changed["framework"]["requirementChoices"] = {
         "nj.rgs.incidents": {"period": {"start": "2026-03-01", "end": "2026-06-30"}}
     }
-    with patch.object(nj_dge, "NJ_DGE_PACK", changed_pack):
-        source_only = await invoke(service, payload, key="source-only")
-        new = await invoke(service, changed, key="new-snapshot")
-    assert source_only["frameworkRef"] != first["frameworkRef"]
-    assert source_only["frameworkRef"] != new["frameworkRef"]
-    source_report = json.loads(await read(service, source_only["frameworkRef"]))
-    assert (
-        source_report["ruleSources"][0]["edition"] == "Synthetic newer source snapshot"
-    )
-    assert new["frameworkRef"] != first["frameworkRef"]
-    assert (await read(service, first["frameworkRef"])) == original
+    source_only = await invoke(service, payload, key="source-only")
+    new = await invoke(service, changed, key="new-snapshot")
+    assert source_only["controlAssessmentRef"] != first["controlAssessmentRef"]
+    assert source_only["controlAssessmentRef"] != new["controlAssessmentRef"]
+    source_report = await control(service, source_only)
+    modules = source_report["frameworkPack"]["readiness"]["modules"]
+    assert modules[0]["edition"] == "Synthetic newer source snapshot"
+    assert new["controlAssessmentRef"] != first["controlAssessmentRef"]
+    assert (await read(service, first["controlAssessmentRef"])) == original
     prior = json.loads(original)
-    newer = json.loads(await read(service, new["frameworkRef"]))
-    assert prior["ruleSources"][0]["edition"] != newer["ruleSources"][0]["edition"]
-    assert prior["requirements"] != newer["requirements"]
-    assert prior["evidence"] != newer["evidence"]
+    newest = await control(service, new)
+    assert (
+        prior["frameworkPack"]["readiness"]["modules"][0]["edition"]
+        != newest["frameworkPack"]["readiness"]["modules"][0]["edition"]
+    )
+    assert prior["requirements"] != newest["requirements"]
+    assert (
+        prior["frameworkPack"]["readiness"]["evidence"]
+        != newest["frameworkPack"]["readiness"]["evidence"]
+    )
 
 
 async def test_export_rejects_systems_outside_admitted_scope(environment):
@@ -243,13 +295,72 @@ async def test_export_cannot_read_foreign_assessor_approval_evidence(environment
         await invoke(service, request_payload(data))
 
 
+@pytest.mark.parametrize("location", ["evidence", "annual"])
+async def test_export_rejects_malformed_mandatory_nj_artifact_refs(
+    environment, location
+):
+    # Approval and annual-assessment references are mandatory artifacts, not
+    # optional citations: a non-artifact value cannot satisfy a requirement.
+    from temporalio.exceptions import ApplicationError
+
+    service = environment.service
+    data, _ = await materialize(service)
+    if location == "evidence":
+        row = next(r for r in data["evidence"] if r.get("divisionApprovalRef"))
+        row["divisionApprovalRef"] = "asserted"
+        data["framework"]["evidenceRefs"] = [
+            await put(service, r) for r in data["evidence"]
+        ]
+    else:
+        data["audit"]["assessments"][0]["divisionApprovalRef"] = "asserted"
+        data["framework"]["auditRef"] = await put(service, data["audit"])
+    with pytest.raises(ApplicationError):
+        await invoke(service, request_payload(data))
+
+
 async def test_comparison_accepts_retained_nj_rule_source_metadata(environment):
     service = environment.service
     data, _ = await materialize(service)
     payload = request_payload(data)
     original = await invoke(service, payload)
-    payload["framework"]["previousAssessmentRef"] = original["frameworkRef"]
+    payload["framework"]["previousAssessmentRef"] = original["controlAssessmentRef"]
     current = await invoke(service, payload, key="comparison")
-    report = json.loads(await read(service, current["frameworkRef"]))
-    assert report["reassessment"]["previousRef"] == original["frameworkRef"]
-    assert report["reassessment"]["packChanged"] is False
+    report = await control(service, current)
+    assert (
+        report["frameworkPack"]["previousAssessmentRef"]
+        == original["controlAssessmentRef"]
+    )
+    assert report["frameworkPack"]["previousAssessmentStatus"] == "available"
+    assert report["intelligenceChanges"] == []
+
+
+async def test_retained_nj_report_serves_as_previous_assessment(environment):
+    from moonmind.workflows.skills.security_assessment import _record
+    from tests.unit.security.test_assessment_evidence_exports import unpack
+    from tests.unit.security.test_legacy_framework_reports import RETAINED
+
+    service = environment.service
+    access = access_for_test("workflow:assessment")
+    previous = await put(service, RETAINED["framework-audit-preparation/v1"])
+    await _record(service, previous, [], access)
+    data, _ = await materialize(service)
+    payload = request_payload(data)
+    payload["framework"]["previousAssessmentRef"] = previous
+    payload["evidenceExport"] = {"artifactRefs": [previous]}
+    result = await invoke(service, payload)
+    report = await control(service, result)
+    assert report["frameworkPack"]["previousAssessmentStatus"] == "available"
+    archive, manifest = await unpack(service, result)
+    entry = next(r for r in manifest["entries"] if r["sourceArtifactId"] == previous)
+    assert entry["status"] == "included"
+    exported = json.loads(archive.read(entry["memberName"]))
+    assert exported["schemaVersion"] == "framework-audit-preparation/v1"
+    changes = report["intelligenceChanges"]
+    assert any("framework-audit-preparation/v1" in row for row in changes)
+    assert any("edition changed" in row for row in changes)
+    # Same synthetic evidence, so the matching requirement IDs did not change.
+    assert not any("Requirement readiness changed" in row for row in changes)
+    text = await read(
+        service, result["reportBundle"]["primary_report_ref"]["artifact_id"]
+    )
+    assert b"Previous framework-audit-preparation/v1 report" in text

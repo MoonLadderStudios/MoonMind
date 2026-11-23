@@ -1,0 +1,451 @@
+{
+  "schemaVersion": "declared-framework-pack/v1",
+  "id": "nj-dge-readiness",
+  "edition": "2026-11-07",
+  "revision": "1",
+  "title": "New Jersey DGE readiness",
+  "source": {
+    "url": "https://www.njoag.gov/about/divisions-and-offices/division-of-gaming-enforcement-home/new-jersey-casino-control-act-and-regulations/",
+    "section": "Selected 13:69O and 13:69D provisions",
+    "reviewedOn": "2026-11-07"
+  },
+  "reviewedBy": "MoonMind maintainers",
+  "reviewedOn": "2026-11-07",
+  "publicationStatus": "published",
+  "publishedOn": "2026-11-07",
+  "effectiveFrom": "2024-07-01",
+  "provenance": "Selected NJ rule-source snapshot reviewed 2026-11-07: original MoonMind summaries of the cited N.J.A.C. provisions, with each rule source's reviewed or Unverified status recorded as a module.",
+  "license": "Apache-2.0 for original MoonMind summaries. Referenced standards retain their own rights.",
+  "distribution": "redistributable",
+  "sector": "Gaming",
+  "jurisdiction": "US-NJ",
+  "conclusions": "Readiness for the selected New Jersey provisions. DGE approval and independent testing remain external.",
+  "profile": {
+    "requestSource": "https://www.njoag.gov/about/divisions-and-offices/division-of-gaming-enforcement-home/new-jersey-casino-control-act-and-regulations/",
+    "requestSection": "Applicability basis",
+    "fields": [
+      {
+        "name": "entityName",
+        "type": "text",
+        "role": "entity_name",
+        "required": true,
+        "requestId": "system.entity_name",
+        "prompt": "Identify entity name and retain the supporting licence, contract or system inventory."
+      },
+      {
+        "name": "entityType",
+        "type": "choice",
+        "choices": [
+          "casino_licensee",
+          "rgs_content_provider",
+          "unrelated_supplier"
+        ],
+        "role": "entity_type",
+        "unknownReason": "Identify the entity type and its applicability basis."
+      },
+      {
+        "name": "offersInternetGaming",
+        "type": "boolean",
+        "unknownReason": "Record whether the casino offers Internet gaming or the RGS supplies game content to another Internet gaming operator, as applicable."
+      },
+      {
+        "name": "providesContentToOtherOperator",
+        "type": "boolean",
+        "unknownReason": "Record whether the casino offers Internet gaming or the RGS supplies game content to another Internet gaming operator, as applicable."
+      },
+      {
+        "name": "systems",
+        "type": "text_list",
+        "role": "systems",
+        "required": true,
+        "requestId": "system.systems",
+        "prompt": "Identify systems and retain the supporting licence, contract or system inventory."
+      },
+      {
+        "name": "applicabilityBasis",
+        "type": "text",
+        "role": "applicability_basis",
+        "required": true,
+        "requestId": "system.applicability_basis",
+        "prompt": "Identify applicability basis and retain the supporting licence, contract or system inventory."
+      },
+      {
+        "name": "annualRules",
+        "type": "choices",
+        "choices": [
+          "nj.internet.annual",
+          "nj.network.annual",
+          "nj.rgs.annual"
+        ],
+        "role": "selection"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "id": "13:69O-1.2",
+      "edition": "LII publication; amendment notes through 50 N.J.R. 617(a), effective 2018-01-16",
+      "source": {
+        "url": "https://www.law.cornell.edu/regulations/new-jersey/N-J-A-C-13-69O-1-2",
+        "section": "13:69O-1.2",
+        "reviewedOn": "2026-11-07"
+      },
+      "sourceStatus": "reviewed",
+      "statusReason": "LII publication and amendment notes reviewed; this is a selected source snapshot, not certification of the complete current NJ code."
+    },
+    {
+      "id": "13:69D-2.4",
+      "edition": "LII publication; amendment notes through 49 N.J.R. 3781(a), effective 2017-12-04",
+      "source": {
+        "url": "https://www.law.cornell.edu/regulations/new-jersey/N-J-A-C-13-69D-2-4",
+        "section": "13:69D-2.4",
+        "reviewedOn": "2026-11-07"
+      },
+      "sourceStatus": "reviewed",
+      "statusReason": "LII publication and amendment notes reviewed; this is a selected source snapshot, not certification of the complete current NJ code."
+    },
+    {
+      "id": "13:69O-3.1",
+      "edition": "LII publication; amendment notes through 56 N.J.R. 1182(b), effective 2024-07-01",
+      "source": {
+        "url": "https://www.law.cornell.edu/regulations/new-jersey/N-J-A-C-13-69O-3-1",
+        "section": "13:69O-3.1",
+        "reviewedOn": "2026-11-07"
+      },
+      "sourceStatus": "reviewed",
+      "statusReason": "LII publication and amendment notes reviewed; this is a selected source snapshot, not certification of the complete current NJ code."
+    },
+    {
+      "id": "dge-rule-index",
+      "edition": "Reference checked 2026-11-07; current publication Unverified",
+      "source": {
+        "url": "https://www.njoag.gov/about/divisions-and-offices/division-of-gaming-enforcement-home/new-jersey-casino-control-act-and-regulations/",
+        "section": "DGE rule index and official code access",
+        "reviewedOn": "2026-11-07"
+      },
+      "sourceStatus": "Unverified",
+      "statusReason": "Direct retrieval returned HTTP 403; use the DGE rule index and official codification to verify later amendments and applicable technical guidance."
+    },
+    {
+      "id": "dge-tsb-guidance",
+      "edition": "Reference checked 2026-11-07; current publication Unverified",
+      "source": {
+        "url": "https://www.njoag.gov/about/divisions-and-offices/division-of-gaming-enforcement-home/slot-laboratory-tsb/",
+        "section": "Technical Services Bureau guidance",
+        "reviewedOn": "2026-11-07"
+      },
+      "sourceStatus": "Unverified",
+      "statusReason": "Direct retrieval returned HTTP 403; use the DGE rule index and official codification to verify later amendments and applicable technical guidance."
+    }
+  ],
+  "behavior": "nj-annual-assessment",
+  "applicabilityText": {
+    "applicable": "Recorded entity/activity meets the selected scope; basis:",
+    "basisMissing": "missing; supply licence, contract and system-boundary evidence",
+    "notApplicable": "The recorded entity and activity do not meet this selected provision's scope.",
+    "notSelected": "Annual rule not selected; no conclusion about obligations outside this assessment selection."
+  },
+  "exclusionReview": true,
+  "externalClaims": [
+    {
+      "id": "source-completeness",
+      "gap": "Selected published provisions and amendment notes are versioned here. The complete current official codification and subsequent DGE guidance remain unverified; the historical CHAPTER69O PDF alone cannot establish them.",
+      "verifiableBy": "Official New Jersey codification and the DGE rule index",
+      "nextStep": "Verify the complete current codification and later DGE guidance through the DGE rule index before relying on this snapshot."
+    },
+    {
+      "id": "gli-adoption",
+      "gap": "No GLI edition is assumed adopted by DGE. Lab readiness does not establish Division approval; retain the applicable authority and approval records.",
+      "verifiableBy": "New Jersey Division of Gaming Enforcement",
+      "nextStep": "Retain the DGE authority and approval records for any GLI edition relied on."
+    },
+    {
+      "id": "professional-assessment",
+      "gap": "Synthetic or supplied preparation records do not establish an independently verified professional assessment.",
+      "verifiableBy": "Independent professional",
+      "nextStep": "Obtain the independent professional's signed annual assessment, independence evidence and assessor-selection approval for each applicable rule."
+    },
+    {
+      "id": "laboratory",
+      "gap": "Recorded games and releases do not establish independent testing.",
+      "verifiableBy": "DGE Technical Services Bureau or an approved independent test laboratory",
+      "nextStep": "Obtain or verify the laboratory or Technical Services Bureau results for the deployed game and release versions."
+    },
+    {
+      "id": "regulator",
+      "gap": "Preparation evidence does not establish DGE approval, and no regulator submission has been performed.",
+      "verifiableBy": "New Jersey Division of Gaming Enforcement",
+      "nextStep": "Confirm the Division approval records and the annual submission receipt with the Division."
+    },
+    {
+      "id": "customer",
+      "gap": "Customer and operator verification of partner-owned evidence has not been performed.",
+      "verifiableBy": "Licensee/operator evidence owner",
+      "nextStep": "Obtain the operator's confirmation of its partner-owned evidence and integration responsibilities."
+    }
+  ],
+  "limitations": [
+    "Preparation evidence only. Independent professional, operator and Division verification remain Unverified. No regulator submission has been performed."
+  ],
+  "requirements": [
+    {
+      "id": "nj.internet.annual",
+      "title": "Internet gaming annual system integrity and security assessment",
+      "summary": "Internet gaming annual system integrity and security assessment",
+      "category": "annual",
+      "module": "13:69O-1.2",
+      "applicability": "Casino licensee offering Internet gaming",
+      "sources": [
+        {
+          "url": "https://www.law.cornell.edu/regulations/new-jersey/N-J-A-C-13-69O-1-2",
+          "section": "13:69O-1.2(q)",
+          "reviewedOn": "2026-11-07"
+        }
+      ],
+      "evidenceTypes": [
+        "external_audit"
+      ],
+      "evidencePrompt": "Supply the independent annual report and all fields required by 13:69O-1.2(q).",
+      "subjectTypes": [
+        "gaming_system"
+      ],
+      "applicableWhen": [
+        {
+          "entityType": "casino_licensee",
+          "offersInternetGaming": true
+        }
+      ],
+      "objectiveBasis": "Recorded readiness evidence; this requirement declares no executable objective checks."
+    },
+    {
+      "id": "nj.network.annual",
+      "title": "Casino network annual system integrity and security assessment",
+      "summary": "Casino network annual system integrity and security assessment",
+      "category": "annual",
+      "module": "13:69D-2.4",
+      "applicability": "Casino licensee network",
+      "sources": [
+        {
+          "url": "https://www.law.cornell.edu/regulations/new-jersey/N-J-A-C-13-69D-2-4",
+          "section": "13:69D-2.4(e)",
+          "reviewedOn": "2026-11-07"
+        }
+      ],
+      "evidenceTypes": [
+        "external_audit"
+      ],
+      "evidencePrompt": "Supply the independent annual network report and all fields required by 13:69D-2.4(e).",
+      "subjectTypes": [
+        "gaming_system"
+      ],
+      "applicableWhen": [
+        {
+          "entityType": "casino_licensee"
+        }
+      ],
+      "objectiveBasis": "Recorded readiness evidence; this requirement declares no executable objective checks."
+    },
+    {
+      "id": "nj.rgs.annual",
+      "title": "RGS annual system integrity and security assessment",
+      "summary": "RGS annual system integrity and security assessment",
+      "category": "annual",
+      "module": "13:69O-3.1",
+      "applicability": "RGS providing content to another Internet gaming operator",
+      "sources": [
+        {
+          "url": "https://www.law.cornell.edu/regulations/new-jersey/N-J-A-C-13-69O-3-1",
+          "section": "13:69O-3.1(a)(4)",
+          "reviewedOn": "2026-11-07"
+        }
+      ],
+      "evidenceTypes": [
+        "external_audit"
+      ],
+      "evidencePrompt": "Supply the independent annual RGS report with the fields incorporated from 13:69O-1.2(q).",
+      "subjectTypes": [
+        "gaming_system"
+      ],
+      "applicableWhen": [
+        {
+          "entityType": "rgs_content_provider",
+          "providesContentToOtherOperator": true
+        }
+      ],
+      "objectiveBasis": "Recorded readiness evidence; this requirement declares no executable objective checks."
+    },
+    {
+      "id": "nj.rgs.internal-controls",
+      "title": "RGS internal controls and responsibilities",
+      "summary": "RGS internal controls and responsibilities",
+      "category": "rgs",
+      "module": "13:69O-3.1",
+      "applicability": "RGS providing content to another Internet gaming operator",
+      "sources": [
+        {
+          "url": "https://www.law.cornell.edu/regulations/new-jersey/N-J-A-C-13-69O-3-1",
+          "section": "13:69O-3.1(a)(1)-(3)",
+          "reviewedOn": "2026-11-07"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational"
+      ],
+      "evidencePrompt": "Supply versioned security, operations and accounting controls, change reviews, responsible personnel and Division approval evidence for the controls that require it.",
+      "subjectTypes": [
+        "organisation"
+      ],
+      "applicableWhen": [
+        {
+          "entityType": "rgs_content_provider",
+          "providesContentToOtherOperator": true
+        }
+      ],
+      "objectiveBasis": "Recorded readiness evidence; this requirement declares no executable objective checks."
+    },
+    {
+      "id": "nj.rgs.games-releases",
+      "title": "Approved games and release records",
+      "summary": "Approved games and release records",
+      "category": "rgs",
+      "module": "13:69O-3.1",
+      "applicability": "RGS",
+      "sources": [
+        {
+          "url": "https://www.law.cornell.edu/regulations/new-jersey/N-J-A-C-13-69O-3-1",
+          "section": "13:69O-3.1(b), (e), (g)",
+          "reviewedOn": "2026-11-07"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational"
+      ],
+      "evidencePrompt": "Identify deployed game and release versions, Division approval records, disabled-game notices, and approval evidence for applicable transaction overrides and CDN changes.",
+      "subjectTypes": [
+        "game"
+      ],
+      "applicableWhen": [
+        {
+          "entityType": "rgs_content_provider"
+        }
+      ],
+      "objectiveBasis": "Recorded readiness evidence; this requirement declares no executable objective checks."
+    },
+    {
+      "id": "nj.rgs.incidents",
+      "title": "Incident monitoring and notification",
+      "summary": "Incident monitoring and notification",
+      "category": "rgs",
+      "module": "13:69O-3.1",
+      "applicability": "RGS",
+      "sources": [
+        {
+          "url": "https://www.law.cornell.edu/regulations/new-jersey/N-J-A-C-13-69O-3-1",
+          "section": "13:69O-3.1(f)",
+          "reviewedOn": "2026-11-07"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational"
+      ],
+      "evidencePrompt": "Supply monitoring and incident records with operator and Division notification evidence, or an evidenced statement of no reportable incidents for this period.",
+      "subjectTypes": [
+        "organisation"
+      ],
+      "applicableWhen": [
+        {
+          "entityType": "rgs_content_provider"
+        }
+      ],
+      "objectiveBasis": "Recorded readiness evidence; this requirement declares no executable objective checks."
+    },
+    {
+      "id": "nj.rgs.transactions",
+      "title": "Transaction reports and distribution",
+      "summary": "Transaction reports and distribution",
+      "category": "rgs",
+      "module": "13:69O-3.1",
+      "applicability": "RGS",
+      "sources": [
+        {
+          "url": "https://www.law.cornell.edu/regulations/new-jersey/N-J-A-C-13-69O-3-1",
+          "section": "13:69O-3.1(h)",
+          "reviewedOn": "2026-11-07"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational"
+      ],
+      "evidencePrompt": "Supply daily game-summary, cumulative pending and void transaction samples, required fields, reconciliation and secure delivery evidence for the casino licensees and Division.",
+      "subjectTypes": [
+        "organisation"
+      ],
+      "applicableWhen": [
+        {
+          "entityType": "rgs_content_provider"
+        }
+      ],
+      "objectiveBasis": "Recorded readiness evidence; this requirement declares no executable objective checks."
+    },
+    {
+      "id": "nj.rgs.integration",
+      "title": "Operator integration responsibilities",
+      "summary": "Operator integration responsibilities",
+      "category": "partner",
+      "module": "13:69O-3.1",
+      "applicability": "RGS",
+      "sources": [
+        {
+          "url": "https://www.law.cornell.edu/regulations/new-jersey/N-J-A-C-13-69O-3-1",
+          "section": "13:69O-3.1(c), (d), (h)",
+          "reviewedOn": "2026-11-07"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational"
+      ],
+      "evidencePrompt": "Identify approved operator integrations, agreed void procedures, three-calendar-day issue resolutions, responsibility boundaries and operator evidence.",
+      "subjectTypes": [
+        "partner"
+      ],
+      "applicableWhen": [
+        {
+          "entityType": "rgs_content_provider"
+        }
+      ],
+      "objectiveBasis": "Recorded readiness evidence; this requirement declares no executable objective checks."
+    },
+    {
+      "id": "nj.partner.player-accounts",
+      "title": "Partner-owned player-account evidence",
+      "summary": "Partner-owned player-account evidence",
+      "category": "partner",
+      "module": "13:69O-1.2",
+      "applicability": "Internet gaming casino licensee or RGS",
+      "sources": [
+        {
+          "url": "https://www.law.cornell.edu/regulations/new-jersey/N-J-A-C-13-69O-1-2",
+          "section": "13:69O-1.2(r), (w); partner evidence boundary",
+          "reviewedOn": "2026-11-07"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational"
+      ],
+      "evidencePrompt": "Identify the operator accountable for player accounts, complaints and patron-data permissions, the integration boundary, and scoped operator-owned evidence. Supplier scans cannot establish partner coverage.",
+      "subjectTypes": [
+        "partner"
+      ],
+      "applicableWhen": [
+        {
+          "entityType": "rgs_content_provider"
+        },
+        {
+          "entityType": "casino_licensee",
+          "offersInternetGaming": true
+        }
+      ],
+      "objectiveBasis": "Recorded readiness evidence; this requirement declares no executable objective checks."
+    }
+  ]
+}

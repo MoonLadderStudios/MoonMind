@@ -8,6 +8,63 @@
       ],
       "type": "string",
       "title": "Entity Type"
+    },
+    "jurisdictionBasis": {
+      "additionalProperties": false,
+      "description": "Recorded adoption. Publication of an edition is never adoption.",
+      "properties": {
+        "jurisdiction": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string",
+          "title": "Jurisdiction"
+        },
+        "status": {
+          "enum": [
+            "unknown",
+            "adopted",
+            "not_adopted"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "edition": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string",
+          "title": "Edition"
+        },
+        "adoptedOn": {
+          "format": "date",
+          "type": "string",
+          "title": "Adopted On"
+        },
+        "effectiveOn": {
+          "format": "date",
+          "type": "string",
+          "title": "Effective On"
+        },
+        "recordVersion": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string",
+          "title": "Record Version"
+        },
+        "sourceRef": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string",
+          "title": "Source Ref"
+        },
+        "reason": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string",
+          "title": "Reason"
+        }
+      },
+      "title": "Jurisdiction Basis",
+      "type": "object"
     }
   },
   "nj-dge-readiness": {

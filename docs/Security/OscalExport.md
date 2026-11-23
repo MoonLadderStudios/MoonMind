@@ -5,7 +5,12 @@ records as OSCAL **1.2.3 JSON**. Native assessments, evidence admission, reports
 and artifact access remain authoritative. This adapter does not run assessments,
 import OSCAL into execution, or establish regulatory approval.
 
-Add `oscalExport` to an existing assessment request that selects `framework`:
+Add `oscalExport` to an existing assessment request that selects `framework`,
+or exactly one installed readiness pack such as GLI-19 or New Jersey DGE (a saved
+`framework.packId` selects one). A readiness pack exports from the sealed
+control report with the same control IDs and requirement states. A
+restricted-distribution pack is refused (`restricted_distribution`) because
+catalogs would copy the licensed text its native reports omit:
 
 ```json
 {

@@ -7,8 +7,6 @@ assessment and report owners run. No money or external targets are involved.
 import copy
 import json
 import re
-from dataclasses import replace
-from functools import partial
 
 import pytest
 
@@ -330,35 +328,50 @@ async def test_gaming_pack_scope_and_exports(environment, case):
     refs = [await recurring.put(service, row) for row in records]
     payload["framework"]["evidenceRefs"] = refs
     first = await recurring.invoke(service, payload, key=case["id"])
+    # GLI and NJ run as installed declared packs on the shared control
+    # evaluator; UKGC RTS still writes its legacy framework report.
+    unified = family in {"gli", "nj"}
+    native_key = "controlAssessmentRef" if unified else "frameworkRef"
     original = await service.read(
-        artifact_id=first["frameworkRef"], access=access_for_test("workflow:assessment")
+        artifact_id=first[native_key], access=access_for_test("workflow:assessment")
     )
     native = json.loads(original[1])
-    assert native["pack"]["edition"] == case["edition"]
-    measured = {
-        r["id"]: r for r in native["requirements"] if r["id"] in case["requirements"]
-    }
-    unknowns = sorted(k for k, row in measured.items() if row["status"] == "incomplete")
+    if unified:
+        context = native["frameworkPack"]["readiness"]
+        edition, readiness = native["frameworkPack"]["edition"], context["readiness"]
+        requests = context["evidenceRequests"]
+        statuses = {
+            r["requirement"]["id"]: r["requirement"]["readiness"]["status"]
+            for r in native["requirements"]
+        }
+        assert first["frameworkPack"]["readiness"] == readiness
+    else:
+        edition, readiness = native["pack"]["edition"], native["readiness"]
+        requests = native["evidenceRequests"]
+        statuses = {r["id"]: r["status"] for r in native["requirements"]}
+        assert first["frameworkReadiness"] == readiness
+    assert edition == case["edition"]
+    measured = {k: v for k, v in statuses.items() if k in case["requirements"]}
+    unknowns = sorted(k for k, status in measured.items() if status == "incomplete")
     covered = sorted(
-        k for k, row in measured.items() if row["status"] == "evidence_recorded"
+        k for k, status in measured.items() if status == "evidence_recorded"
     )
-    if any(r["id"] == "jurisdiction.adoption" for r in native["evidenceRequests"]):
+    if any(r["id"] == "jurisdiction.adoption" for r in requests):
         unknowns.append("jurisdiction.adoption")
     actual = observation(
         "incomplete" if unknowns else "clean",
         [],
         covered,
-        native_ref=first["frameworkRef"],
-        satisfied=native["readiness"] == "prepared",
+        native_ref=first[native_key],
+        satisfied=readiness == "prepared",
     )
     actual.update(unknowns=unknowns, verifiedRemediations=[])
     report_ref = first["reportBundle"]["primary_report_ref"]["artifact_id"]
     _, exported = await service.read(
         artifact_id=report_ref, access=access_for_test("workflow:assessment")
     )
-    assert first["frameworkReadiness"] == native["readiness"]
     assert re.findall(rb"Readiness: (prepared|incomplete)", exported) == [
-        native["readiness"].encode()
+        readiness.encode()
     ], "exported readiness differs from retained framework"
     assert b"Unverified" in exported
     for requirement in unknowns:
@@ -366,10 +379,10 @@ async def test_gaming_pack_scope_and_exports(environment, case):
     # A later assessment must not rewrite the first report or evidence bytes.
     payload["framework"]["evidenceRefs"] = []
     later = await recurring.invoke(service, payload, key=case["id"] + "-changed")
-    assert later["frameworkRef"] != first["frameworkRef"]
+    assert later[native_key] != first[native_key]
     assert (
         await service.read(
-            artifact_id=first["frameworkRef"],
+            artifact_id=first[native_key],
             access=access_for_test("workflow:assessment"),
         )
     )[1] == original[1]
@@ -383,9 +396,16 @@ async def test_gaming_pack_scope_and_exports(environment, case):
         service,
         case["id"],
         actual,
-        [*refs, first["frameworkRef"], report_ref],
+        [*refs, first[native_key], report_ref],
         provenance={
-            "pack": native["pack"],
+            "pack": (
+                {
+                    k: native["frameworkPack"][k]
+                    for k in ("id", "edition", "revision", "sha256")
+                }
+                if unified
+                else native["pack"]
+            ),
             "scope": payload["scope"],
             "period": payload["framework"]["period"],
             "source": case["source"],
@@ -444,30 +464,30 @@ async def test_optional_redacted_historical_fixture(environment):
 async def test_gaming_corpus_rejects_false_prepared_headline(
     environment, monkeypatch, tmp_path, boundary
 ):
-    from moonmind.security import gli_readiness
-    from moonmind.security.framework_registry import READINESS_PACKS
+    from moonmind.security import control_assessments, pack_readiness
     from tests.integration.security import quality
 
     monkeypatch.setattr(quality, "OUTPUT", tmp_path / "rejected-headline")
-    pack_id = gli_readiness.GLI_PACK.id
-    pack = READINESS_PACKS[pack_id]
     if boundary == "producer":
+        evaluate = pack_readiness.evaluate_readiness
 
         def false_pass(*args, **kwargs):
-            result = gli_readiness.prepare_assessment(*args, **kwargs)
-            result["readiness"] = "prepared"
+            result = evaluate(*args, **kwargs)
+            result.context["readiness"] = "prepared"
             return result
 
-        # Inject before the registered producer persists the report.
-        faulty_pack = replace(pack, prepare=partial(pack.prepare, prepare=false_pass))
+        # Inject before the shared evaluator's result is retained.
+        monkeypatch.setattr(pack_readiness, "evaluate_readiness", false_pass)
     else:
-        faulty_pack = replace(
-            pack,
-            render=lambda report: pack.render(report).replace(
-                "Readiness: incomplete", "Readiness: prepared"
-            ),
-        )
-    monkeypatch.setitem(READINESS_PACKS, pack_id, faulty_pack)
+        render = control_assessments._render_readiness
+
+        def false_export(readiness, clean):
+            return [
+                line.replace("Readiness: incomplete", "Readiness: prepared")
+                for line in render(readiness, clean)
+            ]
+
+        monkeypatch.setattr(control_assessments, "_render_readiness", false_export)
     case = next(c for c in CASES if c["id"] == "gaming-gli-defective")
     expected_failure = (
         "incorrectSatisfiedConclusions"

@@ -225,14 +225,14 @@ async def _installed_rules(artifacts, access, refs):
 def _mapping_universe(selection: MappingSelection | None):
     if selection is None:
         return None
-    from moonmind.security.framework_registry import READINESS_PACKS
+    from moonmind.security.framework_registry import standard_requirement_ids
 
-    entry = READINESS_PACKS.get(selection.framework_id)
-    if entry is None or entry.pack.edition != selection.edition:
+    ids = standard_requirement_ids(selection.framework_id, selection.edition)
+    if ids is None:
         raise PolicyPackError(
             "Select an installed catalog standard and its exact edition as the mapping target"
         )
-    return {row.id for row in entry.pack.requirements}
+    return ids
 
 
 async def _pack(artifacts, access, identity: FrameworkPackIdentity, label):

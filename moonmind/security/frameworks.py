@@ -232,7 +232,25 @@ class FrameworkPackIdentity(FrameworkContract):
     sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
 
+def _absent(value) -> bool:
+    return value is None or value == []
+
+
 class FrameworkPackSelection(FrameworkPackIdentity):
+    """A retained pack artifact, or an installed pack named by exact identity.
+
+    An installed selection omits ``artifactRef`` and ``sha256``; the assessment
+    retains the installed bytes as an artifact, so reports keep citing exact
+    content. Profile inputs, evidence records and an audit record apply only to
+    packs that declare a profile.
+    """
+
+    artifact_ref: (
+        Annotated[str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")] | None
+    ) = Field(default=None, exclude_if=_absent)
+    sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None = Field(
+        default=None, exclude_if=_absent
+    )
     period: EvidencePeriod
     requirement_choices: Annotated[
         dict[Text, DeclaredRequirementChoice], Field(max_length=MAX_PACK_REQUIREMENTS)
@@ -240,6 +258,69 @@ class FrameworkPackSelection(FrameworkPackIdentity):
     previous_assessment_ref: (
         Annotated[str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")] | None
     ) = None
+    profile: Annotated[dict[str, Any], Field(max_length=64)] | None = Field(
+        default=None, exclude_if=_absent
+    )
+    evidence_refs: Annotated[list[Text], Field(max_length=64)] = Field(
+        default_factory=list, exclude_if=_absent
+    )
+    audit_ref: Text | None = Field(default=None, exclude_if=_absent)
+
+    @model_validator(mode="after")
+    def artifact_or_installed(self):
+        if (self.artifact_ref is None) != (self.sha256 is None):
+            raise ValueError(
+                "a retained pack needs artifactRef and sha256; omit both for an installed pack"
+            )
+        return self
+
+
+def normalize_installed_framework(data):
+    """Map a saved ``framework.packId`` for an installed pack to ``frameworkPacks``.
+
+    Saved presets, reruns and schedules keep their legacy shape. This single
+    request-boundary step selects the currently installed edition and revision;
+    system inputs become profile inputs and ``auditRef`` stays the audit record.
+    Any other ``framework`` value, including an invalid one, is left for the
+    ordinary model validation to accept or reject.
+    """
+    if not isinstance(data, dict) or not isinstance(data.get("framework"), dict):
+        return data
+    from pydantic import ValidationError
+
+    from moonmind.security.framework_registry import INSTALLED_PACK_IDS, installed_pack
+
+    framework = data["framework"]
+    if framework.get("packId", framework.get("pack_id")) not in INSTALLED_PACK_IDS:
+        return data
+    try:
+        legacy = FrameworkAssessmentInput.model_validate(framework)
+    except ValidationError:
+        return data
+    pack = installed_pack(legacy.pack_id)[1]
+    selection = {
+        "packId": pack.id,
+        "edition": pack.edition,
+        "revision": pack.revision,
+        "period": legacy.period.model_dump(mode="json"),
+        "requirementChoices": {
+            key: choice.model_dump(mode="json", by_alias=True, exclude_none=True)
+            for key, choice in legacy.requirement_choices.items()
+        },
+        "profile": legacy.system_inputs,
+        "evidenceRefs": legacy.evidence_refs,
+        "auditRef": legacy.audit_ref,
+        "previousAssessmentRef": legacy.previous_assessment_ref,
+    }
+    normalized = {key: value for key, value in data.items() if key != "framework"}
+    single = normalized.pop("frameworkPack", normalized.pop("framework_pack", None))
+    multiple = normalized.pop("frameworkPacks", normalized.pop("framework_packs", None))
+    normalized["frameworkPacks"] = [
+        {key: value for key, value in selection.items() if value is not None},
+        *([single] if single is not None else []),
+        *(multiple if isinstance(multiple, list) else []),
+    ]
+    return normalized
 
 
 class FrameworkAssessmentInput(FrameworkContract):

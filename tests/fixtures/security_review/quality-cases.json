@@ -826,7 +826,7 @@
       "variant": "defective",
       "split": "regression",
       "source": "First-party synthetic scoped records; Apache-2.0. Evidence recorded is not external approval.",
-      "edition": "Selected NJ rule-source snapshot reviewed 2026-11-07",
+      "edition": "2026-11-07",
       "requirements": [
         "nj.rgs.games-releases",
         "nj.partner.player-accounts"
@@ -858,7 +858,7 @@
       "variant": "corrected",
       "split": "regression",
       "source": "First-party synthetic scoped records; Apache-2.0. Evidence recorded is not external approval.",
-      "edition": "Selected NJ rule-source snapshot reviewed 2026-11-07",
+      "edition": "2026-11-07",
       "requirements": [
         "nj.rgs.games-releases",
         "nj.partner.player-accounts"
@@ -890,7 +890,7 @@
       "variant": "clean",
       "split": "regression",
       "source": "First-party synthetic scoped records; Apache-2.0. Evidence recorded is not external approval.",
-      "edition": "Selected NJ rule-source snapshot reviewed 2026-11-07",
+      "edition": "2026-11-07",
       "requirements": [
         "nj.rgs.games-releases",
         "nj.partner.player-accounts"
@@ -922,7 +922,7 @@
       "variant": "held-out",
       "split": "held-out",
       "source": "tests/fixtures/security_review/gaming-heldout.json#nj",
-      "edition": "Selected NJ rule-source snapshot reviewed 2026-11-07",
+      "edition": "2026-11-07",
       "requirements": [
         "nj.rgs.games-releases",
         "nj.partner.player-accounts"

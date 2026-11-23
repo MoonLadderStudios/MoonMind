@@ -24,7 +24,8 @@ it('keeps NJ entity, annual rule, requirement scope and evidence choices in shar
   expect(system.getByLabelText('Entity Type')).toHaveProperty('value', 'rgs_content_provider');
   const annualRules = system.getByRole('listbox', { name: 'Annual Rules' }) as HTMLSelectElement;
   expect(Array.from(annualRules.selectedOptions, option => option.value)).toEqual(saved.annualRules);
-  expect(JSON.parse((system.getByLabelText('Saved entity and system inputs JSON') as HTMLTextAreaElement).value)).toEqual(saved);
+  // Typed profile fields replace the free-form JSON editor.
+  expect(system.queryByLabelText('Saved entity and system inputs JSON')).toBeNull();
   fireEvent.change(system.getByLabelText('Entity Type'), { target: { value: 'casino_licensee' } });
   const choices = { 'nj.rgs.incidents': { systems: ['rgs'], period: { start: '2026-03-01', end: '2026-06-30' } } };
   fireEvent.change(view.getByLabelText('Requirement scope and period choices'), { target: { value: JSON.stringify(choices) } });

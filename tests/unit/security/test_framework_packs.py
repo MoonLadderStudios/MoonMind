@@ -514,3 +514,241 @@ def test_declared_pack_preserves_requirement_local_organisational_requests():
     assert plan.requirements[0].organisational_evidence[0].id == "policy"
     assert plan.evidence_refs() == ["art_policy"]
     assert plan.requirements[0].organisational_evidence[0].revisions[0].review.purpose == "design"
+
+
+def test_profile_extension_leaves_existing_pack_digests_unchanged():
+    # Captured from the declared contract before profile packs existed (#5435).
+    metadata = retained_pack_metadata(
+        load(), artifact_ref="art_pack", sha256="0" * 64, now=NOW
+    )
+    assert {
+        key: metadata[key]
+        for key in ("requirementsDigest", "mappingsDigest", "provenanceDigest")
+    } == {
+        "requirementsDigest": "1f84a7efdb88af71fdf29c43f51e2d9e63b2a303f3d5a62b30afeca7615c5658",
+        "mappingsDigest": "643d5437104296e21d906ecb15b2c96ad278f20cfc4af53b12bb6069bd853726",
+        "provenanceDigest": "3829a19e97225532459e0486144524db5f76b767ef5b4176c6bf00bc04e479d9",
+    }
+    assert "profileDigest" not in metadata
+    dumped = load().model_dump(mode="json", by_alias=True)
+    assert not {"profile", "modules", "behavior", "externalClaims"} & set(dumped)
+
+
+def profile_payload():
+    data = payload()
+    data["profile"] = {
+        "requestSource": "https://example.org",
+        "fields": [
+            {
+                "name": "entityType",
+                "type": "choice",
+                "choices": ["operator", "supplier"],
+                "unknownReason": "Record the entity type.",
+            },
+            {"name": "systems", "type": "text_list", "role": "systems"},
+        ],
+    }
+    data["applicabilityText"] = {
+        "applicable": "Applies; basis:",
+        "basisMissing": "missing",
+        "notApplicable": "Out of scope.",
+        "notSelected": "Not selected.",
+    }
+    row = data["requirements"][0]
+    row.update(
+        objectives=[], objectivesComplete=False, evidenceTypes=["organisational"]
+    )
+    row["applicableWhen"] = [{"entityType": "operator"}]
+    return data
+
+
+@pytest.mark.parametrize(
+    "change, message",
+    [
+        (lambda d: d["profile"]["fields"][0].update(required=True), "request ID"),
+        (lambda d: d["profile"]["fields"][0].update(choices=[]), "list choices"),
+        (
+            lambda d: d["requirements"][0].update(applicableWhen=[{"missing": True}]),
+            "no boolean or choice",
+        ),
+        (
+            lambda d: d["requirements"][0].update(applicableWhen=[{"entityType": "x"}]),
+            "unknown choice",
+        ),
+        (lambda d: d.pop("applicabilityText"), "applicabilityText"),
+        (
+            lambda d: d["profile"]["fields"].append(
+                {
+                    "name": "rules",
+                    "type": "choices",
+                    "choices": ["R9"],
+                    "role": "selection",
+                }
+            ),
+            "selection names unknown",
+        ),
+        (
+            lambda d: (
+                d.pop("profile"),
+                d.pop("applicabilityText"),
+                d["requirements"][0].pop("applicableWhen"),
+                d.update(behavior="x"),
+            ),
+            "profile inputs",
+        ),
+        (
+            lambda d: d.update(
+                modules=[
+                    {
+                        "id": "M1",
+                        "edition": "1",
+                        "source": d["source"],
+                        "sourceStatus": "Unverified",
+                    }
+                ]
+            ),
+            "reason",
+        ),
+        (
+            lambda d: d.update(
+                modules=[{"id": "M1", "edition": "1", "source": d["source"]}]
+            ),
+            "undeclared module",
+        ),
+    ],
+)
+def test_profile_contract_rejects_inconsistent_declarations(change, message):
+    from pydantic import ValidationError
+
+    load(profile_payload())
+    data = profile_payload()
+    change(data)
+    with pytest.raises((ValueError, ValidationError), match=message):
+        load(data)
+
+
+def test_declared_profile_rules_drive_applicability_and_refuse_guesses():
+    from moonmind.security.pack_readiness import DEFAULT_BEHAVIOR, evaluate_readiness
+
+    pack = load(profile_payload())
+
+    def status(profile):
+        return evaluate_readiness(
+            pack,
+            DEFAULT_BEHAVIOR,
+            profile=profile,
+            period=EvidencePeriod(start="2026-10-01", end="2026-10-31"),
+            choices={},
+            records=[],
+            audit=None,
+            admitted_assets=["app"],
+        ).rows["R1"]
+
+    assert (
+        status({"entityType": "operator", "systems": ["app"]})["status"] == "incomplete"
+    )
+    assert (
+        status({"entityType": "supplier", "systems": ["app"]})["status"]
+        == "not_applicable"
+    )
+    unknown = status({"systems": ["app"]})
+    assert (unknown["status"], unknown["reason"]) == (
+        "Unverified",
+        "Record the entity type.",
+    )
+    # A profile pack compiles only from its readiness result.
+    with pytest.raises(ValueError, match="readiness"):
+        compile(pack)
+
+
+def test_unregistered_behavior_is_refused():
+    from moonmind.security.framework_registry import pack_behavior
+
+    data = profile_payload()
+    data["behavior"] = "not-registered"
+    with pytest.raises(ValueError, match="unregistered behavior"):
+        pack_behavior(load(data))
+
+
+def legacy_request(pack_id, framework):
+    return {
+        "scope": {"assets": ["casino"]},
+        "tools": [],
+        "budget": {"baseSeconds": 60, "maxSeconds": 120, "progressStallSeconds": 60},
+        "credentialRefs": [],
+        "networkRefs": [],
+        "framework": {"packId": pack_id, **framework},
+    }
+
+
+def test_saved_framework_pack_id_normalizes_once_at_the_request_boundary():
+    from moonmind.security.assessments import AssessmentRequest
+    from moonmind.security.framework_registry import installed_pack
+
+    framework = {
+        "systemInputs": {"entityName": "Saved", "systems": ["casino"]},
+        "period": {"start": "2026-11-04", "end": "2026-11-07"},
+        "requirementChoices": {"GLI-GSF-2:B": {"systems": ["casino"]}},
+        "evidenceRefs": ["art_saved_record"],
+        "previousAssessmentRef": "art_previous",
+    }
+    request = AssessmentRequest.model_validate(
+        legacy_request("gli-19-readiness", framework)
+    )
+    assert request.framework is None
+    [selection] = request.selected_packs
+    pack = installed_pack("gli-19-readiness")[1]
+    assert (selection.pack_id, selection.edition, selection.revision) == (
+        pack.id,
+        pack.edition,
+        pack.revision,
+    )
+    assert (selection.artifact_ref, selection.sha256) == (None, None)
+    assert selection.profile == framework["systemInputs"]
+    assert selection.evidence_refs == ["art_saved_record"]
+    assert selection.previous_assessment_ref == "art_previous"
+    assert selection.requirement_choices["GLI-GSF-2:B"].systems == ["casino"]
+    # Normalizing an already normalized request is a no-op.
+    again = AssessmentRequest.model_validate(
+        request.model_dump(mode="json", by_alias=True, exclude_none=True)
+    )
+    assert again.selected_packs == request.selected_packs
+
+    nj = AssessmentRequest.model_validate(
+        legacy_request("nj-dge-readiness", dict(framework, auditRef="art_annual"))
+    )
+    assert nj.selected_packs[0].audit_ref == "art_annual"
+    # Other built-ins keep their own path; invalid saved input stays an error.
+    iso = AssessmentRequest.model_validate(
+        legacy_request(
+            "iso-27001-readiness", {"systemInputs": {}, "period": framework["period"]}
+        )
+    )
+    assert iso.framework.pack_id == "iso-27001-readiness" and not iso.selected_packs
+    with pytest.raises(ValueError, match="framework"):
+        AssessmentRequest.model_validate(
+            legacy_request("gli-19-readiness", {"systemInputs": {}})
+        )
+
+
+def test_saved_built_in_joins_other_selected_packs():
+    from moonmind.security.assessments import AssessmentRequest
+
+    request = legacy_request(
+        "gli-19-readiness",
+        {"systemInputs": {}, "period": {"start": "2026-11-04", "end": "2026-11-07"}},
+    )
+    request["frameworkPack"] = {
+        "artifactRef": "art_pack",
+        "packId": "example",
+        "edition": "2026",
+        "revision": "1",
+        "sha256": "0" * 64,
+        "period": {"start": "2026-11-04", "end": "2026-11-07"},
+    }
+    parsed = AssessmentRequest.model_validate(request)
+    assert [s.pack_id for s in parsed.selected_packs] == ["gli-19-readiness", "example"]
+    request.pop("framework")
+    request["frameworkPack"].pop("sha256")
+    with pytest.raises(ValueError, match="artifactRef and sha256"):
+        AssessmentRequest.model_validate(request)
