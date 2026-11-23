@@ -311,6 +311,8 @@ class TestWorkflowSettings:
             "image/png",
             "image/jpeg",
             "image/webp",
+            "text/plain",
+            "text/markdown",
         )
 
     def test_agent_job_attachment_env_overrides(self, monkeypatch):

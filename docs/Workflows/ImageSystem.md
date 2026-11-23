@@ -214,7 +214,7 @@ Rules:
 
 Canonical properties:
 
-- supported content types come from attachment policy, with image types as the default desired-state allowlist
+- supported content types come from attachment policy; the default allowlist is PNG, JPEG, WebP, plain text and Markdown, so document-reading Skills work without configuration
 - `image/svg+xml` remains forbidden
 - integrity is enforced at artifact completion time
 - retention follows the execution’s artifact retention policy unless overridden by a more specific policy
@@ -242,7 +242,7 @@ Attachment policy is server-defined and browser-enforced, then revalidated serve
 Rules:
 
 - allowed content types are checked before upload and again when the API finalizes the artifact
-- signature sniffing must confirm the content is a supported image type
+- signature sniffing must confirm the content is a supported image type, and text attachments must be UTF-8 without NUL bytes
 - max count, per-file size, and total size limits are enforced
 - uploads with invalid or incomplete content are rejected before execution start
 - caption hints or other future fields that are not yet supported must fail fast rather than being silently ignored

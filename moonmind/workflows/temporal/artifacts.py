@@ -68,7 +68,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from api_service.db import models as db_models
-from moonmind.config.settings import settings
+from moonmind.config.settings import DEFAULT_ATTACHMENT_CONTENT_TYPES, settings
 from moonmind.core.artifacts import assert_model_agnostic_metadata
 from moonmind.schemas import saved_work_retention as _saved_work_retention
 from moonmind.schemas.saved_work_models import (
@@ -654,7 +654,7 @@ def _allowed_input_attachment_content_types() -> set[str]:
     }
     configured.discard("")
     configured.discard("image/svg+xml")
-    return configured or {"image/png", "image/jpeg", "image/webp"}
+    return configured or set(DEFAULT_ATTACHMENT_CONTENT_TYPES)
 
 def _is_task_input_attachment_metadata(metadata: Mapping[str, Any]) -> bool:
     source = str(metadata.get("source") or "").strip().lower()
@@ -713,7 +713,7 @@ def _assert_not_reserved_input_attachment_metadata(
                 "worker artifact uploads may not target the reserved input attachment namespace"
             )
 
-def _validate_image_attachment_payload(
+def _validate_attachment_payload(
     *,
     content_type: str | None,
     payload: bytes,
@@ -725,7 +725,7 @@ def _validate_image_attachment_payload(
     if normalized not in allowed:
         supported = ", ".join(sorted(allowed))
         raise TemporalArtifactValidationError(
-            f"unsupported image attachment content type {normalized or '<missing>'}; "
+            f"unsupported attachment content type {normalized or '<missing>'}; "
             f"supported types: {supported}"
         )
     if normalized == "image/png" and not payload.startswith(b"\x89PNG\r\n\x1a\n"):
@@ -736,6 +736,18 @@ def _validate_image_attachment_payload(
         len(payload) < 12 or not payload.startswith(b"RIFF") or payload[8:12] != b"WEBP"
     ):
         raise TemporalArtifactValidationError("image/webp signature validation failed")
+    if normalized.startswith("text/"):
+        # The text counterpart of image signature sniffing.
+        try:
+            payload.decode("utf-8")
+        except UnicodeDecodeError:
+            valid = False
+        else:
+            valid = b"\x00" not in payload
+        if not valid:
+            raise TemporalArtifactValidationError(
+                f"{normalized} attachment must be UTF-8 text"
+            )
 
 def _requires_image_payload_validation(
     *, content_type: str | None, metadata: Mapping[str, Any] | None
@@ -5028,7 +5040,7 @@ class TemporalArtifactService:
             metadata=artifact.metadata_json,
         ):
             try:
-                _validate_image_attachment_payload(
+                _validate_attachment_payload(
                     content_type=content_type or artifact.content_type,
                     payload=payload,
                 )
@@ -5297,7 +5309,7 @@ class TemporalArtifactService:
             metadata=artifact.metadata_json,
         ):
             try:
-                _validate_image_attachment_payload(
+                _validate_attachment_payload(
                     content_type=artifact.content_type,
                     payload=payload,
                 )

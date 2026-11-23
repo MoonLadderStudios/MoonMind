@@ -1426,6 +1426,7 @@ class AssessmentExecution:
             compile_framework_plan,
             load_declared_pack,
             retained_pack_metadata,
+            verify_source_documents,
         )
 
         label = f"frameworkPacks[{index}] ({selection.pack_id})"
@@ -1439,6 +1440,21 @@ class AssessmentExecution:
                 edition=selection.edition,
                 revision=selection.revision,
             )
+            try:
+                # Operator-owned sources pass the same artifact owner and digest
+                # check as the pack before any native collection starts.
+                await verify_source_documents(pack, self.digest)
+            except TemporalArtifactError as exc:
+                raise ToolFailure(
+                    getattr(exc, "code", None)
+                    or (
+                        "POLICY_VIOLATION"
+                        if isinstance(exc, TemporalArtifactAuthorizationError)
+                        else "INVALID_INPUT"
+                    ),
+                    f"source document is unreadable ({type(exc).__name__})",
+                    exc.retryable,
+                ) from None
             plan, diagnostics = compile_framework_plan(
                 pack,
                 scope=scope,
@@ -1656,9 +1672,11 @@ class AssessmentExecution:
 
         async def dependencies():
             required = [scan_ref, comparison_ref, *readable]
-            required.extend(
-                pack["artifactRef"] for pack in framework_pack_context or []
-            )
+            for pack in framework_pack_context or []:
+                required.append(pack["artifactRef"])
+                required.extend(
+                    item["artifactRef"] for item in pack.get("sourceDocuments", [])
+                )
             if review_readable:
                 required.append(request.review_ref)
             if review is not None:

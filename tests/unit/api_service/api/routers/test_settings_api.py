@@ -1606,3 +1606,96 @@ async def test_catalog_checks_saved_pack_identity_access_and_effectivity(
     assert declared["art_private"]["requirementCount"] == 1
     assert "deterministic_check" in declared["art_private"]["evidenceKinds"]
     assert "Secret description" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_policy_pack_routes_map_deterministic_outcomes(
+    settings_api_db, monkeypatch
+):
+    from api_service.services.policy_pack_drafts import PolicyPackError
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactNotFoundError
+
+    async with settings_api_db() as session:
+        await run_guarded_upgrade(session, operator_authorized=True)
+    draft_body = {
+        "policy": {"name": "Policy", "owner": "Security", "version": "1"},
+        "documents": [{"artifactRef": "art_doc", "sha256": "a" * 64}],
+        "responseArtifactRef": "art_response",
+        "responseSha256": "b" * 64,
+    }
+    accept_body = {
+        "draftArtifactRef": "art_draft",
+        "draftSha256": "c" * 64,
+        "review": {
+            "reviewedBy": "CISO",
+            "reviewedOn": "2026-11-20",
+            "effectiveFrom": "2026-11-20",
+        },
+        "projectId": "acme",
+        "environmentId": "production",
+    }
+    outcomes = iter(
+        [
+            PolicyPackError(
+                "Drafting response art_response changed; its SHA-256 differs"
+            ),
+            {"draftArtifactRef": "art_new", "publicationStatus": "draft"},
+        ]
+    )
+    accepted = iter(
+        [
+            ValueError("version_conflict"),
+            TemporalArtifactNotFoundError("art_private_detail"),
+            {"artifactRef": "art_pack", "publicationStatus": "published"},
+        ]
+    )
+
+    async def fake(outcomes, *args, **kwargs):
+        value = next(outcomes)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr(
+        settings_router, "draft_policy_pack", lambda *a, **k: fake(outcomes)
+    )
+    monkeypatch.setattr(
+        settings_router, "accept_policy_pack", lambda *a, **k: fake(accepted)
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app, client=("127.0.0.1", 1234)),
+        base_url="http://localhost",
+    ) as client:
+        url = "/api/v1/settings/framework-packs"
+        invalid = await client.post(f"{url}/drafts", json={"documents": []})
+        assert invalid.status_code == 422, invalid.text
+        refused = await client.post(f"{url}/drafts", json=draft_body)
+        assert refused.status_code == 422
+        _assert_settings_error_envelope(refused.json(), error="invalid_framework_pack")
+        assert "SHA-256 differs" in refused.json()["message"]
+        drafted = await client.post(f"{url}/drafts", json=draft_body)
+        assert (
+            drafted.status_code == 200
+            and drafted.json()["publicationStatus"] == "draft"
+        )
+        both = dict(
+            accept_body,
+            pack={
+                "artifactRef": "art_pack",
+                "packId": "p",
+                "edition": "1",
+                "revision": "1",
+                "sha256": "d" * 64,
+            },
+        )
+        assert (await client.post(f"{url}/accept", json=both)).status_code == 422
+        conflict = await client.post(f"{url}/accept", json=accept_body)
+        assert conflict.status_code == 409
+        assert conflict.json()["error"] == "version_conflict"
+        missing = await client.post(f"{url}/accept", json=accept_body)
+        assert missing.status_code == 409
+        assert missing.json()["error"] == "framework_pack_artifact_unavailable"
+        assert "art_private_detail" not in missing.text
+        published = await client.post(f"{url}/accept", json=accept_body)
+        assert published.status_code == 200
+        assert published.json()["publicationStatus"] == "published"

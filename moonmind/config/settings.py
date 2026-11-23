@@ -299,6 +299,18 @@ class TemporalDashboardSettings(BaseSettings):
         extra="ignore",
     )
 
+
+# Images plus the text and Markdown documents that document-reading Skills read
+# from `.moonmind/attachments/`; an empty configuration falls back to this list.
+DEFAULT_ATTACHMENT_CONTENT_TYPES = (
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "text/plain",
+    "text/markdown",
+)
+
+
 class WorkflowSettings(BaseSettings):
     """Settings specific to workflow automation."""
 
@@ -443,7 +455,7 @@ class WorkflowSettings(BaseSettings):
     )
     agent_job_attachment_allowed_content_types: Annotated[tuple[str, ...], NoDecode] = (
         Field(
-            ("image/png", "image/jpeg", "image/webp"),
+            DEFAULT_ATTACHMENT_CONTENT_TYPES,
             validation_alias=AliasChoices("AGENT_JOB_ATTACHMENT_ALLOWED_TYPES"),
             description="Allowed MIME types for input attachments.",
         )

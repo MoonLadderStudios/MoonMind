@@ -2,7 +2,7 @@
 
 Mappings describe directional relationships, never evidence or objective coverage.
 No registry or network retrieval is involved. Artifact access and byte integrity
-are the caller's responsibility.
+are the caller's responsibility, including operator-owned source documents.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING, Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, model_validator
+from pydantic import Field, StringConstraints, model_validator
 
 from moonmind.security.assessments import ControlObjective
 from moonmind.security.frameworks import (
@@ -35,12 +35,45 @@ if TYPE_CHECKING:
 MAX_PACK_BYTES = 2 * 1024 * 1024
 
 Identifiers = Annotated[list[Identifier], Field(min_length=1, max_length=64)]
+ArtifactRef = Annotated[str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")]
+Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+# Catalog editions can name amendments, such as ISO/IEC 27001 "2022+Amd1:2024".
+MappingEdition = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:/+-]{0,127}$"
+    ),
+]
 
 
 class PackSource(FrameworkSource):
+    """A public HTTP(S) source, or an operator-owned document artifact.
+
+    An artifact source names its exact bytes so a later policy revision is a new
+    digest, never a silent change. ``excerptSha256`` fingerprints the cited text.
+    """
+
+    # Absent fields stay absent so existing URL packs keep their digests.
+    url: Text | None = Field(default=None, exclude_if=lambda value: value is None)
+    artifact_ref: ArtifactRef | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    sha256: Sha256 | None = Field(default=None, exclude_if=lambda value: value is None)
+    excerpt_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
     @model_validator(mode="after")
-    def validate_url(self):
-        parsed = urlsplit(self.url)
+    def validate_location(self):
+        if self.artifact_ref is not None:
+            if self.url is not None:
+                raise ValueError("framework source names either a URL or an artifact")
+            if self.sha256 is None:
+                raise ValueError("artifact framework source requires its SHA-256")
+            return self
+        if self.sha256 is not None or self.excerpt_sha256 is not None:
+            raise ValueError("only artifact framework sources carry document digests")
+        parsed = urlsplit(self.url or "")
         if (
             parsed.scheme not in {"http", "https"}
             or not parsed.hostname
@@ -94,7 +127,7 @@ class PackRequirement(FrameworkRequirement):
 class MappingTarget(FrameworkContract):
     id: Identifier
     framework_id: Identifier
-    edition: Identifier
+    edition: MappingEdition
     requirement_ids: Identifiers
 
     @model_validator(mode="after")
@@ -147,8 +180,9 @@ class VersionedFrameworkPack(FrameworkContract):
     )
     title: Text
     source: PackSource
-    reviewed_by: Text
-    reviewed_on: date
+    # A draft has not been reviewed yet; every other status keeps attribution.
+    reviewed_by: Text | None = None
+    reviewed_on: date | None = None
     publication_status: Literal["published", "draft", "superseded"]
     published_on: date | None = None
     effective_from: date | None = None
@@ -193,10 +227,15 @@ class VersionedFrameworkPack(FrameworkContract):
                 target.requirement_ids
             ):
                 raise ValueError("mapping names unknown target or requirement")
+        if self.publication_status != "draft" and (
+            not self.reviewed_by or not self.reviewed_on
+        ):
+            raise ValueError("reviewed pack requires review attribution")
         if self.publication_status == "published" and (
             not self.published_on or not self.effective_from
         ):
             raise ValueError("published pack requires publication and effective dates")
+        self.source_documents()
         if (
             self.effective_until
             and self.effective_from
@@ -204,6 +243,37 @@ class VersionedFrameworkPack(FrameworkContract):
         ):
             raise ValueError("effective interval must be ordered")
         return self
+
+    def source_documents(self) -> dict[str, str]:
+        """Operator-owned source artifacts and the exact digest each was read at."""
+        documents: dict[str, str] = {}
+        sources = [
+            self.source,
+            *(source for row in self.requirements for source in row.sources),
+            *(mapping.source for mapping in self.mappings),
+        ]
+        for source in sources:
+            if source.artifact_ref is None:
+                continue
+            if (
+                documents.setdefault(source.artifact_ref, source.sha256)
+                != source.sha256
+            ):
+                raise ValueError("framework source document has conflicting digests")
+        return documents
+
+
+async def verify_source_documents(pack: VersionedFrameworkPack, digest) -> None:
+    """Recheck each source document through the caller's artifact owner.
+
+    ``digest(ref)`` returns the SHA-256 of the bytes the caller may read now and
+    raises the owner's own error when the artifact is missing or unauthorized.
+    """
+    for ref, expected in pack.source_documents().items():
+        if await digest(ref) != expected:
+            raise ValueError(
+                f"framework source document {ref} changed; draft a new pack revision"
+            )
 
 
 def parse_declared_pack(payload: bytes) -> VersionedFrameworkPack:
@@ -390,6 +460,13 @@ def retained_pack_metadata(
         ),
         "textOmitted": pack.distribution == "restricted",
     }
+    if documents := pack.source_documents():
+        # Identity and digest only: a later policy revision is detectable even
+        # when restricted distribution omits every title and summary.
+        result["sourceDocuments"] = [
+            {"artifactRef": ref, "sha256": sha}
+            for ref, sha in sorted(documents.items())
+        ]
 
     if pack.distribution == "redistributable":
         result.update(
@@ -433,6 +510,7 @@ def compare_pack_metadata(current: dict, previous: dict | None) -> list[str]:
         "effectiveUntil",
         "reviewedOn",
         "sha256",
+        "sourceDocuments",
     )
     return [
         f"Framework assessment intelligence changed: {key}; this is not remediation evidence."

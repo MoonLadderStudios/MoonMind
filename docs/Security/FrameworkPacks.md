@@ -19,7 +19,8 @@ In Create, readiness presets show typed system inputs. Open the advanced JSON
 editor to paste or edit a complete saved system record.
 
 Settings can register a declared pack using its exact artifact reference, ID,
-edition, revision and SHA-256. Catalog reads use the caller’s artifact access.
+edition, revision and SHA-256. Catalog reads use the caller’s artifact access
+and recheck any source documents the pack cites.
 Restricted registrations expose identity and summary metadata. Their licensed
 text stays behind the artifact boundary. A saved choice supplies context.
 Assessment admission checks the selected bytes, rights and period again.
@@ -41,8 +42,10 @@ selections compile into one plan and are mutually exclusive with
 
 The artifact owner verifies access and stored bytes before any native collection.
 The declared ID, edition and revision must match the selected values, and the
-SHA-256 must match the exact input bytes. These are evidence-integrity checks,
-not deployment, image or runtime compatibility requirements.
+SHA-256 must match the exact input bytes. Source documents the pack cites must be
+readable with the same access and still match their recorded digests; a missing,
+unauthorized or changed source refuses the assessment. These are evidence-integrity
+checks, not deployment, image or runtime compatibility requirements.
 
 ## Pack contract
 
@@ -50,9 +53,13 @@ Use `schemaVersion: declared-framework-pack/v1` with:
 
 - `id`, `title`, `edition`, `revision` and optional `amendments`. Identifiers are
   bounded; mutable edition/revision aliases such as `latest` are refused.
-- `source`: an HTTP(S) `url`, a `section`, and `reviewedOn` date. URL fetching is
-  never implied. `provenance`, `reviewedBy` and `reviewedOn` retain attribution,
-  not independent verification of authorship or assessor qualification.
+- `source`: a `section`, a `reviewedOn` date and either an HTTP(S) `url` or, for
+  an operator-owned document, its `artifactRef` and `sha256`. An artifact source
+  may add `excerptSha256`, the digest of the cited text, so a reworded statement
+  is detectable without copying it. URL fetching is never implied. One artifact
+  keeps one digest throughout the pack. `provenance`, `reviewedBy` and `reviewedOn`
+  retain attribution, not independent verification of authorship or assessor
+  qualification. Only a draft may omit `reviewedBy` and `reviewedOn`.
 - `publicationStatus`: `published`, `draft` or `superseded`. Published material
   needs `publishedOn` and `effectiveFrom`; optional `effectiveUntil` is exclusive.
   Draft, superseded, future and expired packs are explicitly refused for new
@@ -89,12 +96,14 @@ remain separate attributed mappings, never automatic coverage or satisfaction.
 ## Reports and retention
 
 The ordinary `controlAssessmentRef` and readable report retain pack identity,
-revision, integrity, effective dates and intelligence digests. Redistributable
+revision, integrity, effective dates, intelligence digests and each source
+document's artifact reference and SHA-256. Redistributable
 packs also retain the declared source, review, license, requirement and mapping
 metadata. Restricted operator-supplied packs are retained behind the artifact
 owner's existing access boundary; portable reports omit their titles, summaries,
 source sections, rationales and objective descriptions, with an explicit omission
-diagnostic. Prohibited packs are refused. Retention does not grant sharing rights
+diagnostic. Source documents stay required dependencies of the report that cited
+them. Prohibited packs are refused. Retention does not grant sharing rights
 or permission to export the underlying licensed artifact.
 
 The combined plan admits 1,024 requirements, 16,384 asset-by-rule cells
@@ -114,6 +123,63 @@ only in the previous report are marked Unverified. Missing or unreadable
 history leaves comparison Unverified. A change in revision,
 objectives or rights is reported as an intelligence change. Both export tools
 return an explicit unsupported result for a multi-pack run.
+
+## Packs from your own policy
+
+The `security-policy-pack` preset turns an organisation's own policy or ISMS
+documents into a declared pack. Upload the documents as text or Markdown, which
+the default attachment policy admits, attach them to the drafting step, and state the
+policy name, owner, and version or approval date. Select the saved environment so
+its evidence-processing limits apply: when model delivery is disabled, local-only
+or limited to other Provider Profiles, the run is refused before an agent starts
+and no document content is sent. The portable Skill treats document text as
+untrusted data and writes a `policy-pack-draft-response/v1` artifact. It never
+sets status, distribution, review or completeness fields; the contract refuses them.
+
+`POST /api/v1/settings/framework-packs/drafts` then checks that response outside
+any model step. Supply the policy identity, each document's `artifactRef` and
+`sha256`, the response reference and digest, and optionally `ruleInventoryRefs`
+(retained `security-observation/v1` records), a `mappingTarget` naming an installed
+standard and its exact edition, and a `previousPack`. A requirement is kept only
+when its locator names a supplied document (by artifact or SHA-256), a section,
+clause or page in it, and a quoted sentence found there that uses shall, must or
+required. Missing locators, quotes not at the cited place, guidance offered as a
+requirement and text addressed to a model or workflow are flagged and left out.
+Unsupported or unreadable files are listed by name. A normative sentence becomes
+an open question unless the quotes of kept rows at its document and section cover
+most of it, so a bare "must" or a refused row never hides one. A suggested objective survives
+only when the inventory shows that exact source, tool and rule ran as a
+deterministic check; otherwise it is flagged as invented or unverifiable. Mapping
+proposals must name requirements of the selected standard.
+
+The call returns a `policy-pack-draft/v1` artifact and a Markdown review sheet,
+both under the caller's artifact access. The draft pack is `restricted` and
+`draft`, so it is never operative and cannot be selected for an assessment. Its
+requirements cite the document artifact, digest, location and excerpt digest,
+hold no objectives, and need organisational evidence or agent review.
+
+`POST /api/v1/settings/framework-packs/accept` is the review step, also outside any
+model step. Name the draft (`draftArtifactRef`, `draftSha256`) and a
+`projectId`/`environmentId`, and give `review`: `reviewedBy`, `reviewedOn`,
+`effectiveFrom`, optional `effectiveUntil`, `publishedOn`, `distribution`,
+`removeRequirementIds`, `requirementEdits`, `adoptObjectiveSuggestions` and
+`acceptMappingProposals`. Source documents are rechecked first. The result is a
+new published pack artifact registered in that saved environment in place of the
+same pack's earlier registration, so the catalog lists it. The revision is pinned
+with its source documents sealed as required dependencies, so it stays readable
+past ordinary expiry; unpin a revision you no longer register. Adopted rule suggestions
+never complete a requirement's objectives. Accepted mappings become `evaluated`
+with the reviewer's attribution. To edit an accepted pack, pass its identity as
+`pack` instead of a draft; that creates the next revision.
+
+To handle a policy revision, draft again from the new document with the operative
+pack as `previousPack`. The draft proposes the next revision and lists added,
+removed, reworded and unchanged requirements, those whose applicability, evidence
+or objectives changed (a redraft carries no adopted objectives), and source
+documents that changed.
+An unchanged sentence keeps its earlier requirement ID. Earlier revisions and the
+assessments that used them are never rewritten. Drafting quality depends on the
+model and the document, so the accept step stays the operator's review.
 
 ## Organisational evidence requests and imports
 

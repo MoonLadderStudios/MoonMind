@@ -5846,6 +5846,73 @@ def test_create_task_shaped_execution_fetches_unique_attachments_in_one_query(
     assert len(attachment_queries) == 1
     service.create_execution.assert_awaited_once()
 
+
+@pytest.mark.parametrize("configured", ["declared default", "unset"])
+def test_default_attachment_policy_admits_text_and_markdown_documents(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+    configured: str,
+) -> None:
+    """Policy-document Skills read attachments without operator configuration."""
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
+    field = type(settings.workflow).model_fields[
+        "agent_job_attachment_allowed_content_types"
+    ]
+    monkeypatch.setattr(
+        settings.workflow,
+        "agent_job_attachment_allowed_content_types",
+        field.default if configured == "declared default" else (),
+    )
+    service.create_execution.return_value = _build_execution_record()
+    db_session = _artifact_session(
+        [
+            SimpleNamespace(
+                artifact_id="art_01POLICYDOCUMENT000000001",
+                status=TemporalArtifactStatus.COMPLETE,
+                content_type="text/markdown",
+                size_bytes=128,
+            ),
+            SimpleNamespace(
+                artifact_id="art_01POLICYDOCUMENT000000002",
+                status=TemporalArtifactStatus.COMPLETE,
+                content_type="text/plain",
+                size_bytes=64,
+            ),
+        ]
+    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "instructions": "Draft a framework pack from the policy.",
+                    "inputAttachments": [
+                        {
+                            "artifactId": "art_01POLICYDOCUMENT000000001",
+                            "filename": "security-policy.md",
+                            "contentType": "text/markdown",
+                            "sizeBytes": 128,
+                        },
+                        {
+                            "artifactId": "art_01POLICYDOCUMENT000000002",
+                            "filename": "access-standard.txt",
+                            "contentType": "text/plain",
+                            "sizeBytes": 64,
+                        },
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.json()
+    service.create_execution.assert_awaited_once()
+
+
 def test_create_task_shaped_execution_rejects_svg_attachment_type(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
     monkeypatch: pytest.MonkeyPatch,

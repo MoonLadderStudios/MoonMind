@@ -1231,6 +1231,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/framework-packs/drafts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Draft Framework Pack
+         * @description Check a drafting response deterministically; the draft is never operative.
+         */
+        post: operations["draft_framework_pack_api_v1_settings_framework_packs_drafts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/framework-packs/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept Framework Pack
+         * @description Publish an operator-reviewed revision and register it in one environment.
+         */
+        post: operations["accept_framework_pack_api_v1_settings_framework_packs_accept_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/assessment-projects/resolve": {
         parameters: {
             query?: never;
@@ -7617,6 +7657,13 @@ export interface components {
             /** Detail */
             detail?: string | null;
         };
+        /** DocumentSelection */
+        DocumentSelection: {
+            /** Artifactref */
+            artifactRef: string;
+            /** Sha256 */
+            sha256: string;
+        };
         /** EligibleProviderProfile */
         EligibleProviderProfile: {
             /** Profileid */
@@ -9092,6 +9139,22 @@ export interface components {
             /** Items */
             items: components["schemas"]["CatalogPack"][];
         };
+        /**
+         * FrameworkPackIdentity
+         * @description An explicitly selected, retained pack, not a mutable registry alias.
+         */
+        FrameworkPackIdentity: {
+            /** Artifactref */
+            artifactRef: string;
+            /** Packid */
+            packId: string;
+            /** Edition */
+            edition: string;
+            /** Revision */
+            revision: string;
+            /** Sha256 */
+            sha256: string;
+        };
         /** GateReason */
         GateReason: {
             /** Code */
@@ -9793,6 +9856,13 @@ export interface components {
              */
             relativePath: string;
         };
+        /** MappingSelection */
+        MappingSelection: {
+            /** Frameworkid */
+            frameworkId: string;
+            /** Edition */
+            edition: string;
+        };
         /**
          * MigrationEvidenceView
          * @description Non-sensitive evidence provenance for one combination.
@@ -10253,6 +10323,43 @@ export interface components {
             /** Relativepath */
             relativePath: string;
         };
+        /** PackReview */
+        PackReview: {
+            /** Reviewedby */
+            reviewedBy: string;
+            /**
+             * Reviewedon
+             * Format: date
+             */
+            reviewedOn: string;
+            /**
+             * Effectivefrom
+             * Format: date
+             */
+            effectiveFrom: string;
+            /** Effectiveuntil */
+            effectiveUntil?: string | null;
+            /** Publishedon */
+            publishedOn?: string | null;
+            /** Revision */
+            revision?: string | null;
+            /**
+             * Distribution
+             * @default restricted
+             * @enum {string}
+             */
+            distribution: "restricted" | "redistributable";
+            /** Removerequirementids */
+            removeRequirementIds?: string[];
+            /** Requirementedits */
+            requirementEdits?: {
+                [key: string]: components["schemas"]["RequirementEdit"];
+            };
+            /** Adoptobjectivesuggestions */
+            adoptObjectiveSuggestions?: string[];
+            /** Acceptmappingproposals */
+            acceptMappingProposals?: string[];
+        };
         /**
          * PatConnectionCreateRequest
          * @description Create a named PAT connection; the token becomes a Managed Secret.
@@ -10318,6 +10425,48 @@ export interface components {
             approvals: components["schemas"]["ApprovalPolicy"];
             retention: components["schemas"]["RetentionPolicy"];
             rollout: components["schemas"]["RolloutPolicy"];
+        };
+        /** PolicyIdentity */
+        PolicyIdentity: {
+            /** Name */
+            name: string;
+            /** Owner */
+            owner: string;
+            /** Version */
+            version?: string | null;
+            /** Approvedon */
+            approvedOn?: string | null;
+            /** Packid */
+            packId?: string | null;
+        };
+        /** PolicyPackAcceptRequest */
+        PolicyPackAcceptRequest: {
+            /** Draftartifactref */
+            draftArtifactRef?: string | null;
+            /** Draftsha256 */
+            draftSha256?: string | null;
+            pack?: components["schemas"]["FrameworkPackIdentity"] | null;
+            review: components["schemas"]["PackReview"];
+            /** Projectid */
+            projectId: string;
+            /** Environmentid */
+            environmentId: string;
+        };
+        /** PolicyPackDraftRequest */
+        PolicyPackDraftRequest: {
+            policy: components["schemas"]["PolicyIdentity"];
+            /** Documents */
+            documents: components["schemas"]["DocumentSelection"][];
+            /** Responseartifactref */
+            responseArtifactRef: string;
+            /** Responsesha256 */
+            responseSha256: string;
+            previousPack?: components["schemas"]["FrameworkPackIdentity"] | null;
+            mappingTarget?: components["schemas"]["MappingSelection"] | null;
+            /** Ruleinventoryrefs */
+            ruleInventoryRefs?: string[];
+            /** Revision */
+            revision?: string | null;
         };
         /**
          * PolicyState
@@ -12681,6 +12830,19 @@ export interface components {
              * @default 300
              */
             timeoutSeconds: number;
+        };
+        /** RequirementEdit */
+        RequirementEdit: {
+            /** Title */
+            title?: string | null;
+            /** Summary */
+            summary?: string | null;
+            /** Applicability */
+            applicability?: string | null;
+            /** Evidenceprompt */
+            evidencePrompt?: string | null;
+            /** Requiredevidencemethods */
+            requiredEvidenceMethods?: ("deterministic_check" | "enquiry" | "evidence" | "observation")[] | null;
         };
         /**
          * RescheduleExecutionRequest
@@ -16997,6 +17159,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FrameworkCatalog"];
+                };
+            };
+        };
+    };
+    draft_framework_pack_api_v1_settings_framework_packs_drafts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PolicyPackDraftRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accept_framework_pack_api_v1_settings_framework_packs_accept_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PolicyPackAcceptRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

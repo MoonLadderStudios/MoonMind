@@ -237,6 +237,8 @@ def test_build_runtime_config_normalizes_attachment_policy_settings(
         "image/png",
         "image/jpeg",
         "image/webp",
+        "text/plain",
+        "text/markdown",
     ]
 
 def test_build_runtime_config_default_matches_omitted_submission(monkeypatch) -> None:

@@ -14,7 +14,11 @@ from urllib.parse import quote, urlparse
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
-from moonmind.config.settings import WorkflowSettings, settings
+from moonmind.config.settings import (
+    DEFAULT_ATTACHMENT_CONTENT_TYPES,
+    WorkflowSettings,
+    settings,
+)
 from moonmind.omnigent.execution_profiles import public_execution_catalog
 from moonmind.utils.build_info import resolve_moonmind_build_id
 from moonmind.workflows.executions.runtime_defaults import (
@@ -1487,7 +1491,7 @@ def _build_default_attachment_policy(config: "dict[str, Any]") -> dict[str, Any]
         "allowedContentTypes": (
             list(allowed_types)
             if allowed_types
-            else ["image/png", "image/jpeg", "image/webp"]
+            else list(DEFAULT_ATTACHMENT_CONTENT_TYPES)
         ),
     }
 
