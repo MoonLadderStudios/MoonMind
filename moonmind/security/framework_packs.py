@@ -122,7 +122,7 @@ class PackEvidenceRequest(FrameworkContract):
 
 
 def _absent(value) -> bool:
-    return value is None or value == [] or value is False
+    return value is None or value == [] or value == {} or value is False
 
 
 ProfileName = Annotated[

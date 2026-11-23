@@ -576,6 +576,15 @@ def test_mapping_contract_accepts_finding_classes_and_rejects_ambiguity():
     # Existing requirement mappings serialize exactly as before.
     mapping = FrameworkMapping.model_validate({**base, "fromRequirementIds": ["V1"]})
     assert "fromFindings" not in mapping.model_dump(by_alias=True)
+    # So do existing mapping targets, which keeps their mappings digest.
+    target = {
+        "id": "t",
+        "frameworkId": "f",
+        "edition": "2025",
+        "requirementIds": ["A01:2025"],
+    }
+    dumped = MappingTarget.model_validate(target).model_dump(mode="json", by_alias=True)
+    assert dumped == target
     with pytest.raises(ValueError, match="titles name unknown requirements"):
         MappingTarget.model_validate(
             {
