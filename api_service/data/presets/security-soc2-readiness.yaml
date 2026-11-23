@@ -11,6 +11,8 @@ requiredCapabilities:
 annotations:
   workflowPublish:
     mode: none
+  uiSchema:
+    system_inputs: {showJsonEditor: true}
   inputSchema:
     type: object
     required:

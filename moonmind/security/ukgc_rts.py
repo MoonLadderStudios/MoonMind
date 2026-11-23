@@ -127,6 +127,8 @@ LOTTERY_LICENCES = {
     "remote_external_lottery_manager",
     "remote_society_lottery",
 }
+NON_ANNUAL_LICENCES = {"software_supplier", "telephone_only", "trading_room"}
+KNOWN_LICENCES = sorted(ANNUAL_LICENCES | LOTTERY_LICENCES | NON_ANNUAL_LICENCES)
 
 
 class CriticalSystem(FrameworkContract):
@@ -152,7 +154,8 @@ class ThirdParty(FrameworkContract):
 class UKGCSystemInputs(FrameworkContract):
     operator_name: Text | None = None
     business_description: Text | None = None
-    licence_class: Text | None = None
+    # Offer known classes in Create. Retained reports can carry an unsupported class.
+    licence_class: Annotated[Text, Field(json_schema_extra={"enum": KNOWN_LICENCES})] | None = None
     annual_lottery_sales_gbp: (
         Annotated[float, Field(ge=0, allow_inf_nan=False)] | None
     ) = None
@@ -253,7 +256,7 @@ def prepare_audit(
                 else "not_required"
             )
         )
-    elif licence in {"software_supplier", "telephone_only", "trading_room"}:
+    elif licence in NON_ANNUAL_LICENCES:
         annual = "not_required"
     else:
         annual = "unsupported" if licence else "incomplete"

@@ -1,4 +1,6 @@
+import json
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -1449,6 +1451,15 @@ async def test_framework_catalog_lists_installed_readiness_and_skill(settings_ap
         "web-api-methodology",
     }
     assert packs["web-api-methodology"]["requirementCount"] == 6
+
+    fixture_path = Path(__file__).resolve().parents[4] / "fixtures/security/readiness_form_fields.json"
+    form_fields = json.loads(fixture_path.read_text())
+    for pack_id, fields in form_fields.items():
+        schema = packs[pack_id]["inputSchema"]
+        assert schema["type"] == "object"
+        assert schema["additionalProperties"] is False
+        assert {name: schema["properties"][name] for name in fields} == fields
+
     for item in packs.values():
         assert item["inputSchema"]["properties"]
         assert item["requirementCount"] > 0

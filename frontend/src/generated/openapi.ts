@@ -1214,6 +1214,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/framework-packs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Framework Packs */
+        get: operations["list_framework_packs_api_v1_settings_framework_packs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/assessment-projects/resolve": {
         parameters: {
             query?: never;
@@ -5714,6 +5731,64 @@ export interface components {
             /** Unavailablereason */
             unavailableReason?: string | null;
         };
+        /** CatalogPack */
+        CatalogPack: {
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "builtin" | "skill" | "declared";
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** Edition */
+            edition?: string | null;
+            /** Revision */
+            revision?: string | null;
+            /** Artifactref */
+            artifactRef?: string | null;
+            /** Sha256 */
+            sha256?: string | null;
+            /** Amendments */
+            amendments?: string[];
+            /** Publicationstatus */
+            publicationStatus?: ("published" | "draft" | "superseded") | null;
+            /** Publishedon */
+            publishedOn?: string | null;
+            /** Effectivefrom */
+            effectiveFrom?: string | null;
+            /** Effectiveuntil */
+            effectiveUntil?: string | null;
+            /** License */
+            license?: string | null;
+            /** Distribution */
+            distribution?: ("redistributable" | "restricted" | "prohibited") | null;
+            /** Subjects */
+            subjects: {
+                [key: string]: components["schemas"]["SubjectAvailability"];
+            };
+            /** Jurisdiction */
+            jurisdiction?: string | null;
+            /** Sector */
+            sector?: string | null;
+            /** Requirementcount */
+            requirementCount?: number | null;
+            /** Evidencekinds */
+            evidenceKinds?: string[];
+            /** Externalevidence */
+            externalEvidence?: string[];
+            /** Conclusions */
+            conclusions?: string | null;
+            /** Inputschema */
+            inputSchema: {
+                [key: string]: unknown;
+            };
+            /** Available */
+            available: boolean;
+            /** Reason */
+            reason?: string | null;
+        };
         /** CheckpointBranchApiSourceModel */
         CheckpointBranchApiSourceModel: {
             /** Workflowid */
@@ -9011,6 +9086,11 @@ export interface components {
              * @default 1800
              */
             timeoutSeconds: number;
+        };
+        /** FrameworkCatalog */
+        FrameworkCatalog: {
+            /** Items */
+            items: components["schemas"]["CatalogPack"][];
         };
         /** GateReason */
         GateReason: {
@@ -13882,6 +13962,15 @@ export interface components {
              */
             preserved: boolean;
         };
+        /** SubjectAvailability */
+        SubjectAvailability: {
+            /** Available */
+            available: boolean;
+            /** Reason */
+            reason?: string | null;
+            /** Scope */
+            scope?: string | null;
+        };
         /** TLSAssessment */
         TLSAssessment: {
             /** Origin */
@@ -16888,6 +16977,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_framework_packs_api_v1_settings_framework_packs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrameworkCatalog"];
                 };
             };
         };

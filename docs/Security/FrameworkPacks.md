@@ -15,6 +15,8 @@ in saved environments. Each entry describes its edition, rights, supported
 subjects, evidence, conclusion limits and input schema. Unavailable entries
 include a reason. A missing effective date is unknown. Publication of a
 readiness pack does not establish that a jurisdiction adopted the standard.
+In Create, readiness presets show typed system inputs. Open the advanced JSON
+editor to paste or edit a complete saved system record.
 
 Settings can register a declared pack using its exact artifact reference, ID,
 edition, revision and SHA-256. Catalog reads use the caller’s artifact access.
