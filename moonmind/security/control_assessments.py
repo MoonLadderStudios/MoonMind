@@ -202,6 +202,30 @@ def assess_controls(
     results = []
     for requirement in plan.requirements:
         applicable = requirement.applicability == "applicable"
+        unassessable = requirement.evidence_plan and (
+            requirement.evidence_plan.not_assessed_reason
+        )
+        if applicable and unassessable:
+            # No MoonMind evidence path: stated with its reason, never concluded.
+            results.append(
+                ControlRequirementResult(
+                    requirement=requirement,
+                    conclusion="not_assessed",
+                    coverage="not_assessed",
+                    evidence_sufficiency="not_assessed",
+                    review_state="not_assessed",
+                    methods=[],
+                    objectives=[],
+                    exceptions=[],
+                    evidence_refs=[scan_ref, comparison_ref],
+                    unavailable_evidence_refs=[],
+                    limitations=[f"Not assessed here: {unassessable}"],
+                    next_actions=[
+                        "Assess this requirement by other means and retain that result; MoonMind has no evidence path for it."
+                    ],
+                )
+            )
+            continue
         limits, actions, objectives = [], [], []
         stale = False
         methods = set()
@@ -532,9 +556,14 @@ def _render_readiness(readiness, clean) -> list[str]:
 
 def _evidence_method(plan, clean) -> str:
     """One line a reader can scan: how the requirement is evidenced, and by whom."""
+    if plan.not_assessed_reason:
+        return f"not assessed here: {clean(plan.not_assessed_reason).rstrip('.')}"
     methods = ", ".join(plan.methods) or "not declared"
     checks = (
         f"; MoonMind checks: {plan.checks}" if plan.checks else "; no MoonMind check"
+    )
+    procedures = (
+        f"; procedures: {clean(', '.join(plan.procedures))}" if plan.procedures else ""
     )
     external = (
         f"; external-only, closed by {clean(plan.external_party)}"
@@ -542,7 +571,7 @@ def _evidence_method(plan, clean) -> str:
         else ""
     )
     types = f" ({clean(', '.join(plan.evidence_types))})" if plan.evidence_types else ""
-    return f"evidence {clean(methods)}{types}{checks}{external}"
+    return f"evidence {clean(methods)}{types}{checks}{procedures}{external}"
 
 
 def render_control_assessment(
@@ -580,6 +609,9 @@ def render_control_assessment(
             f"Publication: {clean(pack['publicationStatus'])}; published: {clean(pack.get('publishedOn') or 'not recorded')}; distribution: {clean(pack['distribution'])}.",
             f"Previous assessment: {clean(pack.get('previousAssessmentStatus', 'initial'))}.",
         ]
+        if pack.get("attribution"):
+            # Licensed requirement text travels with its notice.
+            lines.append(f"Attribution: {clean(pack['attribution'])}")
         if pack.get("previousReportSummary"):
             lines.append(clean(pack["previousReportSummary"]))
         if pack.get("readiness"):
@@ -594,6 +626,10 @@ def render_control_assessment(
                     f"{label}: "
                     + ", ".join(f"{clean(k)} {v}" for k, v in sorted(counts.items()))
                 )
+        for lens in pack.get("reportingLenses", []):
+            from moonmind.security.reporting_lens import render_reporting_lens
+
+            lines += render_reporting_lens(lens, clean)
         for prior in pack.get("previousOnlyFrameworks", []):
             lines.append(
                 f"- Prior pack {clean(prior['id'])} / {clean(prior['edition'])}: Unverified in this assessment."

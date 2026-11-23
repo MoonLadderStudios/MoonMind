@@ -1,0 +1,171 @@
+{
+  "schemaVersion": "security-rule-fixture/v1",
+  "license": "Apache-2.0",
+  "purpose": "Vulnerable and repaired inputs for the OWASP ASVS 5.0.0 V1.3.2 default-eval-rules objective, with the sanitized native reports Opengrep produced for them.",
+  "scanner": {
+    "tool": "opengrep",
+    "version": "2.0.0",
+    "rules": [
+      "/opt/moonmind-scanner-rules/default/python.yml",
+      "/opt/moonmind-scanner-rules/default/javascript.yml"
+    ],
+    "ruleSha256": {
+      "javascript.yml": "5953150dd6196b6628febef068ad01a8d7ee6d90fb8a0668617dd1c22958e2aa",
+      "python.yml": "8f098819c4ca01432abdb1c2fdf5a135fb6488f761d663f21925ea7e08b71cf3"
+    },
+    "command": "opengrep scan --config opt/moonmind-scanner-rules/default/python.yml --config opt/moonmind-scanner-rules/default/javascript.yml --disable-version-check --json <input>"
+  },
+  "cases": {
+    "vulnerable": {
+      "sources": {
+        "app.js": "eval(userInput);\n",
+        "app.py": "eval(user_input)\nimport subprocess\nsubprocess.run(user_input, shell=True)\n"
+      },
+      "report": {
+        "errors": [],
+        "interfile_languages_used": [],
+        "paths": {
+          "scanned": [
+            "/workspace/app.js",
+            "/workspace/app.py"
+          ]
+        },
+        "results": [
+          {
+            "check_id": "opt.moonmind-scanner-rules.default.moonmind-javascript-dynamic-eval",
+            "end": {
+              "col": 16,
+              "line": 1,
+              "offset": 15
+            },
+            "extra": {
+              "engine_kind": "[REDACTED]",
+              "fingerprint": "7d9071b5520d364566dc0596a98632f7e1912014d6e0849b690781fe98d0188c6ac8ec4f01a3885791920adfd592b76e0acd0735ce3276b4d242d3c3d61d6275_0",
+              "is_ignored": false,
+              "lines": "[REDACTED]",
+              "message": "[REDACTED]",
+              "metadata": {
+                "cwe": "[REDACTED]",
+                "license": "[REDACTED]"
+              },
+              "metavars": {
+                "$INPUT": {
+                  "abstract_content": "[REDACTED]",
+                  "end": {
+                    "col": 15,
+                    "line": 1,
+                    "offset": 14
+                  },
+                  "start": {
+                    "col": 6,
+                    "line": 1,
+                    "offset": 5
+                  }
+                }
+              },
+              "severity": "WARNING",
+              "validation_state": "[REDACTED]"
+            },
+            "path": "/workspace/app.js",
+            "start": {
+              "col": 1,
+              "line": 1,
+              "offset": 0
+            }
+          },
+          {
+            "check_id": "opt.moonmind-scanner-rules.default.moonmind-python-dynamic-eval",
+            "end": {
+              "col": 17,
+              "line": 1,
+              "offset": 16
+            },
+            "extra": {
+              "engine_kind": "[REDACTED]",
+              "fingerprint": "6a72665339e14d1d9ef8caf97cacb6d996bc699a9c0a681438f1903b21cd49583255de4da19d701ba1041b8adfde906dfb90a7ff1ed4d5f1fa42bdc00aef4b0d_0",
+              "is_ignored": false,
+              "lines": "[REDACTED]",
+              "message": "[REDACTED]",
+              "metadata": {
+                "cwe": "[REDACTED]",
+                "license": "[REDACTED]"
+              },
+              "metavars": {
+                "$INPUT": {
+                  "abstract_content": "[REDACTED]",
+                  "end": {
+                    "col": 16,
+                    "line": 1,
+                    "offset": 15
+                  },
+                  "start": {
+                    "col": 6,
+                    "line": 1,
+                    "offset": 5
+                  }
+                }
+              },
+              "severity": "WARNING",
+              "validation_state": "[REDACTED]"
+            },
+            "path": "/workspace/app.py",
+            "start": {
+              "col": 1,
+              "line": 1,
+              "offset": 0
+            }
+          },
+          {
+            "check_id": "opt.moonmind-scanner-rules.default.moonmind-python-shell-command",
+            "end": {
+              "col": 39,
+              "line": 3,
+              "offset": 73
+            },
+            "extra": {
+              "engine_kind": "[REDACTED]",
+              "fingerprint": "b3b3a42c6f2e2b5c2c1ca17c75b561495c1cc9c19cb4e8e96435c69eba78728248139a7034b126a0b1dcce2a659bb8c7ebd90b32acab677a08913145568d8aaf_0",
+              "is_ignored": false,
+              "lines": "[REDACTED]",
+              "message": "[REDACTED]",
+              "metadata": {
+                "cwe": "[REDACTED]",
+                "license": "[REDACTED]"
+              },
+              "metavars": {},
+              "severity": "WARNING",
+              "validation_state": "[REDACTED]"
+            },
+            "path": "/workspace/app.py",
+            "start": {
+              "col": 1,
+              "line": 3,
+              "offset": 35
+            }
+          }
+        ],
+        "skipped_rules": [],
+        "version": "2.0.0"
+      }
+    },
+    "repaired": {
+      "sources": {
+        "app.js": "JSON.parse(userInput);\n",
+        "app.py": "print('clean')\nimport subprocess\nsubprocess.run(['echo', 'clean'], shell=False)\n"
+      },
+      "report": {
+        "errors": [],
+        "interfile_languages_used": [],
+        "paths": {
+          "scanned": [
+            "/workspace/app.js",
+            "/workspace/app.py"
+          ]
+        },
+        "results": [],
+        "skipped_rules": [],
+        "version": "2.0.0"
+      }
+    }
+  }
+}

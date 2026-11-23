@@ -14,3 +14,8 @@ specific language governing permissions and limitations under the License.
 The release includes Wollomatic socket-proxy (MIT and Apache-2.0):
 https://github.com/wollomatic/socket-proxy
 Its license is installed at /usr/share/licenses/moonmind-socket-proxy/LICENSE.
+
+The release includes OWASP Application Security Verification Standard 5.0.0
+requirement data and OWASP Top 10:2025 category names (CC BY-SA 4.0, The OWASP
+Foundation) in moonmind/security/packs/owasp-asvs/. That directory carries its
+own LICENSE.md and NOTICE and is not covered by the Apache License.

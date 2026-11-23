@@ -1449,9 +1449,33 @@ async def test_framework_catalog_lists_installed_readiness_and_skill(settings_ap
         "nj-dge-readiness",
         "pci-dss-readiness",
         "ukgc-rts-security",
+        "owasp-asvs-l1",
         "web-api-methodology",
     }
     assert packs["web-api-methodology"]["requirementCount"] == 6
+    # General best practices for applications: ASVS 5.0.0 Level 1 plus the
+    # shipped known-CVE, secret and misconfiguration checks. Levels 2 and 3
+    # are not offered.
+    choices = [item for item in packs.values() if item.get("choice")]
+    assert [(item["id"], item["choice"]) for item in choices] == [
+        ("owasp-asvs-l1", "general-best-practices")
+    ]
+    asvs = packs["owasp-asvs-l1"]
+    assert (asvs["edition"], asvs["requirementCount"], asvs["available"]) == (
+        "5.0.0",
+        70,
+        True,
+    )
+    assert asvs["subjects"]["application"]["available"]
+    assert asvs["license"].startswith("CC-BY-SA-4.0")
+    assert {check["id"] for check in asvs["companionChecks"]} == {
+        "known-vulnerabilities",
+        "secrets",
+        "misconfiguration",
+    }
+    assert "KEV" in asvs["companionChecks"][0]["title"]
+    assert {"agent_review", "not_assessed"} <= set(asvs["evidenceKinds"])
+    assert not any("asvs-l2" in key or "asvs-l3" in key for key in packs)
 
     fixture_path = Path(__file__).resolve().parents[4] / "fixtures/security/readiness_form_fields.json"
     form_fields = json.loads(fixture_path.read_text())

@@ -17,6 +17,13 @@ function selection(pack: CatalogFramework): SavedFramework | undefined {
   }
 }
 
+const choiceLabels: Record<string, string> = { 'general-best-practices': 'General best practices for applications' };
+
+function label(pack: CatalogFramework): string {
+  const choice = pack.choice && choiceLabels[pack.choice];
+  return choice ? `${choice}: ${pack.title}` : pack.title;
+}
+
 function identity(value: SavedFramework): string {
   return JSON.stringify('id' in value ? [value.id, value.edition] : [value.packId, value.edition, value.artifactRef, value.revision, value.sha256]);
 }
@@ -39,8 +46,9 @@ export function FrameworkPicker({ frameworks, onChange, allowRegistration }: {
         return value && identity(value) === identity(framework);
       });
       return <div key={index} className="space-x-2">
-        <span>{match?.title ?? ('id' in framework ? framework.id : framework.packId)} · {framework.edition}</span>
+        <span>{match ? label(match) : ('id' in framework ? framework.id : framework.packId)} · {framework.edition}</span>
         {'artifactRef' in framework && <small className="break-all">{framework.artifactRef} · {framework.revision} · {framework.sha256}</small>}
+        {!!match?.companionChecks?.length && <small className="block">Run with: {match.companionChecks.map(check => check.title).join('; ')}</small>}
         {match?.reason && <small>{match.reason}</small>}
         {!match && catalog.isSuccess && <small>Saved entry outside the current catalog</small>}
         <Button variant="ghost" onClick={() => onChange(frameworks.filter((_, i) => i !== index))}>Remove framework</Button>
@@ -57,7 +65,7 @@ export function FrameworkPicker({ frameworks, onChange, allowRegistration }: {
         {entries.map((pack, index) => {
           const value = selection(pack);
           return <option key={index} value={index} disabled={!pack.available || !value || selected.has(identity(value))}>
-            {pack.title} · {pack.edition}{pack.revision && ` · rev ${pack.revision}`}{pack.artifactRef && ` · ${pack.artifactRef}`}{pack.reason && ` · ${pack.reason}`}
+            {label(pack)} · {pack.edition}{pack.revision && ` · rev ${pack.revision}`}{pack.artifactRef && ` · ${pack.artifactRef}`}{pack.reason && ` · ${pack.reason}`}
           </option>;
         })}
       </select>

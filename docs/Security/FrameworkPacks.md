@@ -2,11 +2,11 @@
 
 `security.assess` accepts an operator-supplied framework pack through the same
 artifact admission, Skill invocation and report path as native security evidence.
-There is no remote registry, scheduler or source download. Every built-in
-readiness pack (GLI-19/GSF, New Jersey DGE, PCI DSS v4.0.1, ISO/IEC 27001,
-[SOC 2](SOC2Readiness.md) and UKGC RTS) ships as an installed declared pack, so
-built-in and operator packs use `frameworkPacks` and the shared requirement
-evaluator, and any of them can be combined in one plan.
+There is no remote registry, scheduler or source download. Every built-in pack
+(GLI-19/GSF, New Jersey DGE, PCI DSS v4.0.1, ISO/IEC 27001,
+[SOC 2](SOC2Readiness.md), UKGC RTS and OWASP ASVS 5.0.0 Level 1) ships as an
+installed declared pack, so built-in and operator packs use `frameworkPacks` and
+the shared requirement evaluator, and any of them can be combined in one plan.
 
 ## Selecting packs
 
@@ -14,7 +14,9 @@ Read `GET /api/v1/settings/framework-packs` for the installed readiness packs,
 the security-review Skill's web/API methodology and declared packs registered
 in saved environments. Each entry describes its edition, rights, supported
 subjects, evidence, conclusion limits and input schema. Unavailable entries
-include a reason. A missing effective date is unknown. Publication of a
+include a reason. The entry with `choice: general-best-practices` is the general
+best-practices choice for applications (OWASP ASVS 5.0.0 Level 1); its
+`companionChecks` name the shipped checks to run with it and their presets. A missing effective date is unknown. Publication of a
 readiness pack does not establish that a jurisdiction adopted the standard.
 Each readiness preset in Create is a thin selection of one catalog entry: it
 names the installed pack by `framework.packId` and shows typed fields generated
@@ -83,6 +85,8 @@ Use `schemaVersion: declared-framework-pack/v1` with:
 - `license` and `distribution`: `redistributable`, `restricted` or `prohibited`.
   The operator must have the relevant rights. Declaring a license or writing an
   original summary does not establish permission to redistribute source text.
+  Optional `attribution` is the notice reproduced requirement text must carry;
+  retained metadata and the readable report repeat it beside the pack.
 - One to 512 `requirements`, each with `id` (published section names may
   contain spaces), `title`, original `summary`,
   `category`, `applicability`, `evidencePrompt`, `objectiveBasis`, and explicit
@@ -99,6 +103,9 @@ Use `schemaVersion: declared-framework-pack/v1` with:
   `organisationalEvidence` lists requests (`id`, `category`, `purpose`,
   `description`) the pack raises while the requirement applies. Supply revisions
   under the same `id` in `requirementChoices`; category and purpose stay the pack's.
+- `notAssessedReason` marks a requirement MoonMind has no evidence path for. It
+  declares no checks, procedures or requests, and an applicable one concludes
+  `not_assessed` with that reason.
 
 A pack may also declare readiness content, each part omitted when unused so
 existing packs keep their digests:
@@ -175,9 +182,9 @@ finding concludes it `not_satisfied`, and a clean scan leaves it `inconclusive`.
 Certification and jurisdiction approval are `not_performed`.
 
 Every compiled declared-pack requirement carries an `evidencePlan`: its methods
-and evidence types, its number of MoonMind checks and, for an external-only
-requirement, the claim and the party who can close it. The readable report lists
-it beside each conclusion.
+and evidence types, its number of MoonMind checks, its procedure IDs, and, for an
+external-only requirement, the claim and the party who can close it, or for a
+not-assessed one, the reason. The readable report lists it beside each conclusion.
 
 ## Directional mappings
 
@@ -190,6 +197,17 @@ Evaluated mappings require `reviewedBy` and `reviewedOn`. Direction runs from th
 pack's requirements to the named destination edition. Broken references and
 ambiguous duplicate editions fail validation. Conflicting source interpretations
 remain separate attributed mappings, never automatic coverage or satisfaction.
+
+A mapping can start from finding classes instead of requirements: `fromFindings`
+lists `source`, `tool`, shell-style `rulePatterns` and, optionally,
+`vulnerabilities: true` for findings marked as known vulnerabilities. A target
+with `reportingLens: true` (and optional category `titles`) is a reporting lens:
+the control report groups that pack's requirement conclusions and the run's
+current findings by the target's categories, each with its mappings'
+attribution. A category is `assessed`, `not_assessed` (no assessed requirement
+maps to it) or `unmapped`; none is reported as passing, the lens adds no coverage,
+and findings no class matches are listed separately. Only redistributable
+metadata carries mappings, so a restricted pack has no lens.
 
 ## Reports and retention
 
@@ -380,6 +398,52 @@ customized-approach documentation and periodic reviews are organisational
 evidence requests. Results are readiness evidence only. PCI SSC distribution
 rights, a check of the identifiers against a licensed copy, and compliance
 validation by a QSA, ISA or acquirer remain Unverified external claims.
+
+## OWASP ASVS 5.0.0 Level 1 (general best practices)
+
+Select `owasp-asvs-l1` edition `5.0.0` revision `1`, or choose general best
+practices in the catalog. It lists all 70 Level 1 requirements of the ASVS 5.0.0
+release under their upstream identifiers (`V1.2.1` and so on) with their text.
+`tools/build_asvs_pack.py` generates it offline from the release's
+machine-readable file, pinned by tag `v5.0.0_release`, commit and SHA-256, plus
+MoonMind's classification in `tools/asvs_l1_classification.json`; `--check`
+confirms a rebuild reproduces the installed bytes and the digests in
+`PROVENANCE.json`. Levels 2 and 3 can be built from the same file and are not
+offered until their evidence paths are reviewed.
+
+The requirement text is OWASP content under CC BY-SA 4.0. It lives with the
+release file, its license, a notice and the provenance record in
+`moonmind/security/packs/owasp-asvs/`, apart from the Apache-2.0 source, and the
+pack's `attribution` travels into every report of it. Edit the classification,
+not the generated pack, and rebuild.
+
+Each requirement declares how MoonMind can evidence it. V1.3.2 has the only
+installed-rule check: MoonMind's default Opengrep eval rules, which fail it on a
+finding and pass on a clean complete run but never complete it. Most
+requirements need agent review or reproduction through procedures: the six
+security-review web/API procedures, embedded unchanged by ID for the
+requirements they address (that Skill's `web-api.json` stays their single
+owner and a build input), and a requirement review elsewhere. Four documentation
+requirements raise organisational evidence requests, and V14.3.1 is not
+assessable here because it needs a browser observed after logout. No requirement
+declares complete objectives, so a clean scan satisfies none; procedure results
+stay in the methodology report with their tested, partially tested, blocked or
+untested states. Applicability starts undetermined: record each requirement's
+applicability in `requirementChoices`.
+
+OWASP Top 10:2025 is the pack's reporting lens. Mappings from requirements are
+`upstream` where a Top 10 page cites an ASVS 5.0.0 chapter (A01 V8, A02 V13, A03
+V15, A04 V11, V12 and V14) and otherwise `evaluated` against the page's mapped
+CWEs. Finding classes place known vulnerabilities from Trivy repository and image
+scans (with KEV and EPSS priority where feed data exists) under A03, Gitleaks and
+passive-scan secrets under A07, Trivy configuration checks under A02, the default
+Opengrep rules under A05 and TLS findings under A04. A09 and A10 cite ASVS V16,
+which has no Level 1 requirement, so the report states them unmapped.
+
+The general best-practices choice composes this pack with known-vulnerability,
+secret and misconfiguration scanning from the `security-code-supply-chain` and
+`security-image-sbom` presets; supply their retained summaries in `reportRefs`.
+OWASP does not certify ASVS conformance, and MoonMind makes no conformance claim.
 
 ## ISO/IEC 27001 ISMS readiness
 

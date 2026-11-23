@@ -5771,6 +5771,18 @@ export interface components {
             /** Unavailablereason */
             unavailableReason?: string | null;
         };
+        /**
+         * CatalogCheck
+         * @description A shipped native check that accompanies a catalog choice.
+         */
+        CatalogCheck: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** Presets */
+            presets?: string[];
+        };
         /** CatalogPack */
         CatalogPack: {
             /**
@@ -5824,6 +5836,10 @@ export interface components {
             inputSchema: {
                 [key: string]: unknown;
             };
+            /** Choice */
+            choice?: "general-best-practices" | null;
+            /** Companionchecks */
+            companionChecks?: components["schemas"]["CatalogCheck"][];
             /** Available */
             available: boolean;
             /** Reason */

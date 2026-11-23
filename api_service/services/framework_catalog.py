@@ -15,7 +15,11 @@ from moonmind.security.framework_packs import (
     validate_pack_effectivity,
     verify_source_documents,
 )
-from moonmind.security.framework_registry import readiness_catalog, subject_availability
+from moonmind.security.framework_registry import (
+    evidence_kinds,
+    readiness_catalog,
+    subject_availability,
+)
 from moonmind.security.frameworks import (
     FrameworkContract,
     FrameworkPackIdentity,
@@ -34,6 +38,14 @@ class SubjectAvailability(FrameworkContract):
     available: bool
     reason: str | None = None
     scope: str | None = None
+
+
+class CatalogCheck(FrameworkContract):
+    """A shipped native check that accompanies a catalog choice."""
+
+    id: str
+    title: str
+    presets: list[str] = Field(default_factory=list)
 
 
 class CatalogPack(FrameworkContract):
@@ -59,6 +71,10 @@ class CatalogPack(FrameworkContract):
     external_evidence: list[str] = Field(default_factory=list)
     conclusions: str | None = None
     input_schema: dict[str, Any]
+    # The catalog's general best-practices choice names this entry and the
+    # native checks it composes with.
+    choice: Literal["general-best-practices"] | None = None
+    companion_checks: list[CatalogCheck] = Field(default_factory=list)
     available: bool
     reason: str | None = None
 
@@ -81,27 +97,7 @@ def _versioned_entry(source, pack_id, schema, **identity):
 
 def _describe(entry, pack, now):
     skill = entry["source"] == "skill"
-    external_roles = {"laboratory", "qsa", "auditor", "regulator"}
-    evidence, external = set(), set()
-    for row in pack.requirements:
-        types = {value.casefold() for value in row.evidence_types}
-        if row.objectives or "deterministic_check" in {
-            *row.required_evidence_methods,
-            *types,
-        }:
-            evidence.add("deterministic_check")
-        if types.intersection({"organizational", "organisational", "documentary"}) or (
-            not skill and set(row.required_evidence_methods) - {"deterministic_check"}
-        ):
-            evidence.add("organisational_evidence")
-        if any(
-            p.method in {"security-review", "security-investigate"}
-            for p in row.procedures
-        ):
-            evidence.add("agent_review")
-        external.update(types & external_roles)
-    if external:
-        evidence.add("external_only")
+    evidence, external = evidence_kinds(pack, skill=skill)
     entry.update(
         edition=pack.edition,
         revision=pack.revision,
@@ -112,10 +108,11 @@ def _describe(entry, pack, now):
         effectiveUntil=pack.effective_until,
         distribution=pack.distribution,
         requirementCount=len(pack.requirements),
-        evidenceKinds=sorted(evidence),
-        externalEvidence=sorted(external),
+        evidenceKinds=evidence,
+        externalEvidence=external,
         conclusions=(
             "Coverage of the selected web/API procedures requires a retained assessment plan. "
+            "OWASP ASVS 5.0.0 Level 1 references these procedures by ID. "
             "Independent assurance remains external."
             if skill
             else "Evaluates scoped control objectives against admitted evidence. External assurance remains separate."

@@ -269,7 +269,14 @@ class OscalAdapter:
             "last-modified": self.comparison.observation.observed_at.isoformat(),
             "version": self.pack.edition,
             "oscal-version": OSCAL_VERSION,
-            "remarks": "\n".join((*LIMITATIONS, *EVIDENCE_TRANSFORMATION_LIMITATIONS)),
+            # Exported requirement text carries the pack's attribution notice.
+            "remarks": "\n".join(
+                (
+                    *LIMITATIONS,
+                    *EVIDENCE_TRANSFORMATION_LIMITATIONS,
+                    *([self.pack.attribution] if self.pack.attribution else []),
+                )
+            ),
             "props": _props(
                 native_pack=self.pack.id,
                 native_edition=self.pack.edition,

@@ -7,3 +7,6 @@
 
 # Shell scripts should keep LF line endings.
 *.sh text eol=lf
+
+# Pinned upstream data keeps its exact bytes; builds verify their SHA-256.
+moonmind/security/packs/owasp-asvs/** -text

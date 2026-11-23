@@ -205,7 +205,12 @@ cannot become an executed check. Inventory/feed, passive-source and RNG statisti
 as do complete admitted `repository-scanner/v1` and `image-assessment/v1` runs;
 partial or unadmitted scans and RNG implementation review do not. Unclassified
 adapters remain inconclusive until their producer identifies the method.
-`allRules` does not prove an arbitrary mapped rule was installed. Conflicting,
+`allRules` does not prove an arbitrary mapped rule was installed, so a scanner
+run selects one rule only when its coverage names it. An Opengrep run of
+MoonMind's default rule files at their installed bytes names their rule IDs with
+Opengrep's configuration-path prefix (`opt.moonmind-scanner-rules.default.`); a
+finding's own rule ID replaces that form, so a different prefix leaves the rule
+unchecked rather than passing. Conflicting,
 failed or incomplete matching observations remain visible. Observed native defects
 produce `not_satisfied`; accepted risk stays separate triage with its existing
 author, reason, review and expiry semantics.

@@ -13,6 +13,10 @@ function mockCatalog(status = 200, readOnly = false) {
     if (String(url).endsWith('/framework-packs')) return new Response(JSON.stringify({ items: [
       { source: 'declared', id: 'registered', edition: '2026', title: 'Registered standard', available: true, artifactRef: 'art_pack', revision: '1', sha256: 'a'.repeat(64) },
       { source: 'declared', id: 'expired', edition: '2025', title: 'Expired standard', available: false, reason: 'No longer effective' },
+      { source: 'builtin', id: 'owasp-asvs-l1', edition: '5.0.0', revision: '1', title: 'OWASP ASVS 5.0.0 Level 1', available: true, reason: null, choice: 'general-best-practices', companionChecks: [
+        { id: 'known-vulnerabilities', title: 'Known-vulnerability scanning with KEV and EPSS priority', presets: ['security-code-supply-chain'] },
+        { id: 'secrets', title: 'Secret detection with Gitleaks', presets: ['security-code-supply-chain'] },
+      ] },
     ] }));
     if (init?.method === 'PATCH') return new Response(JSON.stringify({ detail: 'Concurrent update' }), { status });
     if (String(url).includes('/audit?')) return new Response(JSON.stringify({ items: [] }));
@@ -50,6 +54,20 @@ describe('AssessmentProjectsSettings', () => {
     expect(JSON.parse(String(patch.body)).changes[key].projects[0].environments[0].frameworks).toEqual([
       ...environment.frameworks,
       { packId: 'registered', edition: '2026', revision: '1', artifactRef: 'art_pack', sha256: 'a'.repeat(64) },
+    ]);
+  });
+  it('chooses general best practices as the OWASP ASVS Level 1 pack with its companion checks', async () => {
+    const fetch = mockCatalog();
+    renderWithClient(<AssessmentProjectsSettings />);
+    const option = await screen.findByRole('option', { name: /^General best practices for applications: OWASP ASVS 5\.0\.0 Level 1 · 5\.0\.0/ }) as HTMLOptionElement;
+    fireEvent.change(screen.getByLabelText('Add standard'), { target: { value: option.value } });
+    expect(await screen.findByText(/Run with: Known-vulnerability scanning with KEV and EPSS priority; Secret detection with Gitleaks/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Save assessment context' }));
+    await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true));
+    const patch = fetch.mock.calls.find(([, init]) => init?.method === 'PATCH')![1]!;
+    expect(JSON.parse(String(patch.body)).changes[key].projects[0].environments[0].frameworks).toEqual([
+      ...environment.frameworks,
+      { id: 'owasp-asvs-l1', edition: '5.0.0' },
     ]);
   });
   it('registers a new retained identity without changing saved text entries', async () => {

@@ -32,7 +32,31 @@ INSTALLED_PACK_IDS = (
     "iso-27001-readiness",
     "soc2-readiness",
     "ukgc-rts-security",
+    "owasp-asvs-l1",
 )
+# Separately licensed packs live with their license and notice.
+PACK_FILES = {"owasp-asvs-l1": "owasp-asvs/owasp-asvs-l1.json"}
+# The catalog's general best-practices choice for applications: this pack plus
+# native checks MoonMind already ships, each collected by its existing preset.
+GENERAL_BEST_PRACTICES = "owasp-asvs-l1"
+GENERAL_BEST_PRACTICE_CHECKS = (
+    {
+        "id": "known-vulnerabilities",
+        "title": "Known-vulnerability scanning of dependencies and images with Trivy, prioritized with CISA KEV and FIRST EPSS where feed data exists",
+        "presets": ["security-code-supply-chain", "security-image-sbom"],
+    },
+    {
+        "id": "secrets",
+        "title": "Secret detection with Gitleaks",
+        "presets": ["security-code-supply-chain"],
+    },
+    {
+        "id": "misconfiguration",
+        "title": "Configuration checks with Trivy misconfiguration scanning",
+        "presets": ["security-code-supply-chain"],
+    },
+)
+EXTERNAL_ROLES = frozenset({"laboratory", "qsa", "auditor", "regulator"})
 
 
 @cache
@@ -44,7 +68,7 @@ def installed_pack(pack_id: str):
     installed = next((known for known in INSTALLED_PACK_IDS if known == pack_id), None)
     if installed is None:
         raise ValueError(f"Unknown installed framework pack: {pack_id}")
-    raw = (PACK_DIRECTORY / f"{installed}.json").read_bytes()
+    raw = (PACK_DIRECTORY / PACK_FILES.get(installed, f"{installed}.json")).read_bytes()
     return raw, parse_declared_pack(raw)
 
 
@@ -102,11 +126,53 @@ def standard_requirement_ids(pack_id: str, edition: str) -> set[str] | None:
     return {row.id for row in pack.requirements} if pack.edition == edition else None
 
 
+def evidence_kinds(pack, *, skill=False) -> tuple[list[str], list[str]]:
+    """How a pack's requirements are evidenced, and which outside parties close them."""
+    kinds, external = set(), set()
+    for row in pack.requirements:
+        types = {value.casefold() for value in row.evidence_types}
+        if row.objectives or "deterministic_check" in {
+            *row.required_evidence_methods,
+            *types,
+        }:
+            kinds.add("deterministic_check")
+        if (
+            row.organisational_evidence
+            or types & {"organizational", "organisational", "documentary"}
+            or (
+                not skill
+                and set(row.required_evidence_methods) - {"deterministic_check"}
+            )
+        ):
+            kinds.add("organisational_evidence")
+        if any(
+            p.method in {"security-review", "security-investigate"}
+            for p in row.procedures
+        ):
+            kinds.add("agent_review")
+        if row.not_assessed_reason:
+            kinds.add("not_assessed")
+        if row.external_claim:
+            kinds.add("external_only")
+        external.update(types & EXTERNAL_ROLES)
+    if pack.profile is not None:
+        # Readiness packs conclude from recorded organisational evidence.
+        kinds.add("organisational_evidence")
+    if external or any(
+        claim.evidence_type not in {"organizational", "organisational"}
+        for claim in pack.external_claims
+    ):
+        kinds.add("external_only")
+    return sorted(kinds), sorted(external)
+
+
 def readiness_catalog():
+    from moonmind.security.frameworks import FrameworkPackSelection
     from moonmind.security.pack_readiness import profile_schema
 
     for pack_id in INSTALLED_PACK_IDS:
         pack = installed_pack(pack_id)[1]
+        best_practices = pack_id == GENERAL_BEST_PRACTICES
         yield {
             "source": "builtin",
             "id": pack.id,
@@ -125,14 +191,25 @@ def readiness_catalog():
             "sector": pack.sector,
             "jurisdiction": pack.jurisdiction,
             "requirementCount": len(pack.requirements),
-            "evidenceKinds": ["organisational_evidence", "external_only"],
+            "evidenceKinds": evidence_kinds(pack)[0],
             "externalEvidence": [
                 claim.id
                 for claim in pack.external_claims
                 if claim.evidence_type not in {"organizational", "organisational"}
             ],
             "conclusions": pack.conclusions,
-            "inputSchema": profile_schema(pack),
+            # A pack without profile inputs takes the ordinary selection only.
+            "inputSchema": (
+                profile_schema(pack)
+                if pack.profile is not None
+                else FrameworkPackSelection.model_json_schema()
+            ),
+            "choice": "general-best-practices" if best_practices else None,
+            "companionChecks": (
+                [dict(check) for check in GENERAL_BEST_PRACTICE_CHECKS]
+                if best_practices
+                else []
+            ),
             "available": True,
             "reason": None,
         }

@@ -598,17 +598,25 @@ class RequirementReadiness(Contract):
 class RequirementEvidencePlan(Contract):
     """How a declared pack requirement can be evidenced.
 
-    ``checks`` counts executable MoonMind objectives; ``external_party`` names
-    who alone can close an external-only requirement, which has no checks.
+    ``checks`` counts executable MoonMind objectives; ``procedures`` names the
+    agent review or reproduction procedures; ``external_party`` names who alone
+    can close an external-only requirement, which has no checks. A requirement
+    with ``not_assessed_reason`` has no MoonMind evidence path at all.
     """
 
     methods: Items
     evidence_types: Items = Field(default_factory=list)
     checks: Annotated[int, Field(ge=0, le=32)] = 0
+    procedures: Annotated[list[Text], Field(max_length=16)] = Field(
+        default_factory=list, exclude_if=lambda value: not value
+    )
     external_claim: Text | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     external_party: Text | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    not_assessed_reason: Text | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
 
@@ -620,6 +628,10 @@ class RequirementEvidencePlan(Contract):
             self.checks or "deterministic_check" in self.methods
         ):
             raise ValueError("an external-only requirement has no MoonMind checks")
+        if self.not_assessed_reason and (
+            self.checks or self.procedures or self.methods or self.external_claim
+        ):
+            raise ValueError("a not-assessed requirement has no evidence path")
         return self
 
 

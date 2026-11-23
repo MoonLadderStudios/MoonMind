@@ -24,6 +24,8 @@ export interface CatalogFramework {
   sha256?: string;
   available: boolean;
   reason: string | null;
+  choice?: 'general-best-practices' | null;
+  companionChecks?: { id: string; title: string; presets: string[] }[];
 }
 export async function fetchFrameworkPacks(): Promise<CatalogFramework[]> {
   const response = await fetch('/api/v1/settings/framework-packs', { headers: { Accept: 'application/json' } });
