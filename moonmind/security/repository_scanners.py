@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
-from pathlib import PurePosixPath
+from functools import cache
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
+
+import yaml
 
 from pydantic import Field
 
@@ -20,6 +24,52 @@ MAX_REPORT_BYTES = 8 * 1024 * 1024
 
 
 SCANNER_SOURCE = "/inputs/source"
+# MoonMind's original Opengrep rules, packaged into the scanner image under
+# /opt/moonmind-scanner-rules/default by tools/ci/repository_security_image.py.
+DEFAULT_RULES = (
+    Path(__file__).resolve().parents[2] / "services/repository-security/rules"
+)
+DEFAULT_RULES_PATH = PurePosixPath("/opt/moonmind-scanner-rules/default")
+
+
+@cache
+def _default_rule_files() -> dict[tuple[str, str], tuple[str, ...]]:
+    """(image path, SHA-256) of each installed default rule file -> its rule IDs."""
+    files = {}
+    for path in sorted(DEFAULT_RULES.glob("*.yml")):
+        raw = path.read_bytes()
+        rules = (yaml.safe_load(raw) or {}).get("rules") or []
+        files[
+            (str(DEFAULT_RULES_PATH / path.name), hashlib.sha256(raw).hexdigest())
+        ] = tuple(rule["id"] for rule in rules)
+    return files
+
+
+def default_rule_ids(rules, findings=()) -> list[str]:
+    """Rule IDs an admitted Opengrep configuration checks from the default files.
+
+    Only a file admitted at the exact bytes MoonMind installs is known to hold
+    these rules. Opengrep prefixes a rule ID with its configuration directory;
+    a finding's own ID wins, so a different prefix can leave a rule unchecked
+    but never turn a finding into a passing check.
+    """
+    try:
+        files = _default_rule_files()
+    except (OSError, ValueError, TypeError, KeyError, yaml.YAMLError):
+        return []
+    found = {finding.rule_id for finding in findings}
+    result = set()
+    for rule in rules or []:
+        ids = files.get((rule.path, rule.sha256), ())
+        prefix = ".".join(PurePosixPath(rule.path).parent.parts[1:])
+        for rule_id in ids:
+            native = {
+                value
+                for value in found
+                if value == rule_id or value.endswith("." + rule_id)
+            }
+            result.update(native or {f"{prefix}.{rule_id}"})
+    return sorted(result)
 
 
 def build_scanner_job(

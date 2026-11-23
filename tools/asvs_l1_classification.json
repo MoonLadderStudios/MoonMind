@@ -1,0 +1,159 @@
+{
+  "schemaVersion": "asvs-classification/v1",
+  "license": "Apache-2.0. OWASP Top 10:2025 category names are OWASP Foundation content under CC BY-SA 4.0; see moonmind/security/packs/owasp-asvs/NOTICE.",
+  "purpose": "MoonMind's evidence classification of every OWASP ASVS 5.0.0 Level 1 requirement and its Top 10:2025 reporting mappings. tools/build_asvs_pack.py combines it with the pinned release file; edit this file, rebuild, and review the pack diff.",
+  "reviewedBy": "MoonMind maintainers",
+  "reviewedOn": "2026-11-23",
+  "upstream": {
+    "repository": "https://github.com/OWASP/ASVS",
+    "tag": "v5.0.0_release",
+    "commit": "5cf9b032440be53ce345ab3c130fda46ba1ce7a2",
+    "path": "5.0/docs_en/OWASP_Application_Security_Verification_Standard_5.0.0_en.flat.json",
+    "sha256": "8201b20eec2908c3380ac600c91c8ba746346fbb808859366abb232027532311",
+    "publishedOn": "2025-05-30"
+  },
+  "top10": {
+    "repository": "https://github.com/OWASP/Top10",
+    "commit": "3a31f35346c3f4e90f350395124382fa53af2afe",
+    "edition": "2025",
+    "pages": {
+      "A01:2025": ["A01_2025-Broken_Access_Control.md", "Broken Access Control"],
+      "A02:2025": ["A02_2025-Security_Misconfiguration.md", "Security Misconfiguration"],
+      "A03:2025": ["A03_2025-Software_Supply_Chain_Failures.md", "Software Supply Chain Failures"],
+      "A04:2025": ["A04_2025-Cryptographic_Failures.md", "Cryptographic Failures"],
+      "A05:2025": ["A05_2025-Injection.md", "Injection"],
+      "A06:2025": ["A06_2025-Insecure_Design.md", "Insecure Design"],
+      "A07:2025": ["A07_2025-Authentication_Failures.md", "Authentication Failures"],
+      "A08:2025": ["A08_2025-Software_or_Data_Integrity_Failures.md", "Software or Data Integrity Failures"],
+      "A09:2025": ["A09_2025-Security_Logging_and_Alerting_Failures.md", "Security Logging and Alerting Failures"],
+      "A10:2025": ["A10_2025-Mishandling_of_Exceptional_Conditions.md", "Mishandling of Exceptional Conditions"]
+    }
+  },
+  "reviewProcedure": {
+    "id": "requirement-review",
+    "method": "security-review",
+    "instructions": "Review the admitted source, configuration and recorded responses against this requirement's verification statement. Cite files, lines or responses, look for a counterexample, and state what could not be examined.",
+    "oracle": "The verification statement holds on every in-scope path the reviewer examined; unexamined paths stay open, and a clean scan is not a review.",
+    "needsSource": true,
+    "needsIdentity": false,
+    "protocols": ["http", "https"]
+  },
+  "defaultApplicability": "Applies to an application in scope; record not applicable with a reason when it lacks the feature the requirement verifies.",
+  "requirements": {
+    "V1.2.1": {"procedures": ["requirement-review", "input-output-checks"]},
+    "V1.2.2": {"procedures": ["requirement-review", "input-output-checks"]},
+    "V1.2.3": {"procedures": ["requirement-review", "input-output-checks"]},
+    "V1.2.4": {"procedures": ["requirement-review", "input-output-checks"]},
+    "V1.2.5": {"procedures": ["requirement-review", "input-output-checks"]},
+    "V1.3.1": {"procedures": ["requirement-review"], "applicability": "Applies when the application accepts HTML from WYSIWYG editors or similar rich-text input."},
+    "V1.3.2": {
+      "procedures": ["requirement-review"],
+      "objectives": [
+        {
+          "id": "default-eval-rules",
+          "description": "MoonMind's default Opengrep rules for eval() in Python and in JavaScript or TypeScript, run completely on every admitted repository asset.",
+          "source": "repository",
+          "tool": "opengrep",
+          "ruleIds": [
+            "opt.moonmind-scanner-rules.default.moonmind-python-dynamic-eval",
+            "opt.moonmind-scanner-rules.default.moonmind-javascript-dynamic-eval"
+          ]
+        }
+      ],
+      "objectiveBasis": "Partial: the default Opengrep rules flag eval() in Python and JavaScript or TypeScript only. Other dynamic execution features, other languages and the sanitization of unavoidable input need review."
+    },
+    "V1.5.1": {"procedures": ["requirement-review", "input-output-checks"], "applicability": "Applies when the application parses XML."},
+    "V2.1.1": {"documentation": "Documented input validation rules for each data item: expected structure, formats, allowed values and ranges."},
+    "V2.2.1": {"procedures": ["requirement-review"]},
+    "V2.2.2": {"procedures": ["requirement-review"]},
+    "V2.3.1": {"procedures": ["invariant-review", "invariant-cases"], "applicability": "Applies to multi-step business logic flows."},
+    "V3.2.1": {"procedures": ["configuration-checks", "requirement-review"]},
+    "V3.2.2": {"procedures": ["requirement-review"], "applicability": "Applies to a browser frontend that renders text content."},
+    "V3.3.1": {"procedures": ["configuration-checks", "requirement-review"], "applicability": "Applies when the application sets cookies."},
+    "V3.4.1": {"procedures": ["configuration-checks"]},
+    "V3.4.2": {"procedures": ["configuration-checks", "requirement-review"], "applicability": "Applies when responses carry CORS headers."},
+    "V3.5.1": {"procedures": ["requirement-review"], "applicability": "Applies when sensitive functionality does not rely on CORS preflight to refuse cross-origin requests."},
+    "V3.5.2": {"procedures": ["requirement-review"], "applicability": "Applies when sensitive functionality relies on CORS preflight to refuse cross-origin requests."},
+    "V3.5.3": {"procedures": ["requirement-review"]},
+    "V4.1.1": {"procedures": ["configuration-checks", "requirement-review"]},
+    "V4.4.1": {"procedures": ["requirement-review"], "applicability": "Applies when the application uses WebSocket connections."},
+    "V5.2.1": {"procedures": ["requirement-review"], "applicability": "Applies when the application accepts files."},
+    "V5.2.2": {"procedures": ["requirement-review"], "applicability": "Applies when the application accepts files."},
+    "V5.3.1": {"procedures": ["requirement-review"], "applicability": "Applies when uploaded or generated files are stored in a public folder."},
+    "V5.3.2": {"procedures": ["requirement-review"], "applicability": "Applies when the application builds file paths for file operations."},
+    "V6.1.1": {"documentation": "Documented anti-automation, rate limiting and adaptive response controls against credential stuffing and password brute force, including how they are configured."},
+    "V6.2.1": {"procedures": ["requirement-review"], "applicability": "Applies when users authenticate with a password the application verifies."},
+    "V6.2.2": {"procedures": ["requirement-review"], "applicability": "Applies when users authenticate with a password the application verifies."},
+    "V6.2.3": {"procedures": ["requirement-review"], "applicability": "Applies when users authenticate with a password the application verifies."},
+    "V6.2.4": {"procedures": ["requirement-review"], "applicability": "Applies when users authenticate with a password the application verifies."},
+    "V6.2.5": {"procedures": ["requirement-review"], "applicability": "Applies when users authenticate with a password the application verifies."},
+    "V6.2.6": {"procedures": ["requirement-review"], "applicability": "Applies when users authenticate with a password the application verifies."},
+    "V6.2.7": {"procedures": ["requirement-review"], "applicability": "Applies when users authenticate with a password the application verifies."},
+    "V6.2.8": {"procedures": ["requirement-review"], "applicability": "Applies when users authenticate with a password the application verifies."},
+    "V6.3.1": {"procedures": ["requirement-review"]},
+    "V6.3.2": {"procedures": ["requirement-review"]},
+    "V6.4.1": {"procedures": ["requirement-review"], "applicability": "Applies when the application generates initial passwords or activation codes."},
+    "V6.4.2": {"procedures": ["requirement-review"]},
+    "V7.2.1": {"procedures": ["requirement-review", "session-cases"]},
+    "V7.2.2": {"procedures": ["requirement-review"]},
+    "V7.2.3": {"procedures": ["requirement-review"], "applicability": "Applies when reference tokens represent user sessions."},
+    "V7.2.4": {"procedures": ["requirement-review", "session-cases"]},
+    "V7.4.1": {"procedures": ["session-cases", "requirement-review"]},
+    "V7.4.2": {"procedures": ["requirement-review"]},
+    "V8.1.1": {"documentation": "Documented authorization rules restricting function-level and data-specific access by consumer permissions and resource attributes."},
+    "V8.2.1": {"procedures": ["ownership-review", "ownership-cases"]},
+    "V8.2.2": {"procedures": ["ownership-review", "ownership-cases"]},
+    "V8.3.1": {"procedures": ["ownership-review"]},
+    "V9.1.1": {"procedures": ["requirement-review"], "applicability": "Applies when the application accepts self-contained tokens such as JWTs."},
+    "V9.1.2": {"procedures": ["requirement-review"], "applicability": "Applies when the application creates or verifies self-contained tokens such as JWTs."},
+    "V9.1.3": {"procedures": ["requirement-review"], "applicability": "Applies when the application accepts self-contained tokens such as JWTs."},
+    "V9.2.1": {"procedures": ["requirement-review", "session-cases"], "applicability": "Applies when accepted self-contained tokens carry a validity time span."},
+    "V10.4.1": {"procedures": ["requirement-review"], "applicability": "Applies when the application is an OAuth authorization server; an external identity provider's server is the provider's to evidence."},
+    "V10.4.2": {"procedures": ["requirement-review"], "applicability": "Applies when the application is an OAuth authorization server that issues authorization codes."},
+    "V10.4.3": {"procedures": ["requirement-review"], "applicability": "Applies when the application is an OAuth authorization server that issues authorization codes."},
+    "V10.4.4": {"procedures": ["requirement-review"], "applicability": "Applies when the application is an OAuth authorization server."},
+    "V10.4.5": {"procedures": ["requirement-review"], "applicability": "Applies when the application is an OAuth authorization server with public clients."},
+    "V11.3.1": {"procedures": ["requirement-review"]},
+    "V11.3.2": {"procedures": ["requirement-review"]},
+    "V11.4.1": {"procedures": ["requirement-review"]},
+    "V12.1.1": {"procedures": ["requirement-review"]},
+    "V12.2.1": {"procedures": ["configuration-checks", "requirement-review"]},
+    "V12.2.2": {"procedures": ["requirement-review"], "applicability": "Applies to externally facing services."},
+    "V13.4.1": {"procedures": ["configuration-checks", "requirement-review"]},
+    "V14.2.1": {"procedures": ["requirement-review"]},
+    "V14.3.1": {"notAssessed": "Needs the browser's storage observed after logout or session expiry; MoonMind runs no browser-driven test, and source or response review cannot show what a browser retains."},
+    "V15.1.1": {"documentation": "Documented risk-based remediation time frames for vulnerable third-party components and for updating libraries in general."},
+    "V15.2.1": {"procedures": ["requirement-review"]},
+    "V15.3.1": {"procedures": ["response-review"]}
+  },
+  "mappings": [
+    {"id": "a01-asvs-v8", "to": "A01:2025", "basis": "upstream", "section": "A01:2025 References: ASVS V8 Authorization", "from": ["V8.1.1", "V8.2.1", "V8.2.2", "V8.3.1"], "rationale": "OWASP's A01:2025 page cites ASVS V8 Authorization; these are its Level 1 requirements. Chapter-level and directional."},
+    {"id": "a02-asvs-v13", "to": "A02:2025", "basis": "upstream", "section": "A02:2025 References: ASVS V13 Configuration", "from": ["V13.4.1"], "rationale": "OWASP's A02:2025 page cites ASVS V13 Configuration; V13.4.1 is its only Level 1 requirement. Chapter-level and directional."},
+    {"id": "a03-asvs-v15", "to": "A03:2025", "basis": "upstream", "section": "A03:2025 References: ASVS V15 Secure Coding and Architecture", "from": ["V15.1.1", "V15.2.1", "V15.3.1"], "rationale": "OWASP's A03:2025 page cites ASVS V15; these are its Level 1 requirements. The page's second ASVS reference, V1 Architecture, names an earlier edition's chapter and is not mapped to 5.0.0 V1."},
+    {"id": "a04-asvs-v11-v12-v14", "to": "A04:2025", "basis": "upstream", "section": "A04:2025 References: ASVS V11 Cryptography, V12 Secure Communication, V14 Data Protection", "from": ["V11.3.1", "V11.3.2", "V11.4.1", "V12.1.1", "V12.2.1", "V12.2.2", "V14.2.1", "V14.3.1"], "rationale": "OWASP's A04:2025 page cites ASVS 5.0.0 V11, V12 and V14; these are their Level 1 requirements. Chapter-level and directional."},
+    {"id": "a01-access-cwe", "to": "A01:2025", "basis": "evaluated", "section": "A01:2025 List of Mapped CWEs (CWE-22, CWE-200, CWE-352, CWE-538)", "from": ["V3.5.1", "V3.5.2", "V3.5.3", "V5.3.2", "V13.4.1", "V15.3.1"], "rationale": "Cross-site request forgery, path traversal and information exposure weaknesses these requirements prevent are listed under A01:2025."},
+    {"id": "a02-configuration-cwe", "to": "A02:2025", "basis": "evaluated", "section": "A02:2025 List of Mapped CWEs (CWE-16, CWE-611, CWE-614, CWE-942)", "from": ["V1.5.1", "V3.2.1", "V3.3.1", "V3.4.1", "V3.4.2", "V4.1.1"], "rationale": "XML external entity, cookie, CORS and response header configuration weaknesses these requirements prevent are listed under A02:2025."},
+    {"id": "a04-randomness-signature-cwe", "to": "A04:2025", "basis": "evaluated", "section": "A04:2025 List of Mapped CWEs (CWE-319, CWE-330, CWE-338, CWE-347)", "from": ["V4.4.1", "V6.4.1", "V7.2.3", "V9.1.2"], "rationale": "Cleartext transport, weak randomness and signature verification weaknesses these requirements prevent are listed under A04:2025."},
+    {"id": "a05-injection-cwe", "to": "A05:2025", "basis": "evaluated", "section": "A05:2025 List of Mapped CWEs (CWE-78, CWE-79, CWE-89, CWE-94, CWE-95)", "from": ["V1.2.1", "V1.2.2", "V1.2.3", "V1.2.4", "V1.2.5", "V1.3.1", "V1.3.2", "V3.2.2"], "rationale": "The page cites ASVS V5 Input Validation and Encoding by its 4.0 name; in 5.0.0 these encoding and sanitization requirements prevent the injection weaknesses listed under A05:2025."},
+    {"id": "a06-design-cwe", "to": "A06:2025", "basis": "evaluated", "section": "A06:2025 List of Mapped CWEs (CWE-434, CWE-598) and Scenario #1", "from": ["V2.1.1", "V2.2.1", "V2.2.2", "V2.3.1", "V5.2.1", "V5.2.2", "V5.3.1", "V6.4.2", "V14.2.1"], "rationale": "Validation and business-logic design, unrestricted file upload and sensitive query strings are A06:2025 weaknesses; the page's scenario names secret questions, which V6.4.2 prohibits."},
+    {"id": "a07-authentication-cwe", "to": "A07:2025", "basis": "evaluated", "section": "A07:2025 List of Mapped CWEs (CWE-287, CWE-307, CWE-384, CWE-521, CWE-613, CWE-620, CWE-640)", "from": ["V6.1.1", "V6.2.1", "V6.2.2", "V6.2.3", "V6.2.4", "V6.2.5", "V6.2.6", "V6.2.7", "V6.2.8", "V6.3.1", "V6.3.2", "V6.4.1", "V6.4.2", "V7.2.1", "V7.2.2", "V7.2.3", "V7.2.4", "V7.4.1", "V7.4.2", "V10.4.1", "V10.4.2", "V10.4.3", "V10.4.4", "V10.4.5"], "rationale": "Password, brute-force, session fixation and expiration, and authorization-server weaknesses these requirements prevent are listed under A07:2025."},
+    {"id": "a08-token-integrity-cwe", "to": "A08:2025", "basis": "evaluated", "section": "A08:2025 List of Mapped CWEs (CWE-345)", "from": ["V9.1.1", "V9.1.3", "V9.2.1"], "rationale": "Accepting self-contained tokens without verifying their authenticity, key source or validity is the insufficient data-authenticity verification listed under A08:2025."},
+    {"id": "a03-known-vulnerabilities", "to": "A03:2025", "basis": "evaluated", "section": "A03:2025 List of Mapped CWEs (CWE-1104, CWE-1395)", "findings": [
+      {"source": "repository", "tool": "trivy", "rulePatterns": ["*"], "vulnerabilities": true},
+      {"source": "image", "tool": "trivy", "rulePatterns": ["*"], "vulnerabilities": true}
+    ], "rationale": "Known vulnerabilities in dependencies and image components are vulnerable third-party components, listed under A03:2025."},
+    {"id": "a02-misconfiguration-findings", "to": "A02:2025", "basis": "evaluated", "section": "A02:2025 List of Mapped CWEs (CWE-16)", "findings": [
+      {"source": "repository", "tool": "trivy", "rulePatterns": ["DS*", "KSV*", "AVD-*"]}
+    ], "rationale": "Trivy Dockerfile, Kubernetes and AVD configuration checks report configuration weaknesses, listed under A02:2025. Other Trivy check families stay unmapped."},
+    {"id": "a05-dynamic-code-findings", "to": "A05:2025", "basis": "evaluated", "section": "A05:2025 List of Mapped CWEs (CWE-78, CWE-95)", "findings": [
+      {"source": "repository", "tool": "opengrep", "rulePatterns": ["*moonmind-python-dynamic-eval", "*moonmind-javascript-dynamic-eval", "*moonmind-python-shell-command"]}
+    ], "rationale": "MoonMind's default Opengrep rules flag eval() (CWE-95) and shell-enabled subprocess calls (CWE-78), listed under A05:2025."},
+    {"id": "a04-transport-findings", "to": "A04:2025", "basis": "evaluated", "section": "A04:2025 List of Mapped CWEs (CWE-319, CWE-327)", "findings": [
+      {"source": "tls", "tool": "openssl", "rulePatterns": ["*"]}
+    ], "rationale": "TLS assessment findings report transport cryptography weaknesses, listed under A04:2025."},
+    {"id": "a07-secret-findings", "to": "A07:2025", "basis": "evaluated", "section": "A07:2025 List of Mapped CWEs (CWE-798)", "findings": [
+      {"source": "repository", "tool": "gitleaks", "rulePatterns": ["*"]},
+      {"source": "moonmind.security.passive_repo_scan.v1", "tool": "moonmind.security.passive_repo_scan.v1", "rulePatterns": ["*"]}
+    ], "rationale": "Committed credentials are use of hard-coded credentials (CWE-798), listed under A07:2025."}
+  ]
+}

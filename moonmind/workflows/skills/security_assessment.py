@@ -55,7 +55,7 @@ from moonmind.security.passive_repo_scan import (
     PASSIVE_SCAN_TOOL_REF,
     parse_scan_report_json,
 )
-from moonmind.security.repository_scanners import ScannerSummary
+from moonmind.security.repository_scanners import ScannerSummary, default_rule_ids
 from moonmind.security.rgs_assessment import RgsAssessment
 from moonmind.security.rng_assessment import RngAssessment
 from moonmind.security.service_inventory import (
@@ -380,7 +380,22 @@ def _scanner_observation(
                 # unclassified, like incomplete Prowler collections.
                 evidence_method="deterministic_check" if complete else "unclassified",
                 assets=[a for a in assets if a in request.scope.assets],
-                rule_ids=[],
+                # Rules of MoonMind's installed default Opengrep files can be
+                # selected one by one; other configurations stay all-rules only.
+                rule_ids=(
+                    default_rule_ids(
+                        (
+                            admission.rules
+                            if admission.rules is not None
+                            # Omitted rules are the image defaults the runner
+                            # resolved and verified by digest.
+                            else summary.execution and summary.execution.effective_rules
+                        ),
+                        findings,
+                    )
+                    if admission is not None and summary.scanner == "opengrep"
+                    else []
+                ),
                 all_rules=admission is not None,
                 config_ref=content_key(
                     [
@@ -1906,6 +1921,9 @@ class AssessmentExecution:
             review_status=review_status,
         )
         if framework_pack_context:
+            from moonmind.security.reporting_lens import reporting_lenses
+
+            findings = Comparison.model_validate(comparison).observation.findings
             conclusions, coverage = Counter(), Counter()
             for result in report.requirements:
                 key = (
@@ -1929,6 +1947,10 @@ class AssessmentExecution:
                     value: coverage[key, value]
                     for value in ("complete", "partial", "blocked", "not_assessed")
                 }
+                # Reporting lenses group this assessment's results and current
+                # findings by category; they add no coverage.
+                if lenses := reporting_lenses(pack, report.requirements, findings):
+                    pack["reportingLenses"] = lenses
             if len(framework_pack_context) == 1:
                 pack = framework_pack_context[0]
                 report.framework_pack = pack

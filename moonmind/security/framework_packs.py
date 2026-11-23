@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import date, datetime
+from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Annotated, Literal
 from urllib.parse import urlsplit
 
@@ -304,6 +305,9 @@ class PackRequirement(FrameworkRequirement):
     organisational_evidence: Annotated[
         list[PackEvidenceRequest], Field(max_length=8)
     ] = Field(default_factory=list, exclude_if=_absent)
+    # MoonMind has no evidence path for this requirement: it is reported not
+    # assessed with this reason, and declares no checks, procedures or requests.
+    not_assessed_reason: AssessmentText | None = Field(default=None, exclude_if=_absent)
 
     @model_validator(mode="after")
     def unique_objectives(self):
@@ -316,25 +320,83 @@ class PackRequirement(FrameworkRequirement):
             self.objectives or "deterministic_check" in self.required_evidence_methods
         ):
             raise ValueError("an external-only requirement declares no MoonMind checks")
+        if self.not_assessed_reason and (
+            self.objectives
+            or self.procedures
+            or self.organisational_evidence
+            or self.external_claim
+            or self.required_evidence_methods
+        ):
+            raise ValueError("a not-assessed requirement declares no evidence path")
         return self
 
 
 class MappingTarget(FrameworkContract):
+    """A destination catalog. A ``reportingLens`` groups report results by its
+    requirements, such as OWASP Top 10 categories; it is never concluded on."""
+
     id: Identifier
     framework_id: Identifier
     edition: MappingEdition
     requirement_ids: RequirementIdentifiers
+    titles: Annotated[
+        dict[RequirementIdentifier, AssessmentText], Field(max_length=64)
+    ] = Field(default_factory=dict, exclude_if=_absent)
+    reporting_lens: bool = Field(default=False, exclude_if=_absent)
 
     @model_validator(mode="after")
     def unique_requirements(self):
         _edition(self.edition)
         _unique(self.requirement_ids, "mapping target requirement")
+        if set(self.titles) - set(self.requirement_ids):
+            raise ValueError("mapping target titles name unknown requirements")
         return self
 
 
+RulePattern = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, pattern=r"^[A-Za-z0-9*][A-Za-z0-9_.:/*-]{0,127}$"
+    ),
+]
+
+
+class FindingClass(FrameworkContract):
+    """Native findings of one source and tool, selected by rule.
+
+    ``rulePatterns`` are shell-style patterns over native rule IDs; Opengrep, for
+    example, prefixes rule IDs with its configuration path. ``vulnerabilities``
+    keeps only findings marked as known vulnerabilities (CVE-prioritized).
+    """
+
+    source: Identifier
+    tool: Identifier
+    rule_patterns: Annotated[list[RulePattern], Field(min_length=1, max_length=16)]
+    vulnerabilities: bool = Field(default=False, exclude_if=_absent)
+
+    def matches(self, finding) -> bool:
+        from moonmind.security.exploitation_data import CVE
+
+        if (finding.source, finding.tool) != (self.source, self.tool):
+            return False
+        if self.vulnerabilities and not (
+            finding.priority is not None or CVE.fullmatch(finding.rule_id)
+        ):
+            return False
+        return any(fnmatchcase(finding.rule_id, p) for p in self.rule_patterns)
+
+
 class FrameworkMapping(FrameworkContract):
+    """A directional relation from pack requirements, or from finding classes,
+    to a target's requirements. It is reference intelligence, never coverage."""
+
     id: Identifier
-    from_requirement_ids: RequirementIdentifiers
+    from_requirement_ids: Annotated[
+        list[RequirementIdentifier], Field(max_length=64)
+    ] = Field(default_factory=list, exclude_if=_absent)
+    from_findings: Annotated[list[FindingClass], Field(max_length=16)] = Field(
+        default_factory=list, exclude_if=_absent
+    )
     target_id: Identifier
     to_requirement_ids: RequirementIdentifiers
     relation: Literal["equivalent", "partial", "subset", "superset", "related"]
@@ -346,6 +408,8 @@ class FrameworkMapping(FrameworkContract):
 
     @model_validator(mode="after")
     def review_and_uniqueness(self):
+        if bool(self.from_requirement_ids) == bool(self.from_findings):
+            raise ValueError("mapping names source requirements or finding classes")
         _unique(self.from_requirement_ids, "mapping source")
         _unique(self.to_requirement_ids, "mapping destination")
         if self.basis == "evaluated" and (not self.reviewed_by or not self.reviewed_on):
@@ -384,6 +448,9 @@ class VersionedFrameworkPack(FrameworkContract):
     effective_until: date | None = None
     provenance: Text
     license: Text
+    # Attribution a reproduced requirement text must carry, such as a CC BY-SA
+    # notice. Every report of the pack's metadata repeats it.
+    attribution: Text | None = Field(default=None, exclude_if=_absent)
     distribution: Literal["redistributable", "restricted", "prohibited"]
     methodology_editions: Annotated[
         dict[AssessmentText, Identifier], Field(max_length=16)
@@ -776,8 +843,10 @@ def evidence_plan(pack, requirement):
         or (["deterministic_check"] if requirement.objectives else []),
         evidence_types=requirement.evidence_types,
         checks=len(requirement.objectives),
+        procedures=[item.id for item in requirement.procedures],
         external_claim=claim and claim.id,
         external_party=claim and claim.verifiable_by,
+        not_assessed_reason=requirement.not_assessed_reason,
     )
 
 
@@ -905,9 +974,12 @@ def retained_pack_metadata(
         "mappingsDigest": _digest([data["mappingTargets"], data["mappings"]]),
         "provenanceDigest": _digest(
             [data["source"], data["provenance"], data["reviewedBy"], data["license"]]
+            + ([data["attribution"]] if pack.attribution else [])
         ),
         "textOmitted": pack.distribution == "restricted",
     }
+    if pack.attribution:
+        result["attribution"] = pack.attribution
     if pack.profile is not None:
         result["profileDigest"] = _digest(data["profile"])
     if documents := pack.source_documents():

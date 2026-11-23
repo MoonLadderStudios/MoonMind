@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "asvs-pack-provenance/v1",
+  "builder": "tools/build_asvs_pack.py",
+  "upstream": {
+    "repository": "https://github.com/OWASP/ASVS",
+    "tag": "v5.0.0_release",
+    "commit": "5cf9b032440be53ce345ab3c130fda46ba1ce7a2",
+    "path": "5.0/docs_en/OWASP_Application_Security_Verification_Standard_5.0.0_en.flat.json",
+    "file": "moonmind/security/packs/owasp-asvs/OWASP_Application_Security_Verification_Standard_5.0.0_en.flat.json",
+    "sha256": "8201b20eec2908c3380ac600c91c8ba746346fbb808859366abb232027532311",
+    "license": "CC-BY-SA-4.0",
+    "licenseFile": "moonmind/security/packs/owasp-asvs/LICENSE.md",
+    "requirementCount": 345
+  },
+  "level": 1,
+  "requirementCount": 70,
+  "inputs": {
+    "tools/asvs_l1_classification.json": "d75ebeabc5eb21b555f4d0275767517eaf58ab15c59cd12d2ca2f757ffea3fc2",
+    ".agents/skills/security-review/references/web-api.json": "2fd4570896d43f420df6b016a18fc63247b9302b2d9312ea773f98002bf686ef"
+  },
+  "output": {
+    "file": "moonmind/security/packs/owasp-asvs/owasp-asvs-l1.json",
+    "sha256": "c87062512bdbc32df95021f5e7616490a890f90160d9797c1fdf7b192c17ace4"
+  }
+}
