@@ -761,7 +761,10 @@ def test_saved_framework_pack_id_normalizes_once_at_the_request_boundary():
         legacy_request(
             "iso-27001-readiness",
             {
-                "systemInputs": {"systems": ["casino"], "requirementEvidence": {"9.2": [evidence]}},
+                "systemInputs": {
+                    "systems": ["casino"],
+                    "requirementEvidence": {"9.2": [evidence]},
+                },
                 "period": framework["period"],
                 "requirementChoices": {"9.2": {"systems": ["casino"]}},
             },
@@ -779,7 +782,9 @@ def test_saved_framework_pack_id_normalizes_once_at_the_request_boundary():
         )
     with pytest.raises(ValueError, match="no installed framework pack"):
         AssessmentRequest.model_validate(
-            legacy_request("retired-readiness", {"systemInputs": {}, "period": framework["period"]})
+            legacy_request(
+                "retired-readiness", {"systemInputs": {}, "period": framework["period"]}
+            )
         )
 
 

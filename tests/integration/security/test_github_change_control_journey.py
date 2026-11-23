@@ -599,15 +599,20 @@ async def test_period_artifact_is_consumed_by_existing_iso_framework_and_soc2_ev
     payload["framework"] = framework
     outputs = await invoke(admitted.service, payload)
     projection = outputs["githubChangeControl"]
-    preparation = await read(admitted.service, outputs["frameworkRef"])
-    assert outputs["frameworkReadiness"] == "incomplete"
+    # The collected review evidence enters the readiness pack as context
+    # for its own requirement IDs, never as control coverage.
+    report = await read(admitted.service, outputs["controlAssessmentRef"])
+    preparation = report["frameworkPack"]["readiness"]
+    assert outputs["frameworkPack"]["readiness"] == "incomplete"
     assert any(
         e["provenance"]["sourceRef"] == projection["evidenceRef"]
         for e in preparation["evidence"]
     )
     assert all(
-        row["status"] != "evidence_recorded" for row in preparation["requirements"]
+        row["requirement"]["readiness"]["status"] != "evidence_recorded"
+        for row in report["requirements"]
     )
+    assert projection["reviewEvidenceRef"] in report["frameworkPack"]["inputRefs"]
     evidence = FrameworkEvidence.model_validate(
         await read(admitted.service, projection["reviewEvidenceRef"])
     )

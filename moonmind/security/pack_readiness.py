@@ -3,15 +3,16 @@
 One evaluator serves every pack with a profile. Requirement content, profile
 fields, modules, applicability rules and external claims are pack data. A
 judgement that cannot be data is a small registered behavior (see
-``framework_registry.PACK_BEHAVIORS``). Recorded evidence is readiness context:
-it never certifies a product or approves it for a jurisdiction.
+``framework_registry.registered_behavior``). Recorded evidence is readiness
+context: it never certifies a product or approves it for a jurisdiction.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -156,10 +157,10 @@ class RequirementOutcome:
 
     status: str
     reason: str
-    evidence_refs: list[str] = field(default_factory=list)
-    requests: list[dict] = field(default_factory=list)
+    evidence_refs: list[str] = dataclasses.field(default_factory=list)
+    requests: list[dict] = dataclasses.field(default_factory=list)
     # Behavior-specific basis retained in the report, such as reviews or methods.
-    details: dict = field(default_factory=dict)
+    details: dict = dataclasses.field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -185,7 +186,7 @@ class PackBehavior:
     evidence_refs: Callable = lambda record: ()
     record_refs: Callable = lambda records: ()
     context: Callable | None = None
-    profile_types: Mapping[str, Any] = field(
+    profile_types: Mapping[str, Any] = dataclasses.field(
         default_factory=lambda: MappingProxyType({})
     )
     validate_profile: Callable | None = None
@@ -253,7 +254,10 @@ def _profile_model(profile_json: str, behavior: str | None) -> type[FrameworkCon
                 raise ValueError(
                     f"profile field {field['name']} names an unregistered model"
                 )
-            fields[name] = (types[field["model"]] | None, Field(default=None, **options))
+            fields[name] = (
+                types[field["model"]] | None,
+                Field(default=None, **options),
+            )
         elif kind == "choice":
             fields[name] = (
                 Literal[tuple(field["choices"])] | None,
@@ -703,7 +707,11 @@ def _declared_requirement(
             )
             gap = bool(gaps)
         status = (
-            ("partner_owned" if choice.responsible_entity == "partner" else "incomplete")
+            (
+                "partner_owned"
+                if choice.responsible_entity == "partner"
+                else "incomplete"
+            )
             if gap
             else "evidence_recorded"
         )

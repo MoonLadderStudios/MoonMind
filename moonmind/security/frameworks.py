@@ -325,7 +325,9 @@ def saved_profile_and_choices(pack, system_inputs, choices):
     """
     profile = dict(system_inputs or {})
     choices = {key: dict(value) for key, value in (choices or {}).items()}
-    evidence = profile.pop("requirementEvidence", profile.pop("requirement_evidence", {}))
+    evidence = profile.pop(
+        "requirementEvidence", profile.pop("requirement_evidence", {})
+    )
     if not isinstance(evidence, dict):
         raise ValueError("saved requirementEvidence must be an object")
     ids = {row.id for row in pack.requirements}

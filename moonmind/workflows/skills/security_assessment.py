@@ -1720,8 +1720,8 @@ class AssessmentExecution:
 
     async def previous_framework_metadata(self, ref):
         from moonmind.security.legacy_framework_reports import (
-            legacy_readiness_report,
             legacy_pack_metadata,
+            legacy_readiness_report,
         )
 
         try:
@@ -1738,8 +1738,7 @@ class AssessmentExecution:
             if (
                 packs
                 and all(
-                    isinstance(p.get(field), str)
-                    and re.fullmatch(pattern, p[field])
+                    isinstance(p.get(field), str) and re.fullmatch(pattern, p[field])
                     for p in packs
                     for field, pattern in (
                         ("id", PACK_IDENTIFIER_PATTERN),
@@ -3666,11 +3665,7 @@ class AssessmentExecution:
             outputs["reportBundle"] = build_report_bundle_result(
                 primary_report_ref={"artifact_id": summary_ref},
                 structured_ref={
-                    "artifact_id": (
-                        control_ref
-                        if controls
-                        else comparison_ref
-                    )
+                    "artifact_id": (control_ref if controls else comparison_ref)
                 },
                 evidence_refs=[{"artifact_id": ref} for ref in evidence]
                 + ([{"artifact_id": request.review_ref}] if review_readable else []),

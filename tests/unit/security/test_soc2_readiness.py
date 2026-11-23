@@ -1,6 +1,6 @@
 """Synthetic SOC 2 readiness, not a CPA examination, on the shared pack evaluator.
 
-Requirement-level equivalence with the retired framework-pack/v1 evaluator is in
+Requirement-level equivalence with the retired per-pack evaluator is in
 ``test_legacy_readiness_equivalence.py``.
 """
 

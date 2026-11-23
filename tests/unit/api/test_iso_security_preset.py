@@ -63,7 +63,7 @@ async def test_iso_catalog_api_and_saved_system_inputs(tmp_path, monkeypatch):
             assert "system_inputs" not in (detail["uiSchema"] or {})
             system = detail["inputSchema"]["properties"]["system_inputs"]
             assert system["additionalProperties"] is False
-            assert {'scopeStatement', 'risks', 'controls'} <= set(system["properties"])
+            assert {"scopeStatement", "risks", "controls"} <= set(system["properties"])
             assert "requirement_choices" in detail["inputSchema"]["properties"]
             values = {
                 "system_inputs": {

@@ -180,8 +180,8 @@ def _validate_json(payload, *, hint: str):
         models[schema].model_validate(payload)
         return schema
     from moonmind.security.legacy_framework_reports import (
-        legacy_readiness_report,
         legacy_pack_metadata,
+        legacy_readiness_report,
     )
 
     if legacy_readiness_report(payload):

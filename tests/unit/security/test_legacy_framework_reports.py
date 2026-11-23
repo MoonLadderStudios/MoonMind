@@ -12,8 +12,8 @@ from moonmind.security.framework_packs import (
 )
 from moonmind.security.legacy_framework_reports import (
     compare_legacy_report,
-    legacy_readiness_report,
     legacy_pack_metadata,
+    legacy_readiness_report,
     render_legacy_summary,
 )
 
@@ -104,7 +104,9 @@ def test_retained_iso_report_keeps_its_statement_of_applicability_basis():
     readiness = previous["readiness"]
     assert readiness["statementOfApplicability"] == report["statementOfApplicability"]
     assert set(readiness["requirementBasis"]) == {
-        row["id"] for row in report["requirements"] if row["category"] == "management_system"
+        row["id"]
+        for row in report["requirements"]
+        if row["category"] == "management_system"
     }
     assert readiness["readiness"] == "incomplete"
     assert readiness["period"] == report["period"]

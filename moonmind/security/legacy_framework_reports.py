@@ -50,15 +50,24 @@ def _profile(document) -> dict | None:
     system = document.get("systemInputs")
     if not isinstance(system, dict):
         return system
+    from pydantic import ValidationError
+
     from moonmind.security.framework_registry import installed_pack
     from moonmind.security.frameworks import saved_profile_and_choices
+    from moonmind.security.pack_readiness import profile_model
 
     try:
         pack = installed_pack(document["pack"]["id"])[1]
         profile, _ = saved_profile_and_choices(pack, system, {})
+        return (
+            profile_model(pack)
+            .model_validate(profile)
+            .model_dump(mode="json", by_alias=True)
+        )
+    except ValidationError:
+        return profile
     except ValueError:
         return system
-    return profile
 
 
 def legacy_pack_metadata(document) -> list[dict]:

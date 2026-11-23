@@ -776,16 +776,14 @@ def test_migrated_built_in_exports_validate_with_unchanged_control_identities(
     scenario_id,
 ):
     """ISO/IEC 27001, SOC 2 and UKGC RTS export all five models from the unified
-    report, with the control IDs the legacy framework-pack/v1 owners exported."""
-    from moonmind.security.oscal_export import OscalAdapter, control_id
+    report, with the control IDs the retired per-pack owners exported."""
+    from moonmind.security.oscal_export import OscalAdapter, OscalContext, control_id
     from tests.unit.security.test_legacy_readiness_equivalence import (
         GOLDEN,
         SCENARIOS,
         evaluated,
         selection,
     )
-
-    from moonmind.security.oscal_export import OscalContext
 
     scenario = SCENARIOS[scenario_id]
     pack = installed_pack(selection(scenario)["packId"])[1]
@@ -813,14 +811,21 @@ def test_migrated_built_in_exports_validate_with_unchanged_control_identities(
     for model, document in built.items():
         validate_document(model, document)
     controls = [row["id"] for row in built["catalog"]["catalog"]["controls"]]
-    assert controls == [row[3] for row in GOLDEN["legacyPacks"][pack.id]["requirements"]]
+    assert controls == [
+        row[3] for row in GOLDEN["legacyPacks"][pack.id]["requirements"]
+    ]
     selected = built["profile"]["profile"]["imports"][0]["include-controls"][0][
         "with-ids"
     ]
     for row in report["requirements"]:
         assert (control_id(row["id"]) in selected) == (
             row["status"]
-            not in {"not_applicable", "not_selected", "excluded", "exclusion_for_review"}
+            not in {
+                "not_applicable",
+                "not_selected",
+                "excluded",
+                "exclusion_for_review",
+            }
         )
     if pack.id == "iso-27001-readiness":
         # Same pack ID and edition, so the exchange identities are unchanged too.

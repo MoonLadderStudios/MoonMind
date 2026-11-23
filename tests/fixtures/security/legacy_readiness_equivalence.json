@@ -1,5 +1,5 @@
 {
- "description": "Frozen legacy framework-pack/v1 ISO/IEC 27001, SOC 2 and UKGC RTS evaluator outputs, captured before the unified-contract migration, as the requirement-level equivalence oracle.",
+ "description": "Frozen ISO/IEC 27001, SOC 2 and UKGC RTS outputs of the retired per-pack evaluators, captured before the unified-contract migration, as the requirement-level equivalence oracle.",
  "capturedFrom": "moonmind/security/iso_27001.py, soc2_readiness.py and ukgc_rts.py at b76cc9226",
  "evaluatedAt": "2026-11-09T00:00:00+00:00",
  "legacyPacks": {

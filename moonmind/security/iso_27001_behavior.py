@@ -310,7 +310,9 @@ def _control_outcome(pack, state, *, key, title, management, choice, supplied):
         )
     )
     if management:
-        reason = "Management-system requirement of the recorded ISMS; it cannot be excluded."
+        reason = (
+            "Management-system requirement of the recorded ISMS; it cannot be excluded."
+        )
     elif status == "excluded":
         reason = selected.rationale
     elif selected.decision == "include":

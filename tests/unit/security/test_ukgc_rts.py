@@ -1,6 +1,6 @@
 """UKGC RTS security-audit preparation on the shared pack evaluator.
 
-Requirement-level equivalence with the retired framework-pack/v1 evaluator is in
+Requirement-level equivalence with the retired per-pack evaluator is in
 ``test_legacy_readiness_equivalence.py``.
 """
 
@@ -116,9 +116,7 @@ def test_audit_records_schedule_and_reporting_conditions():
     assert context["readiness"] == "incomplete"
     ids = [r["id"] for r in context["evidenceRequests"]]
     assert "auditor.independence" in ids
-    assert any(
-        "observation" in r["prompt"] for r in context["evidenceRequests"]
-    )
+    assert any("observation" in r["prompt"] for r in context["evidenceRequests"])
 
 
 def test_independence_statement_is_a_mandatory_audit_reference():

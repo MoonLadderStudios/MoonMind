@@ -297,7 +297,7 @@ async def test_updated_exchange_context_reuses_confirmed_native_work(environment
     revised = await invoke(service, request)
     assert revised["scanRef"] == first["scanRef"]
     assert revised["comparisonRef"] == first["comparisonRef"]
-    assert revised["frameworkRef"] == first["frameworkRef"]
+    assert revised["controlAssessmentRef"] == first["controlAssessmentRef"]
     assert revised["oscalExport"]["status"] == "exported"
     assert (
         revised["oscalExport"]["artifacts"]["poam"]

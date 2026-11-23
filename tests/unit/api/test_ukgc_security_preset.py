@@ -58,7 +58,9 @@ async def test_ukgc_catalog_api_and_saved_system_inputs(tmp_path, monkeypatch):
             assert "system_inputs" not in (detail["uiSchema"] or {})
             system = detail["inputSchema"]["properties"]["system_inputs"]
             assert system["additionalProperties"] is False
-            assert {'licenceClass', 'thirdParties', 'criticalSystems'} <= set(system["properties"])
+            assert {"licenceClass", "thirdParties", "criticalSystems"} <= set(
+                system["properties"]
+            )
             assert "requirement_choices" in detail["inputSchema"]["properties"]
             values = {
                 "system_inputs": fixture()["framework"]["systemInputs"],

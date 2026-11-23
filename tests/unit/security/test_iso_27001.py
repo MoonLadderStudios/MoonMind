@@ -1,6 +1,6 @@
 """ISO/IEC 27001 ISMS readiness as an installed pack on the shared evaluator.
 
-Requirement-level equivalence with the retired framework-pack/v1 evaluator is in
+Requirement-level equivalence with the retired per-pack evaluator is in
 ``test_legacy_readiness_equivalence.py``. These tests cover the pack data, the
 saved request shape and the Statement of Applicability behavior directly.
 """
@@ -228,9 +228,9 @@ def test_conclusions_never_certify_the_isms():
     assert result.rows["9.2"]["status"] == "evidence_recorded"
     assert result.context["readiness"] == "incomplete"
     claims = result.context["externalClaims"]
-    assert {claims[k]["status"] for k in ("certification", "organisational-operation")} == {
-        "Unverified"
-    }
+    assert {
+        claims[k]["status"] for k in ("certification", "organisational-operation")
+    } == {"Unverified"}
     assert result.context["certification"] == "not_performed"
 
 
@@ -240,9 +240,7 @@ def test_additional_control_choices_and_evidence_are_admitted_from_the_profile()
     item = reviewed_evidence("design")
     item["revisions"].append(dict(item["revisions"][0], artifactRef="art_current"))
     chosen = normalized(
-        selection(
-            requirementEvidence={"EXTRA.1": [item], "9.2": [reviewed_evidence()]}
-        )
+        selection(requirementEvidence={"EXTRA.1": [item], "9.2": [reviewed_evidence()]})
     )
     task = {"tool": {"id": "security.assess", "inputs": {"frameworkPacks": [chosen]}}}
     assert set(organisational_evidence_refs(task)) == {"art_audit", "art_current"}
@@ -269,7 +267,11 @@ def test_export_association_includes_only_current_documents():
         {
             "scope": {"assets": ["isms"]},
             "tools": [],
-            "budget": {"baseSeconds": 60, "maxSeconds": 120, "progressStallSeconds": 60},
+            "budget": {
+                "baseSeconds": 60,
+                "maxSeconds": 120,
+                "progressStallSeconds": 60,
+            },
             "credentialRefs": [],
             "networkRefs": [],
             "framework": selection(requirementEvidence={"9.2": [item]}).model_dump(

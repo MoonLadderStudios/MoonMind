@@ -447,8 +447,8 @@ population stores verification once per repository/commit, referenced by changes
 and deployments. Above 4 MiB it is retained as ordered binary parts through a
 `github-change-control-population-manifest/v1` artifact; concatenate `partRefs`
 to read the complete population, including every source page reference. The emitted
-`FrameworkEvidence` record carries caller-selected SOC 2/ISO control IDs and feeds
-the existing framework preparation path as `technical_assessment` evidence;
+`FrameworkEvidence` record carries caller-selected SOC 2/ISO control IDs and
+each selected readiness pack judges it for its own IDs as `technical_assessment` evidence;
 collection does not establish compliance. Live-account and historical-population
 comparisons require a separately authorized read-only account and known source
 period; synthetic integration covers the supported implementation journey.
@@ -456,18 +456,18 @@ period; synthetic integration covers the supported implementation journey.
 ## UKGC RTS audit preparation
 
 Choose **UKGC RTS Security Audit Preparation** in the shared preset catalog or
-pass `framework` to `security.assess`. Both paths use the same scoped evaluator
-and retained report bundle. The pack selects the 44 ISO/IEC 27001:2022 controls
+select the installed `ukgc-rts-security` [declared pack](FrameworkPacks.md) in
+`frameworkPacks`; a saved `framework.packId` still works. The pack selects the 44 ISO/IEC 27001:2022 controls
 listed in [RTS section 4](https://www.gamblingcommission.gov.uk/manual/remote-gambling-and-software-technical-standards/4-remote-gambling-and-software-technical-standards-rts-security-requirements),
 including cloud security (5.23) and security testing (8.29); other Annex A controls
 are not added to the RTS requirement set.
 
-The Create fields accept saved system inputs, an audit period (`start` and
+The Create fields accept typed profile inputs, an audit period (`start` and
 `end` dates), evidence artifact IDs, an optional audit-record artifact, and
 requirement choices keyed by control ID. Omitted choices use the full admitted
 system scope and period; a choice can set `systems`, `period`, or
-`notApplicableReason`. Markdown and JSON reports retain these choices for
-auditor review.
+`notApplicableReason`; an exclusion stays `exclusion_for_review`. Markdown and
+JSON reports retain these choices for auditor review.
 
 System inputs describe `operatorName`, `businessDescription`, `licenceClass`,
 `systemIdentification`, and `criticalSystems`. Each critical-system entry names

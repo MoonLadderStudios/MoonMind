@@ -55,7 +55,11 @@ async def test_soc2_catalog_api_and_saved_system_inputs(tmp_path, monkeypatch):
             assert "system_inputs" not in (detail["uiSchema"] or {})
             system = detail["inputSchema"]["properties"]["system_inputs"]
             assert system["additionalProperties"] is False
-            assert {'assessmentType', 'requirementSamples', 'subserviceOrganisations'} <= set(system["properties"])
+            assert {
+                "assessmentType",
+                "requirementSamples",
+                "subserviceOrganisations",
+            } <= set(system["properties"])
             assert "requirement_choices" in detail["inputSchema"]["properties"]
             values = {
                 "system_inputs": {

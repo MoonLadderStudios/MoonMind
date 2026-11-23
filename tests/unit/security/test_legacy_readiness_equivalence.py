@@ -1,6 +1,6 @@
 """ISO/IEC 27001, SOC 2 and UKGC RTS on the unified pack contract match legacy.
 
-``legacy_readiness_equivalence.json`` froze the framework-pack/v1 evaluators'
+``legacy_readiness_equivalence.json`` froze the retired per-pack evaluators'
 requirement-level statuses, scope overrides, documentary reviews, evidence
 requests, Statement of Applicability decisions, risk treatment, reassessment
 and external-claim boundaries before the migration
@@ -22,15 +22,12 @@ Intended differences, asserted here rather than hidden:
 """
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
-from moonmind.security.framework_packs import (
-    readiness_metadata,
-    retained_pack_metadata,
-)
+from moonmind.security.framework_packs import readiness_metadata, retained_pack_metadata
 from moonmind.security.framework_registry import (
     installed_digest,
     installed_pack,

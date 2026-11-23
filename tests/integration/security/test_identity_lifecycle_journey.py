@@ -260,13 +260,19 @@ async def test_generated_evidence_enters_framework_without_compliance_coverage(
     payload["framework"] = data
     Okta(monkeypatch)
     outputs = await invoke(environment.service, payload)
-    preparation = await read(environment.service, outputs["frameworkRef"])
-    assert outputs["frameworkReadiness"] == "incomplete"
+    # The collected review evidence enters the readiness pack as context
+    # for its own requirement IDs, never as compliance coverage.
+    report = await read(environment.service, outputs["controlAssessmentRef"])
+    preparation = report["frameworkPack"]["readiness"]
+    assert outputs["frameworkPack"]["readiness"] == "incomplete"
     assert any(
         e["provenance"]["sourceRef"] == outputs["identityLifecycle"]["evidenceRef"]
         for e in preparation["evidence"]
     )
-    assert all(r["status"] != "evidence_recorded" for r in preparation["requirements"])
+    assert all(
+        r["requirement"]["readiness"]["status"] != "evidence_recorded"
+        for r in report["requirements"]
+    )
 
 
 @pytest.mark.parametrize("deny", ["/logs", "/roles", "/groups"])

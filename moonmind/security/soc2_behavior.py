@@ -18,6 +18,7 @@ from pydantic import Field, model_validator
 from moonmind.security.frameworks import FrameworkContract, Strings, Text
 from moonmind.security.pack_readiness import PackBehavior, RequirementOutcome
 
+
 class Subservice(FrameworkContract):
     name: Text
     method: Literal["inclusive", "carve_out"]
@@ -225,7 +226,9 @@ def _evaluate(pack, item):
         gaps.append("Identify the partner and agreed responsibility.")
     gaps = list(dict.fromkeys(gaps))
     status = (
-        "not_applicable" if not applicable else "incomplete" if gaps else "evidence_recorded"
+        "not_applicable"
+        if not applicable
+        else "incomplete" if gaps else "evidence_recorded"
     )
     requests = []
     if applicable and gaps:
@@ -279,7 +282,8 @@ def _context(pack, rows, audit, state):
         result["reassessment"] = {
             "previousRef": state.previous_ref,
             "previousEdition": state.previous.get("edition"),
-            "periodChanged": prior.get("period") != state.period.model_dump(mode="json"),
+            "periodChanged": prior.get("period")
+            != state.period.model_dump(mode="json"),
             "scopeChanged": prior.get("profile")
             != inputs.model_dump(mode="json", by_alias=True),
             "priorEvidenceSufficiencyReevaluated": True,

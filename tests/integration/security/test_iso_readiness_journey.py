@@ -139,9 +139,7 @@ async def test_revised_scope_preserves_historical_soa_and_current_evidence(envir
         == prior["statementOfApplicability"]["version"]
     )
     assert revised["reassessment"]["affectedControlIds"]
-    assert (
-        await recurring.read(service, first["controlAssessmentRef"]) == original
-    )
+    assert await recurring.read(service, first["controlAssessmentRef"]) == original
     assert first["controlAssessmentRef"] in await recurring.required(
         service, changed["controlAssessmentRef"]
     )
@@ -363,6 +361,4 @@ async def test_retained_legacy_iso_report_renders_exports_and_is_a_previous_asse
     assert json.loads(archive.read(entries[previous]["memberName"]))["pack"]["id"] == (
         "iso-27001-readiness"
     )
-    assert previous in await recurring.required(
-        service, result["controlAssessmentRef"]
-    )
+    assert previous in await recurring.required(service, result["controlAssessmentRef"])
