@@ -310,6 +310,37 @@ async def test_real_authorization_finding_retest_and_retention(
     ] == before["objectives"]
 
 
+async def test_readiness_backed_security_plan_still_produces_methodology_coverage(
+    environment,
+):
+    # Readiness derived from supplied results stays valid for methodology: the
+    # launch's securityPlan.readinessRef backs it, not an unverified default.
+    service = environment.service
+    _, payload = await retain_plan(service)
+    readiness = {"code-scan": {"status": "ready", "checks": [], "diagnostics": []}}
+    job = {
+        "id": "code-scan",
+        "kind": "repository-scan",
+        "input": {"scanner": "gitleaks", "outputDirectory": "scan"},
+        "assets": ["app"],
+        "sources": [{"kind": "operator_input", "ref": "Controlled fixture plan"}],
+    }
+    plan, _ = security_plan_payload(payload, jobs=[job], readiness=readiness)
+    assert plan["jobs"][0]["readiness"]["status"] == "ready"
+    plan_ref = await recurring.put(service, plan)
+    AUTHORITY[plan_ref] = payload["authorityRef"]
+    request = await select_methodology(service, request_payload(), plan_ref)
+    request["securityPlan"] = {
+        "planRef": plan_ref,
+        "readinessRef": await recurring.put(service, readiness),
+    }
+
+    outputs = await recurring.invoke(service, request, key="readiness-plan")
+    assert outputs["securityPlanRef"]
+    report = await recurring.read(service, outputs["methodologyRef"])
+    assert report["planRef"] == plan_ref
+
+
 async def test_missing_results_evidence_preserves_other_completed_reviews(environment):
     service = environment.service
     plan_ref, plan = await retain_plan(service)

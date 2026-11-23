@@ -2144,7 +2144,18 @@ class AssessmentExecution:
             authority_ref = request.methodology.authority_ref
             if authority_ref is None:
                 raise ValueError("methodology.authorityRef is required")
-            plan, packs, pack_refs = await self.load_security_plan(request, plan)
+            # Job readiness derived from results stays backed by the same
+            # launch's readiness evidence for this plan.
+            selection = request.security_plan
+            readiness_ref = (
+                selection.readiness_ref
+                if selection is not None
+                and selection.plan_ref == request.methodology.plan_ref
+                else None
+            )
+            plan, packs, pack_refs = await self.load_security_plan(
+                request, plan, readiness_ref
+            )
             pack = packs[(plan.pack.pack_id, plan.pack.edition)]
             pack_ref = pack_refs[plan.standards.index(plan.pack)]
         else:

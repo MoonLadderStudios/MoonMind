@@ -135,7 +135,10 @@ holds the threat model, `interfaces`, value-free `identities` (`id`,
 `available`), `sourceRefs`, `apiContextRefs` and `allowedMethods`. That
 standard's requirement rows carry their selected `procedures`. Pass
 `methodology: {planRef, authorityRef}` to `security.assess`: the launch, not
-the plan, names the readable rules of engagement. Coverage reports keep the
+the plan, names the readable rules of engagement. When job readiness came from
+readiness results, also pass `securityPlan` for the same `planRef` with its
+`readinessRef`; without it that readiness is `unverified` and the plan fails
+validation. Coverage reports keep the
 [web/API coverage contract](../../.agents/skills/security-review/references/report.md).
 
 Retained `web-api-test-plan/v1` plans stay readable through

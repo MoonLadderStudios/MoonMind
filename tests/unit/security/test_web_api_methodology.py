@@ -125,12 +125,13 @@ def plan_project(scope):
     )
 
 
-def security_plan_payload(payload=None):
+def security_plan_payload(payload=None, *, jobs=(), readiness=None):
     """The ``security-plan/v1`` form of a web/API working plan.
 
-    Proposals are copied; derived content comes from trusted derivation. The
-    plan drops the v1 authority and credential references: the launch names
-    the rules of engagement and binds credentials.
+    Proposals are copied; derived content comes from trusted derivation, with
+    job readiness from the supplied readiness results. The plan drops the v1
+    authority and credential references: the launch names the rules of
+    engagement and binds credentials.
     """
     from moonmind.security.framework_packs import load_declared_pack
     from moonmind.security.security_plan import derive_security_plan
@@ -195,8 +196,11 @@ def security_plan_payload(payload=None):
             "apiContextRefs": payload["apiContextRefs"],
             "allowedMethods": payload["allowedMethods"],
         },
+        "jobs": list(jobs),
     }
-    derived = derive_security_plan(plan, packs={(pack.id, pack.edition): pack})
+    derived = derive_security_plan(
+        plan, packs={(pack.id, pack.edition): pack}, readiness=readiness
+    )
     return derived.model_dump(mode="json", by_alias=True), project
 
 
