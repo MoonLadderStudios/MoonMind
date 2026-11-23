@@ -8,8 +8,11 @@ afterEach(cleanup);
 
 const preset = readinessPresetForm('security-ukgc-rts');
 
-it('uses existing Create fields for saved systems, per-control choices and evidence prompts', () => {
-  const savedSystem = { operatorName: 'Saved casino', licenceClass: 'remote_casino' };
+it('renders the pack profile as typed Create fields, loads saved system inputs and keeps per-control choices', () => {
+  const savedSystem = {
+    operatorName: 'Saved casino', licenceClass: 'remote_casino', annualLotterySalesGbp: 1200,
+    criticalSystems: [{ category: 'outcome_rng', systems: ['rng'], rationale: 'Saved RNG', inScope: true }],
+  };
   function Fields() {
     const [values, setValues] = useState<Record<string, unknown>>({ system_inputs: savedSystem });
     return <>
@@ -25,7 +28,9 @@ it('uses existing Create fields for saved systems, per-control choices and evide
   const view = render(<Fields />);
   const system = within(view.getByRole('group', { name: 'Saved system and licence inputs' }));
   expect(system.getByRole('combobox', { name: 'Licence Class' })).toHaveProperty('value', 'remote_casino');
-  expect(JSON.parse((system.getByLabelText('Saved system and licence inputs JSON') as HTMLTextAreaElement).value)).toEqual(savedSystem);
+  // Typed profile fields replace the free-form JSON editor.
+  expect(system.queryByLabelText('Saved system and licence inputs JSON')).toBeNull();
+  expect(system.getByLabelText('Annual Lottery Sales Gbp')).toHaveProperty('value', '1200');
   fireEvent.change(system.getByRole('combobox', { name: 'Licence Class' }), { target: { value: 'remote_bingo' } });
   const choices = { '8.29': { systems: ['casino'], period: { start: '2026-01-01', end: '2026-12-31' } } };
   fireEvent.change(view.getByLabelText('Requirement scope and period choices'), { target: { value: JSON.stringify(choices) } });

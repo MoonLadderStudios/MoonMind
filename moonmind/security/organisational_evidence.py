@@ -12,6 +12,34 @@ from moonmind.security.frameworks import (
 )
 
 
+def _installed(pack_id) -> bool:
+    from moonmind.security.framework_registry import INSTALLED_PACK_IDS
+
+    return pack_id in INSTALLED_PACK_IDS
+
+
+def _profile_refs(selection: Mapping) -> list[str]:
+    """Current revisions an installed pack's behavior reviews from its profile.
+
+    An invalid profile admits nothing here; assessment validation rejects it.
+    """
+    from pydantic import ValidationError
+
+    from moonmind.security.framework_registry import installed_pack, pack_behavior
+    from moonmind.security.pack_readiness import profile_model
+
+    pack_id = selection.get("packId", selection.get("pack_id"))
+    profile = selection.get("profile")
+    if not _installed(pack_id) or not isinstance(profile, Mapping):
+        return []
+    pack = installed_pack(pack_id)[1]
+    try:
+        inputs = profile_model(pack).model_validate(profile)
+    except ValidationError:
+        return []
+    return list(pack_behavior(pack).organisational_refs(inputs))
+
+
 def organisational_evidence_refs(task: Mapping) -> list[str]:
     """No artifact-string discovery: only current revisions of explicit security.assess tools."""
     refs = []
@@ -60,15 +88,11 @@ def organisational_evidence_refs(task: Mapping) -> list[str]:
             )
         framework = inputs.get("framework") or {}
         builtin_rows = []
-        if framework and isinstance(framework, Mapping):
-            from moonmind.security.framework_registry import READINESS_PACKS
-
-            entry = READINESS_PACKS.get(
-                framework.get("packId", framework.get("pack_id"))
-            )
-        else:
-            entry = None
-        if entry and entry.admits_requirement_evidence:
+        if isinstance(framework, Mapping) and _installed(
+            framework.get("packId", framework.get("pack_id"))
+        ):
+            # A saved framework.packId request keeps documentary evidence in
+            # its system inputs until the request boundary normalizes it.
             system = framework.get("systemInputs", framework.get("system_inputs", {}))
             if not isinstance(system, Mapping):
                 raise TypeError("invalid built-in framework system inputs")
@@ -80,6 +104,8 @@ def organisational_evidence_refs(task: Mapping) -> list[str]:
             builtin_rows = [
                 {"organisationalEvidence": requests} for requests in evidence.values()
             ]
+        for pack in packs:
+            refs.extend(_profile_refs(pack))
         for row in [*selected_rows, *builtin_rows]:
             if not isinstance(row, Mapping):
                 raise TypeError("invalid assessment requirement")

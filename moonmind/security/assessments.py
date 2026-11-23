@@ -1029,6 +1029,11 @@ class AssessmentRequest(Contract):
     @model_validator(mode="after")
     def validate_admission(self):
         packs = self.selected_packs
+        if self.framework is not None:
+            # Installed packs normalize to frameworkPacks before validation.
+            raise AssessmentInputError(
+                f"framework.packId names no installed framework pack: {self.framework.pack_id}"
+            )
         if self.previous_assessment_ref and not packs:
             raise AssessmentInputError(
                 "previousAssessmentRef requires a declared framework pack"
@@ -1048,7 +1053,6 @@ class AssessmentRequest(Contract):
         if (
             not self.tools
             and not self.review_ref
-            and not self.framework
             and not packs
             and not self.methodology
         ):

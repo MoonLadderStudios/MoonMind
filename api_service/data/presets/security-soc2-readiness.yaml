@@ -11,8 +11,6 @@ requiredCapabilities:
 annotations:
   workflowPublish:
     mode: none
-  uiSchema:
-    system_inputs: {showJsonEditor: true}
   inputSchema:
     type: object
     required:
@@ -50,9 +48,10 @@ annotations:
         type: object
         title: Requirement scope and period choices
         description: Key choices by published criterion identifier (CC6.1, A1.1, DC9).
-          Set systems, period, notApplicableReason, responsibleEntity and responsibilityReason.
-          Narrowed periods remain explicit gaps; partner ownership does not waive
-          evidence.
+          Set systems, period, notApplicableReason, responsibleEntity, responsibilityReason
+          and organisationalEvidence (design and period operating records with their
+          attributed reviews). Narrowed periods remain explicit gaps; partner ownership
+          does not waive evidence.
       evidence_refs:
         type: array
         title: Evidence record artifacts

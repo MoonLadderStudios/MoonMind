@@ -1,4 +1,4 @@
-"""Temporary reader for retained pre-unification gaming reports (#5435)."""
+"""Temporary reader for retained pre-unification readiness reports (#5435, #5436)."""
 
 import copy
 import json
@@ -12,17 +12,18 @@ from moonmind.security.framework_packs import (
 )
 from moonmind.security.legacy_framework_reports import (
     compare_legacy_report,
-    legacy_gaming_report,
+    legacy_readiness_report,
     legacy_pack_metadata,
     render_legacy_summary,
 )
 
-RETAINED = json.loads(
-    (
-        Path(__file__).resolve().parents[2]
-        / "fixtures/security/legacy_gaming_reports.json"
-    ).read_text()
-)["reports"]
+FIXTURES = Path(__file__).resolve().parents[2] / "fixtures/security"
+RETAINED = {
+    **json.loads((FIXTURES / "legacy_gaming_reports.json").read_text())["reports"],
+    # ISO/IEC 27001, SOC 2 and UKGC RTS reports written before #5436.
+    **json.loads((FIXTURES / "legacy_readiness_reports.json").read_text())["reports"],
+}
+LEGACY_STATUS = {"evidence_reviewed": "evidence_recorded", "unassessed": "incomplete"}
 
 
 def current(previous, **changes):
@@ -40,18 +41,28 @@ def current(previous, **changes):
 
 @pytest.mark.parametrize("schema", sorted(RETAINED))
 def test_retained_report_reads_as_comparable_pack_metadata(schema):
+    from moonmind.security.framework_registry import installed_pack
+    from moonmind.security.frameworks import saved_profile_and_choices
+
     report = RETAINED[schema]
-    assert legacy_gaming_report(report)
+    assert legacy_readiness_report(report)
     [previous] = legacy_pack_metadata(report)
     assert (previous["id"], previous["edition"], previous["legacySchema"]) == (
         report["pack"]["id"],
         report["pack"]["edition"],
-        schema,
+        report["schemaVersion"],
     )
     statuses = previous["readiness"]["requirementStatuses"]
-    assert statuses == {row["id"]: row["status"] for row in report["requirements"]}
-    assert previous["readiness"]["profile"] == report["systemInputs"]
-    assert schema in render_legacy_summary(previous)
+    # Renamed statuses are the same conclusions, not readiness changes.
+    assert statuses == {
+        row["id"]: LEGACY_STATUS.get(row["status"], row["status"])
+        for row in report["requirements"]
+    }
+    pack = installed_pack(report["pack"]["id"])[1]
+    profile, _ = saved_profile_and_choices(pack, report["systemInputs"], {})
+    assert previous["readiness"]["profile"] == profile
+    assert "requirementEvidence" not in previous["readiness"]["profile"]
+    assert report["schemaVersion"] in render_legacy_summary(previous)
 
 
 @pytest.mark.parametrize("schema", sorted(RETAINED))
@@ -87,10 +98,22 @@ def test_unique_pack_lineage_survives_the_edition_rename():
     )
 
 
+def test_retained_iso_report_keeps_its_statement_of_applicability_basis():
+    report = RETAINED["iso-27001-readiness/v1"]
+    [previous] = legacy_pack_metadata(report)
+    readiness = previous["readiness"]
+    assert readiness["statementOfApplicability"] == report["statementOfApplicability"]
+    assert set(readiness["requirementBasis"]) == {
+        row["id"] for row in report["requirements"] if row["category"] == "management_system"
+    }
+    assert readiness["readiness"] == "incomplete"
+    assert readiness["period"] == report["period"]
+
+
 def test_other_schemas_and_malformed_reports_are_not_read():
-    ukgc = dict(RETAINED["framework-audit-preparation/v1"])
-    ukgc["pack"] = dict(ukgc["pack"], id="ukgc-rts-security")
-    assert not legacy_gaming_report(ukgc)
+    retired = dict(RETAINED["framework-audit-preparation/v1"])
+    retired["pack"] = dict(retired["pack"], id="retired-readiness")
+    assert not legacy_readiness_report(retired)
     broken = copy.deepcopy(RETAINED["gli-readiness/v1"])
     broken["requirements"][0].pop("status")
     with pytest.raises(ValueError):

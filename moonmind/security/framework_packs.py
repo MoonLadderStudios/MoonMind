@@ -26,6 +26,7 @@ from moonmind.security.frameworks import (
     FrameworkSource,
     OrganisationalEvidenceCategory,
     OrganisationalEvidenceRequest,
+    PackEdition,
 )
 from moonmind.security.frameworks import PackIdentifier as Identifier
 from moonmind.security.frameworks import Text
@@ -51,12 +52,7 @@ RequirementIdentifiers = Annotated[
 ArtifactRef = Annotated[str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")]
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 # Catalog editions can name amendments, such as ISO/IEC 27001 "2022+Amd1:2024".
-MappingEdition = Annotated[
-    str,
-    StringConstraints(
-        strip_whitespace=True, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:/+-]{0,127}$"
-    ),
-]
+MappingEdition = PackEdition
 
 
 class PackSource(FrameworkSource):
@@ -141,12 +137,25 @@ class ProfileField(FrameworkContract):
     ``jurisdiction_basis`` records adoption without inferring it from
     publication, ``applicability_basis`` explains why rules apply, and
     ``selection`` lists the selectable requirements the operator chose.
+
+    A ``number`` is a non-negative finite amount. A ``structured`` field holds
+    records whose shape the pack's registered behavior declares under ``model``,
+    such as ISO/IEC 27001 risks or UKGC critical systems.
     """
 
     name: ProfileName
     type: Literal[
-        "text", "boolean", "choice", "choices", "text_list", "jurisdiction_basis"
+        "text",
+        "boolean",
+        "number",
+        "date",
+        "choice",
+        "choices",
+        "text_list",
+        "jurisdiction_basis",
+        "structured",
     ]
+    model: Identifier | None = Field(default=None, exclude_if=_absent)
     title: AssessmentText | None = Field(default=None, exclude_if=_absent)
     choices: Annotated[list[RequirementIdentifier], Field(max_length=64)] = Field(
         default_factory=list, exclude_if=_absent
@@ -174,6 +183,8 @@ class ProfileField(FrameworkContract):
     def validate_field(self):
         if (self.type in {"choice", "choices"}) != bool(self.choices):
             raise ValueError("choice profile fields, and only they, list choices")
+        if (self.type == "structured") != bool(self.model):
+            raise ValueError("structured profile fields, and only they, name a model")
         _unique(self.choices, "profile choice")
         expected = {
             "systems": "text_list",
@@ -357,7 +368,7 @@ def _unique(values, label):
 class VersionedFrameworkPack(FrameworkContract):
     schema_version: Literal["declared-framework-pack/v1"] = "declared-framework-pack/v1"
     id: Identifier
-    edition: Identifier
+    edition: PackEdition
     revision: Identifier
     amendments: Annotated[list[Identifier], Field(max_length=32)] = Field(
         default_factory=list
@@ -494,6 +505,12 @@ class VersionedFrameworkPack(FrameworkContract):
             raise ValueError("profile applicability rules need applicabilityText")
         if self.behavior and self.profile is None:
             raise ValueError("a registered behavior needs declared profile inputs")
+        if (
+            self.profile
+            and any(row.type == "structured" for row in self.profile.fields)
+            and not self.behavior
+        ):
+            raise ValueError("structured profile fields need a registered behavior")
 
     def source_documents(self) -> dict[str, str]:
         """Operator-owned source artifacts and the exact digest each was read at."""

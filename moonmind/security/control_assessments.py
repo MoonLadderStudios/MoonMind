@@ -492,6 +492,8 @@ def _render_readiness(readiness, clean) -> list[str]:
     lines = [
         f"Readiness: {readiness['readiness']}. Certification and jurisdiction approval: not performed.",
         f"Applicability: {applicability['status']}. {clean(applicability['reason'])}",
+        # A registered behavior's own headline, such as the draft SoA version.
+        *(clean(value) for value in readiness.get("headline", [])),
     ]
     for module in readiness.get("modules", []):
         status = (

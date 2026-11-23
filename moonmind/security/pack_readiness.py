@@ -10,10 +10,11 @@ it never certifies a product or approves it for a jurisdiction.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import date
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from datetime import date, datetime
 from functools import lru_cache
+from types import MappingProxyType
 from typing import Annotated, Any, Literal
 
 from pydantic import AfterValidator, BaseModel, Field, create_model
@@ -121,9 +122,59 @@ class PackEvidence(FrameworkEvidence):
     notification_ref: Text | None = None
 
 
+@dataclass
+class ReadinessState:
+    """One pack's validated inputs, shared by its behavior hooks."""
+
+    pack: Any
+    profile: dict
+    inputs: BaseModel
+    period: EvidencePeriod
+    choices: dict
+    records: list
+    audit: BaseModel | None
+    systems: list[str]
+    availability: Mapping[str, str | None]
+    now: datetime | None
+    previous: dict | None
+    previous_ref: str | None
+    requests: list[dict]
+
+
+@dataclass(frozen=True)
+class RequirementInput:
+    requirement: Any
+    choice: DeclaredRequirementChoice
+    systems: list[str]
+    period: EvidencePeriod
+    state: ReadinessState
+
+
+@dataclass
+class RequirementOutcome:
+    """A behavior's complete judgement for one requirement."""
+
+    status: str
+    reason: str
+    evidence_refs: list[str] = field(default_factory=list)
+    requests: list[dict] = field(default_factory=list)
+    # Behavior-specific basis retained in the report, such as reviews or methods.
+    details: dict = field(default_factory=dict)
+
+
 @dataclass(frozen=True)
 class PackBehavior:
-    """Registered judgement a pack cannot express as data. Every hook is optional."""
+    """Registered judgement a pack cannot express as data. Every hook is optional.
+
+    ``profile_types`` names the record shapes of the pack's ``structured``
+    profile fields. ``evaluate_requirement`` owns one requirement's conclusion
+    when the pack's judgement is more than declared evidence matching; scope,
+    period and choice validation stay shared. ``scope_requests`` raises
+    requests about the recorded scope before requirement requests, and
+    ``context`` adds per-framework context and may append later requests.
+    ``saved_inputs`` maps a saved ``framework.packId`` request's leftover
+    inputs onto this pack's profile and choices at the request boundary.
+    """
 
     module_applicability: Callable | None = None
     # Record fields this pack's evidence must carry to be a valid record.
@@ -134,6 +185,16 @@ class PackBehavior:
     evidence_refs: Callable = lambda record: ()
     record_refs: Callable = lambda records: ()
     context: Callable | None = None
+    profile_types: Mapping[str, Any] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    validate_profile: Callable | None = None
+    scoped_systems: Callable | None = None
+    scope_requests: Callable | None = None
+    evaluate_requirement: Callable | None = None
+    # Current documentary revisions the behavior reviews outside requirement choices.
+    organisational_refs: Callable = lambda inputs: ()
+    saved_inputs: Callable | None = None
 
 
 DEFAULT_BEHAVIOR = PackBehavior()
@@ -166,8 +227,11 @@ def _enum(choices):
     return extra
 
 
+Amount = Annotated[float, Field(ge=0, allow_inf_nan=False)]
+
+
 @lru_cache(maxsize=32)
-def _profile_model(profile_json: str) -> type[FrameworkContract]:
+def _profile_model(profile_json: str, behavior: str | None) -> type[FrameworkContract]:
     fields: dict[str, Any] = {}
     for field in json.loads(profile_json)["fields"]:
         name = to_snake(field["name"])
@@ -177,6 +241,19 @@ def _profile_model(profile_json: str) -> type[FrameworkContract]:
             fields[name] = (Text | None, Field(default=None, **options))
         elif kind == "boolean":
             fields[name] = (bool | None, Field(default=None, **options))
+        elif kind == "number":
+            fields[name] = (Amount | None, Field(default=None, **options))
+        elif kind == "date":
+            fields[name] = (date | None, Field(default=None, **options))
+        elif kind == "structured":
+            from moonmind.security.framework_registry import registered_behavior
+
+            types = registered_behavior(behavior).profile_types
+            if field["model"] not in types:
+                raise ValueError(
+                    f"profile field {field['name']} names an unregistered model"
+                )
+            fields[name] = (types[field["model"]] | None, Field(default=None, **options))
         elif kind == "choice":
             fields[name] = (
                 Literal[tuple(field["choices"])] | None,
@@ -206,7 +283,7 @@ def profile_model(pack) -> type[FrameworkContract]:
     """The typed profile a pack declares, as one validating model."""
     if pack.profile is None:
         raise ValueError("framework pack declares no profile inputs")
-    return _profile_model(pack.profile.model_dump_json(by_alias=True))
+    return _profile_model(pack.profile.model_dump_json(by_alias=True), pack.behavior)
 
 
 def profile_schema(pack) -> dict:
@@ -316,11 +393,18 @@ def evaluate_readiness(
     invalid_refs: list[str] = (),
     admitted_assets: list[str],
     shared_requirement_ids: frozenset[str] = frozenset(),
+    availability: Mapping[str, str | None] | None = None,
+    now: datetime | None = None,
+    previous: dict | None = None,
+    previous_ref: str | None = None,
 ) -> Readiness:
     """Requirement readiness from profile inputs and evidence collected once.
 
     ``shared_requirement_ids`` are the other selected packs' requirements: a
-    shared record may name them, and this pack ignores them.
+    shared record may name them, and this pack ignores them. ``availability``
+    maps each current documentary revision to ``None`` when it was readable, or
+    to the reason it was not. ``previous`` is this pack's retained metadata in
+    the selected previous assessment ``previous_ref``, when it has one.
     """
     model = profile_model(pack)
     inputs = model.model_validate(profile or {})
@@ -335,15 +419,35 @@ def evaluate_readiness(
     if unknown:
         raise ValueError("Unknown framework requirement: " + ", ".join(sorted(unknown)))
     systems_field = pack.profile.field("systems")
-    systems = values[systems_field.name] if systems_field else list(admitted_assets)
+    if behavior.scoped_systems:
+        systems = list(behavior.scoped_systems(inputs))
+    else:
+        systems = values[systems_field.name] if systems_field else list(admitted_assets)
     if not set(systems) <= set(admitted_assets):
         raise ValueError("Framework systems exceed admitted assessment scope")
+    requests: list[dict] = []
+    state = ReadinessState(
+        pack=pack,
+        profile=values,
+        inputs=inputs,
+        period=period,
+        choices=choices,
+        records=records,
+        audit=audit,
+        systems=systems,
+        availability=MappingProxyType(dict(availability or {})),
+        now=now,
+        previous=previous,
+        previous_ref=previous_ref,
+        requests=requests,
+    )
+    if behavior.validate_profile:
+        behavior.validate_profile(pack, state)
     if audit is not None and behavior.validate_records:
         behavior.validate_records(pack, audit, values)
     source = {"source": pack.profile.request_source}
     if pack.profile.request_section:
         source["section"] = pack.profile.request_section
-    requests: list[dict] = []
     missing = {
         field.name
         for field in pack.profile.fields
@@ -353,6 +457,8 @@ def evaluate_readiness(
     for field in pack.profile.fields:
         if field.name in missing:
             requests.append({"id": field.request_id, "prompt": field.prompt, **source})
+    if behavior.scope_requests:
+        requests.extend(behavior.scope_requests(pack, state))
 
     jurisdiction_field = pack.profile.field("jurisdiction_basis")
     basis = (
@@ -402,102 +508,35 @@ def evaluate_readiness(
         if not set(selected) <= set(systems):
             raise ValueError("Requirement systems exceed assessed scope")
         selected_period = choice.period or period
-        cited = requirement.sources[0] if requirement.sources else None
-        scoped = {
-            "requirementId": requirement.id,
-            "systems": selected,
-            "period": selected_period.model_dump(mode="json"),
-        }
-        cite = (
-            {"source": cited.url or cited.artifact_ref, "section": cited.section}
-            if cited
-            else source
-        )
-        module = by_module.get(requirement.module)
-        if module and "status" in module:
-            applicability, reason = module["status"], module["reason"]
-            if applicability == "incomplete":
-                applicability = "applicability_missing"
+        details: dict = {}
+        if behavior.evaluate_requirement:
+            outcome = behavior.evaluate_requirement(
+                pack,
+                RequirementInput(
+                    requirement=requirement,
+                    choice=choice,
+                    systems=selected,
+                    period=selected_period,
+                    state=state,
+                ),
+            )
+            status = applicability = outcome.status
+            reason, matched = outcome.reason, list(outcome.evidence_refs)
+            requests.extend(outcome.requests)
+            details = outcome.details
         else:
-            applicability, reason = _rule_applicability(
-                pack, requirement, values, missing
-            )
-        typed = behavior.evaluate_evidence is None
-        jurisdiction = basis.jurisdiction if basis else None
-        # Typed evidence references stay visible on every row, applicable or not.
-        matched: list[str] = (
-            [
-                r.artifact_ref
-                for r in records
-                if accepts_typed(
-                    r, requirement, selected, selected_period, pack, jurisdiction
-                )
-            ]
-            if typed
-            else []
-        )
-        status = applicability
-        if applicability == "Unverified":
-            requests.append(
-                {
-                    "id": "applicability." + requirement.id,
-                    "prompt": reason,
-                    **cite,
-                    **scoped,
-                }
-            )
-        elif applicability == "applicable" and choice.not_applicable_reason:
-            if pack.exclusion_review:
-                status = "exclusion_for_review"
-                requests.append(
-                    {
-                        "id": "requirement." + requirement.id,
-                        "prompt": EXCLUSION_REVIEW_PROMPT,
-                        **cite,
-                        **scoped,
-                    }
-                )
-            else:
-                status, reason = "excluded", choice.not_applicable_reason
-        elif applicability == "applicable":
-            if typed:
-                gap = not matched
-            else:
-                matched, gaps = behavior.evaluate_evidence(
-                    pack, requirement, selected, selected_period, records, audit
-                )
-                requests.extend(
-                    {"id": key, "prompt": prompt, **cite, **scoped}
-                    for key, prompt in gaps
-                )
-                gap = bool(gaps)
-            status = (
-                (
-                    "partner_owned"
-                    if choice.responsible_entity == "partner"
-                    else "incomplete"
-                )
-                if gap
-                else "evidence_recorded"
-            )
-        if status in UNRESOLVED and (typed or status == "applicability_missing"):
-            requests.append(
-                {
-                    "id": requirement.id,
-                    "prompt": requirement.evidence_prompt,
-                    **source,
-                    **scoped,
-                    "evidenceTypes": requirement.evidence_types,
-                    "responsibleEntity": choice.responsible_entity,
-                }
-            )
-        if choice.responsible_entity == "partner" and not choice.responsibility_reason:
-            requests.append(
-                {
-                    "id": "responsibility." + requirement.id,
-                    "prompt": PARTNER_PROMPT,
-                    "requirementId": requirement.id,
-                }
+            status, applicability, reason, matched = _declared_requirement(
+                pack,
+                behavior,
+                requirement,
+                choice,
+                selected,
+                selected_period,
+                state,
+                by_module,
+                missing,
+                basis,
+                source,
             )
         rows[requirement.id] = {
             "status": status,
@@ -509,6 +548,7 @@ def evaluate_readiness(
             "responsibleEntity": choice.responsible_entity,
             "responsibilityReason": choice.responsibility_reason,
             "exclusionReason": choice.not_applicable_reason,
+            "details": details,
         }
     for ref in invalid_refs:
         requests.append(
@@ -564,11 +604,129 @@ def evaluate_readiness(
         "jurisdictionApproval": "not_performed",
         "limitations": list(pack.limitations),
     }
+    if any(row["details"] for row in rows.values()):
+        context["requirementDetails"] = {
+            key: row["details"] for key, row in rows.items() if row["details"]
+        }
     if basis is not None:
         context["jurisdictionBasis"] = basis.model_dump(mode="json", by_alias=True)
     if behavior.context:
-        context.update(behavior.context(pack, rows, audit))
+        context.update(behavior.context(pack, rows, audit, state))
+    if requests:
+        # A behavior may append requests about records after the requirements.
+        context["readiness"] = "incomplete"
     return Readiness(rows=rows, context=context)
+
+
+def _declared_requirement(
+    pack,
+    behavior,
+    requirement,
+    choice,
+    selected,
+    selected_period,
+    state,
+    by_module,
+    missing,
+    basis,
+    source,
+):
+    """Profile-rule applicability and declared evidence for one requirement."""
+    requests = state.requests
+    records, audit = state.records, state.audit
+    cited = requirement.sources[0] if requirement.sources else None
+    scoped = {
+        "requirementId": requirement.id,
+        "systems": selected,
+        "period": selected_period.model_dump(mode="json"),
+    }
+    cite = (
+        {"source": cited.url or cited.artifact_ref, "section": cited.section}
+        if cited
+        else source
+    )
+    module = by_module.get(requirement.module)
+    if module and "status" in module:
+        applicability, reason = module["status"], module["reason"]
+        if applicability == "incomplete":
+            applicability = "applicability_missing"
+    else:
+        applicability, reason = _rule_applicability(
+            pack, requirement, state.profile, missing
+        )
+    typed = behavior.evaluate_evidence is None
+    jurisdiction = basis.jurisdiction if basis else None
+    # Typed evidence references stay visible on every row, applicable or not.
+    matched: list[str] = (
+        [
+            r.artifact_ref
+            for r in records
+            if accepts_typed(
+                r, requirement, selected, selected_period, pack, jurisdiction
+            )
+        ]
+        if typed
+        else []
+    )
+    status = applicability
+    if applicability == "Unverified":
+        requests.append(
+            {
+                "id": "applicability." + requirement.id,
+                "prompt": reason,
+                **cite,
+                **scoped,
+            }
+        )
+    elif applicability == "applicable" and choice.not_applicable_reason:
+        if pack.exclusion_review:
+            status = "exclusion_for_review"
+            requests.append(
+                {
+                    "id": "requirement." + requirement.id,
+                    "prompt": EXCLUSION_REVIEW_PROMPT,
+                    **cite,
+                    **scoped,
+                }
+            )
+        else:
+            status, reason = "excluded", choice.not_applicable_reason
+    elif applicability == "applicable":
+        if typed:
+            gap = not matched
+        else:
+            matched, gaps = behavior.evaluate_evidence(
+                pack, requirement, selected, selected_period, records, audit
+            )
+            requests.extend(
+                {"id": key, "prompt": prompt, **cite, **scoped} for key, prompt in gaps
+            )
+            gap = bool(gaps)
+        status = (
+            ("partner_owned" if choice.responsible_entity == "partner" else "incomplete")
+            if gap
+            else "evidence_recorded"
+        )
+    if status in UNRESOLVED and (typed or status == "applicability_missing"):
+        requests.append(
+            {
+                "id": requirement.id,
+                "prompt": requirement.evidence_prompt,
+                **source,
+                **scoped,
+                "evidenceTypes": requirement.evidence_types,
+                "responsibleEntity": choice.responsible_entity,
+            }
+        )
+    if choice.responsible_entity == "partner" and not choice.responsibility_reason:
+        requests.append(
+            {
+                "id": "responsibility." + requirement.id,
+                "prompt": PARTNER_PROMPT,
+                "requirementId": requirement.id,
+            }
+        )
+    return status, applicability, reason, matched
 
 
 def input_refs(pack, behavior: PackBehavior, *, profile, records, audit) -> list[str]:

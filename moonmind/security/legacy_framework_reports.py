@@ -1,33 +1,42 @@
-"""Temporary reader for retained gaming readiness reports.
+"""Temporary reader for retained pre-unification readiness reports.
 
-GLI-19/GSF and New Jersey DGE used to write their own report schemas
-(``gli-readiness/v1`` and ``framework-audit-preparation/v1``). Retained reports
-stay immutable. This reader lets a new assessment use one as its
-``previousAssessmentRef``: it compares matching requirement IDs and marks
-everything else Unverified, and it summarises the retained report for the new
-assessment's Markdown export.
+Before every built-in pack used the declared pack contract, GLI-19/GSF, New
+Jersey DGE, ISO/IEC 27001, SOC 2 and UKGC RTS wrote their own report schemas.
+Retained reports stay immutable. This reader lets a new assessment use one as
+its ``previousAssessmentRef``: it compares matching requirement IDs, marks
+everything else Unverified and summarises the retained report for the new
+assessment's Markdown export. An ISO/IEC 27001 report also keeps its Statement
+of Applicability and management-system basis, so reassessment names the
+decisions and requirements to review.
 
 Consumers: ``AssessmentExecution.previous_framework_metadata`` (comparison),
 ``compare_pack_metadata`` (intelligence changes), ``compare_selected_frameworks``
 (the previous-report summary rendered in the new report) and the evidence
 export's schema check (``evidence_exports._validate_json``).
 
-Removal condition: delete this module when no retained report under either
-schema is still inside assessment retention, or when the issue that retires the
-legacy ``framework-pack/v1`` contract migrates those reports.
+Removal condition: no producer writes these schemas any more, so delete this
+module once no retained report under them is still inside assessment
+retention. Until then it is the only path that keeps those reports usable.
 """
 
 from __future__ import annotations
 
-# The UKGC RTS pack still writes framework-audit-preparation/v1 on its own
-# legacy path, so only these two pack IDs are read here.
+# The UKGC and NJ reports share framework-audit-preparation/v1; the pack ID
+# tells them apart.
 LEGACY_SCHEMAS = {
     ("gli-readiness/v1", "gli-19-readiness"),
     ("framework-audit-preparation/v1", "nj-dge-readiness"),
+    ("framework-audit-preparation/v1", "ukgc-rts-security"),
+    ("iso-27001-readiness/v1", "iso-27001-readiness"),
+    ("soc2-readiness/v1", "soc2-readiness"),
 }
+UNRESOLVED = {"incomplete", "partner_owned", "applicability_missing", "Unverified"}
+# Legacy status words for the same conclusions, so a renamed status is not
+# reported as a readiness change.
+STATUS = {"evidence_reviewed": "evidence_recorded", "unassessed": "incomplete"}
 
 
-def legacy_gaming_report(document) -> bool:
+def legacy_readiness_report(document) -> bool:
     return (
         isinstance(document, dict)
         and isinstance(document.get("pack"), dict)
@@ -36,10 +45,26 @@ def legacy_gaming_report(document) -> bool:
     )
 
 
+def _profile(document) -> dict | None:
+    """Saved system inputs in the installed pack's profile shape, when possible."""
+    system = document.get("systemInputs")
+    if not isinstance(system, dict):
+        return system
+    from moonmind.security.framework_registry import installed_pack
+    from moonmind.security.frameworks import saved_profile_and_choices
+
+    try:
+        pack = installed_pack(document["pack"]["id"])[1]
+        profile, _ = saved_profile_and_choices(pack, system, {})
+    except ValueError:
+        return system
+    return profile
+
+
 def legacy_pack_metadata(document) -> list[dict]:
     """Comparable identity of a retained report; raises ValueError when malformed."""
-    if not legacy_gaming_report(document):
-        raise ValueError("not a retained gaming readiness report")
+    if not legacy_readiness_report(document):
+        raise ValueError("not a retained readiness report")
     pack = document["pack"]
     rows = document.get("requirements")
     if not isinstance(rows, list) or not all(
@@ -52,27 +77,45 @@ def legacy_pack_metadata(document) -> list[dict]:
     edition = pack.get("edition")
     if not isinstance(edition, str):
         raise ValueError("retained report edition is malformed")
+    statuses = {row["id"]: STATUS.get(row["status"], row["status"]) for row in rows}
+    readiness = {
+        "readiness": (
+            "prepared"
+            if document.get("readiness") == "evidence_reviewed"
+            else document.get("readiness")
+        ),
+        "profile": _profile(document),
+        "period": document.get("period"),
+        "requirementStatuses": statuses,
+        "unresolvedRequirements": [
+            key for key, status in statuses.items() if status in UNRESOLVED
+        ],
+    }
+    soa = document.get("statementOfApplicability")
+    if pack["id"] == "iso-27001-readiness" and isinstance(soa, dict):
+        readiness["statementOfApplicability"] = soa
+        readiness["requirementBasis"] = {
+            row["id"]: {
+                "systems": sorted(set(row.get("systems") or [])),
+                **{
+                    key: row.get(key)
+                    for key in (
+                        "period",
+                        "responsibleEntity",
+                        "responsibilityReason",
+                        "limitations",
+                    )
+                },
+            }
+            for row in rows
+            if row.get("category") == "management_system"
+        }
     return [
         {
             "id": pack["id"],
             "edition": edition,
             "legacySchema": document["schemaVersion"],
-            "readiness": {
-                "readiness": document.get("readiness"),
-                "profile": document.get("systemInputs"),
-                "requirementStatuses": {row["id"]: row["status"] for row in rows},
-                "unresolvedRequirements": [
-                    row["id"]
-                    for row in rows
-                    if row["status"]
-                    in {
-                        "incomplete",
-                        "partner_owned",
-                        "applicability_missing",
-                        "Unverified",
-                    }
-                ],
-            },
+            "readiness": readiness,
         }
     ]
 

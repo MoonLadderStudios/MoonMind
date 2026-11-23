@@ -1,4 +1,8 @@
-"""UKGC RTS readiness behaviors for MoonLadderStudios/MoonMind#5197."""
+"""UKGC RTS security-audit preparation on the shared pack evaluator.
+
+Requirement-level equivalence with the retired framework-pack/v1 evaluator is in
+``test_legacy_readiness_equivalence.py``.
+"""
 
 import copy
 import json
@@ -8,8 +12,12 @@ import pytest
 from pydantic import ValidationError
 
 from moonmind.security.assessments import AssessmentRequest
+from moonmind.security.framework_registry import installed_pack, pack_behavior
+from moonmind.security.frameworks import EvidencePeriod, normalize_installed_framework
+from moonmind.security.pack_readiness import evaluate_readiness, parse_evidence
 
 FIXTURE = Path(__file__).resolve().parents[2] / "fixtures/security/ukgc_rts.json"
+PACK_ID = "ukgc-rts-security"
 
 
 def fixture():
@@ -28,30 +36,43 @@ def request_payload():
 
 
 def evaluate(data=None):
-    from moonmind.security.frameworks import FrameworkAssessmentInput
-    from moonmind.security.ukgc_rts import prepare_audit
-
     data = data or fixture()
-    return prepare_audit(
-        FrameworkAssessmentInput.model_validate(data["framework"]),
-        evidence=[
-            dict(row, artifactRef=f"art_evidence_{i}")
+    [chosen] = normalize_installed_framework({"framework": data["framework"]})[
+        "frameworkPacks"
+    ]
+    pack = installed_pack(PACK_ID)[1]
+    behavior = pack_behavior(pack)
+    return evaluate_readiness(
+        pack,
+        behavior,
+        profile=chosen["profile"],
+        period=EvidencePeriod.model_validate(chosen["period"]),
+        choices=chosen.get("requirementChoices", {}),
+        records=[
+            parse_evidence(behavior, row, f"art_evidence_{i}")
             for i, row in enumerate(data["evidence"])
         ],
-        audit=data["audit"],
+        audit=(
+            behavior.records_model.model_validate(data["audit"])
+            if data["audit"]
+            else None
+        ),
+        admitted_assets=["casino", "rng"],
     )
 
 
-def test_framework_is_admitted_through_shared_assessment():
+def test_saved_framework_is_admitted_as_the_installed_pack():
     request = AssessmentRequest.model_validate(request_payload())
-    assert request.framework.pack_id == "ukgc-rts-security"
+    assert request.framework is None
+    [selection] = request.selected_packs
+    pack = installed_pack(PACK_ID)[1]
+    assert (selection.pack_id, selection.edition) == (PACK_ID, pack.edition)
+    assert selection.profile["operatorName"] == "Synthetic Casino"
     assert not request.tools
 
 
 def test_published_control_selection():
-    from moonmind.security.frameworks import FrameworkPack, load_framework_pack
-
-    pack = load_framework_pack("ukgc-rts-security")
+    pack = installed_pack(PACK_ID)[1]
     assert [r.id for r in pack.requirements] == fixture()["controlIds"]
     assert len(pack.requirements) == 44
     assert {r.category for r in pack.requirements} == {
@@ -60,135 +81,89 @@ def test_published_control_selection():
         "physical",
         "technological",
     }
-    assert pack.edition == "ISO/IEC 27001:2022"
+    assert pack.edition == "ISO-IEC-27001-2022"
     assert pack.source.url.endswith("rts-security-requirements")
-    assert FrameworkPack.model_validate_json(pack.model_dump_json()) == pack
+    assert all(
+        r.required_evidence_methods == ["enquiry", "evidence", "observation"]
+        for r in pack.requirements
+    )
     data = fixture()
     data["framework"]["requirementChoices"]["8.28"] = {"systems": ["casino"]}
     with pytest.raises(ValueError, match="8.28"):
         evaluate(data)
 
 
-@pytest.mark.parametrize(
-    "licence",
-    [
-        "remote_casino",
-        "remote_betting_host_virtual",
-        "remote_betting_host_real",
-        "remote_bingo",
-        "remote_pool_betting",
-        "remote_betting_intermediary",
-        "remote_general_betting",
-        "remote_game_host_bingo",
-        "remote_game_host_casino",
-    ],
-)
-def test_licence_and_critical_system_applicability(licence):
+def test_unsupported_saved_licence_class_stays_an_explicit_gap():
     data = fixture()
-    data["framework"]["systemInputs"]["licenceClass"] = licence
-    report = evaluate(data)
-    assert report["applicability"]["annualAudit"] == "applicable"
-    assert len(report["systemInputs"]["criticalSystems"]) == 5
-    assert report["systemInputs"]["thirdParties"][0]["responsibilities"]
-
-
-@pytest.mark.parametrize(
-    ("licence", "sales", "expected"),
-    [
-        ("software_supplier", None, "not_required"),
-        ("telephone_only", None, "not_required"),
-        ("trading_room", None, "not_required"),
-        ("unknown", None, "unsupported"),
-        ("remote_lottery", None, "incomplete"),
-        ("remote_lottery", 250000, "not_required"),
-        ("remote_lottery", 250001, "applicable"),
-        ("remote_external_lottery_manager", 250001, "applicable"),
-    ],
-)
-def test_annual_audit_licence_limits(licence, sales, expected):
-    data = fixture()
-    data["framework"]["systemInputs"].update(
-        licenceClass=licence, annualLotterySalesGbp=sales
-    )
-    assert evaluate(data)["applicability"]["annualAudit"] == expected
-
-
-def test_missing_system_category_stays_incomplete():
-    data = fixture()
-    data["framework"]["systemInputs"]["criticalSystems"].pop()
-    report = evaluate(data)
-    assert report["applicability"]["scope"] == "incomplete"
-    assert any("communications" in r["prompt"] for r in report["evidenceRequests"])
-
-
-def test_reused_evidence_does_not_overclaim_coverage():
-    data = fixture()
-    certificate = copy.deepcopy(data["evidence"][1])
-    certificate.update(kind="iso_certificate", requirementIds=["8.29"])
-    data["evidence"] = [certificate, dict(certificate, kind="technical_assessment")]
-    report = evaluate(data)
-    assert report["readiness"] == "incomplete"
-    assert all(r["status"] == "incomplete" for r in report["requirements"])
-    assert len(report["evidenceRequests"]) >= 44
-    assert report["evidence"][0]["provenance"]["sourceRef"] == "fixture:evidence"
-    assert any("observation" in r["prompt"] for r in report["evidenceRequests"])
-    data = fixture()
-    for row in data["evidence"]:
-        row.update(
-            kind="external_audit", period={"start": "2025-01-01", "end": "2025-12-31"}
-        )
-    assert evaluate(data)["readiness"] == "incomplete"
-    for row in data["evidence"]:
-        row["reliance"] = {
-            "reviewedBy": "Synthetic auditor",
-            "reason": "Recent external work reviewed against current scope",
-            "reviewRef": "prior-review",
-            "validFor": data["framework"]["period"],
-        }
-    assert evaluate(data)["readiness"] == "prepared"
-    data["evidence"][0]["provenance"]["standard"] = "unspecified"
-    assert evaluate(data)["readiness"] == "incomplete"
-    data["evidence"][0]["provenance"]["standard"] = "Equivalent external standard"
-    data["evidence"][0]["reliance"][
-        "equivalenceReason"
-    ] = "Auditor reviewed the mapping to the selected 2022 RTS elements"
-    assert evaluate(data)["readiness"] == "prepared"
+    data["framework"]["systemInputs"]["licenceClass"] = "retired_class"
+    result = evaluate(data)
+    assert result.context["auditApplicability"]["annualAudit"] == "unsupported"
+    assert any(r["id"] == "licence" for r in result.context["evidenceRequests"])
 
 
 def test_audit_records_schedule_and_reporting_conditions():
-    report = evaluate()
-    assert report["schedule"]["firstAuditTarget"] == "2025-07-01"
-    assert report["schedule"]["annualAuditTarget"] == "2026-12-31"
-    assert report["schedule"]["effectiveDueOn"] == "2026-12-31"
-    assert report["reportingConditions"]["requestedReportWithinDays"] == 7
-    assert report["reportingConditions"]["majorNonconformity"]
-    assert report["audit"]["findings"][0]["managementResponse"] == "Add test sample"
+    context = evaluate().context
+    assert context["readiness"] == "prepared"
+    assert context["schedule"]["firstAuditTarget"] == "2025-07-01"
+    assert context["schedule"]["annualAuditTarget"] == "2026-12-31"
+    assert context["reportingConditions"]["submissionPerformed"] is False
+    assert context["audit"]["findings"][0]["managementResponse"] == "Add test sample"
+    assert context["externalAudit"]["status"] == "Unverified"
     data = fixture()
     del data["audit"]["auditor"]["independenceRef"]
     data["evidence"] = [r for r in data["evidence"] if r["method"] != "observation"]
-    report = evaluate(data)
-    assert report["readiness"] == "incomplete"
-    assert any(r["id"] == "auditor.independence" for r in report["evidenceRequests"])
-    assert any("observation" in r["prompt"] for r in report["evidenceRequests"])
+    context = evaluate(data).context
+    assert context["readiness"] == "incomplete"
+    ids = [r["id"] for r in context["evidenceRequests"]]
+    assert "auditor.independence" in ids
+    assert any(
+        "observation" in r["prompt"] for r in context["evidenceRequests"]
+    )
 
 
-def test_audit_preparation_export():
-    from moonmind.security.ukgc_rts import render_audit_preparation
+def test_independence_statement_is_a_mandatory_audit_reference():
+    from moonmind.security.pack_readiness import input_refs
 
-    report = evaluate()
-    assert report["readiness"] == "prepared"
-    assert len(report["requirements"]) == 44
-    assert {r["status"] for r in report["requirements"]} == {"evidence_recorded"}
-    assert report["externalAudit"]["status"] == "Unverified"
-    text = render_audit_preparation(report)
+    pack = installed_pack(PACK_ID)[1]
+    behavior = pack_behavior(pack)
+    audit = behavior.records_model.model_validate(fixture()["audit"])
+    assert "independence" in input_refs(
+        pack, behavior, profile={}, records=[], audit=audit
+    )
+
+
+def test_report_preserves_scope_period_exclusion_and_external_boundaries():
+    from moonmind.security.control_assessments import _render_readiness
+    from moonmind.security.framework_packs import readiness_metadata
+
+    data = fixture()
+    data["framework"]["systemInputs"]["criticalSystems"][1]["systems"] = ["rng"]
+    data["framework"]["requirementChoices"] = {
+        "5.23": {
+            "systems": ["casino"],
+            "period": {"start": "2025-04-01", "end": "2025-10-31"},
+            "notApplicableReason": "No cloud services within the admitted scope",
+        },
+    }
+    result = evaluate(data)
+    row = result.rows["5.23"]
+    assert row["status"] == "exclusion_for_review"
+    assert row["systems"] == ["casino"]
+    assert row["exclusionReason"] == "No cloud services within the admitted scope"
+    pack = installed_pack(PACK_ID)[1]
+    text = "\n".join(
+        _render_readiness(
+            json.loads(json.dumps(readiness_metadata(pack, result), default=str)),
+            str,
+        )
+    )
     for content in (
         "Synthetic Casino",
         "Synthetic auditor",
-        "8.29",
         "Add test sample",
         "customer_information",
-        "observation",
-        "Unverified",
+        "Independent audit and private inspection: Unverified",
+        "No regulator submission",
     ):
         assert content in text
 
@@ -199,11 +174,7 @@ def test_requirement_scope_and_period_do_not_widen_evidence():
         "systems": ["casino"],
         "period": {"start": "2025-01-01", "end": "2025-12-31"},
     }
-    report = evaluate(data)
-    assert (
-        next(r for r in report["requirements"] if r["id"] == "8.29")["status"]
-        == "incomplete"
-    )
+    assert evaluate(data).rows["8.29"]["status"] == "incomplete"
     data["framework"]["requirementChoices"]["8.29"] = {"systems": ["outside"]}
     with pytest.raises(ValueError, match="scope"):
         evaluate(data)
@@ -214,59 +185,11 @@ def test_requirement_scope_and_period_do_not_widen_evidence():
         )
 
 
-@pytest.mark.parametrize("missing_method", [None, "enquiry", "evidence", "observation"])
-def test_requirement_combines_evidence_per_system_and_method(missing_method):
+def test_reused_certificates_do_not_overclaim_coverage():
     data = fixture()
-    data["framework"]["systemInputs"]["criticalSystems"][1]["systems"] = ["rng"]
-    data["framework"]["requirementChoices"]["8.29"] = {"systems": ["casino", "rng"]}
-    data["evidence"] = [
-        dict(row, systems=[system])
-        for system in ("casino", "rng")
-        for row in data["evidence"]
-        if system != "rng" or row["method"] != missing_method
-    ]
-
-    report = evaluate(data)
-    result = next(row for row in report["requirements"] if row["id"] == "8.29")
-    assert result["status"] == ("incomplete" if missing_method else "evidence_recorded")
-    assert result["methods"] == sorted(
-        {"enquiry", "evidence", "observation"} - {missing_method}
-    )
-    assert result["evidenceRefs"] == [
-        f"art_evidence_{i}" for i in range(len(data["evidence"]))
-    ]
-    requests = [
-        row for row in report["evidenceRequests"] if row.get("requirementId") == "8.29"
-    ]
-    if missing_method:
-        assert len(requests) == 1
-        assert requests[0]["methods"] == [missing_method]
-    else:
-        assert not requests
-        assert report["readiness"] == "prepared"
-
-
-def test_markdown_preserves_each_requirements_scope_period_and_exclusion():
-    from moonmind.security.ukgc_rts import render_audit_preparation
-
-    data = fixture()
-    data["framework"]["systemInputs"]["criticalSystems"][1]["systems"] = ["rng"]
-    data["framework"]["requirementChoices"] = {
-        "5.23": {
-            "systems": ["casino"],
-            "period": {"start": "2025-04-01", "end": "2025-10-31"},
-            "notApplicableReason": "No cloud services within the admitted scope",
-        },
-        "8.29": {
-            "systems": ["rng"],
-            "period": {"start": "2026-02-01", "end": "2026-11-30"},
-        },
-    }
-    text = render_audit_preparation(evaluate(data))
-    excluded = next(line for line in text.splitlines() if line.startswith("- 5.23 "))
-    assert "systems: casino" in excluded
-    assert "2025-04-01" in excluded and "2025-10-31" in excluded
-    assert "No cloud services within the admitted scope" in excluded
-    testing = next(line for line in text.splitlines() if line.startswith("- 8.29 "))
-    assert "systems: rng" in testing
-    assert "2026-02-01" in testing and "2026-11-30" in testing
+    certificate = copy.deepcopy(data["evidence"][1])
+    certificate.update(kind="iso_certificate", requirementIds=["8.29"])
+    data["evidence"] = [certificate, dict(certificate, kind="technical_assessment")]
+    result = evaluate(data)
+    assert {row["status"] for row in result.rows.values()} == {"incomplete"}
+    assert len(result.context["evidenceRequests"]) >= 44

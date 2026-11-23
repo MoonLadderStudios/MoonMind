@@ -180,12 +180,12 @@ def _validate_json(payload, *, hint: str):
         models[schema].model_validate(payload)
         return schema
     from moonmind.security.legacy_framework_reports import (
-        legacy_gaming_report,
+        legacy_readiness_report,
         legacy_pack_metadata,
     )
 
-    if legacy_gaming_report(payload):
-        # Retained pre-unification GLI/NJ reports stay exportable.
+    if legacy_readiness_report(payload):
+        # Retained pre-unification readiness reports stay exportable.
         try:
             legacy_pack_metadata(payload)
         except ValueError:

@@ -1,0 +1,2942 @@
+{
+  "schemaVersion": "declared-framework-pack/v1",
+  "id": "iso-27001-readiness",
+  "edition": "2022+Amd1:2024",
+  "revision": "1",
+  "amendments": [
+    "Amd1:2024"
+  ],
+  "title": "ISO/IEC 27001 ISMS readiness",
+  "source": {
+    "url": "https://www.iso.org/standard/27001",
+    "section": "Clauses 4–10 and Annex A",
+    "reviewedOn": "2026-11-09"
+  },
+  "reviewedBy": "MoonMind maintainers",
+  "reviewedOn": "2026-11-09",
+  "publicationStatus": "published",
+  "publishedOn": "2022-10-25",
+  "effectiveFrom": "2022-10-25",
+  "provenance": "Original MoonMind readiness prompts for the ISO/IEC 27001:2022 management-system clauses and the 93 Annex A reference identifiers, with Amendment 1:2024 (published 2024-02-23, https://www.iso.org/standard/88435.html) adding climate considerations to 4.1 and 4.2. Annex A topic labels help locate each reference in a licensed copy; no standard text is reproduced. Statement of Applicability auditing guidance: https://committee.iso.org/files/live/sites/jtc1sc27/files/resources/ISO-IECJTC1-SC27-WG1_N3298_Auditing%20Practices%20Note%20-%20SoA.pdf",
+  "license": "Apache-2.0 for original MoonMind summaries. Referenced standards retain their own rights.",
+  "distribution": "redistributable",
+  "conclusions": "ISMS readiness and gaps. Certification requires an independent audit.",
+  "profile": {
+    "requestSource": "https://www.iso.org/standard/27001",
+    "requestSection": "4.1 to 4.3 and 6.1",
+    "fields": [
+      {
+        "name": "systems",
+        "type": "text_list",
+        "title": "ISMS systems",
+        "role": "systems"
+      },
+      {
+        "name": "scopeStatement",
+        "type": "text",
+        "required": true,
+        "requestId": "scope.scope_statement",
+        "prompt": "Record ISMS scope statement; context assertions remain unverified until reviewed."
+      },
+      {
+        "name": "context",
+        "type": "text",
+        "required": true,
+        "requestId": "scope.context",
+        "prompt": "Record ISMS context; context assertions remain unverified until reviewed."
+      },
+      {
+        "name": "interestedParties",
+        "type": "text_list",
+        "required": true,
+        "requestId": "scope.interested_parties",
+        "prompt": "Record ISMS interested parties; context assertions remain unverified until reviewed."
+      },
+      {
+        "name": "climateRelevance",
+        "type": "text",
+        "required": true,
+        "requestId": "scope.climate_relevance",
+        "prompt": "Record ISMS climate relevance; context assertions remain unverified until reviewed."
+      },
+      {
+        "name": "risks",
+        "type": "structured",
+        "model": "iso-27001.risks",
+        "required": true,
+        "requestId": "scope.risks",
+        "prompt": "Record ISMS risks; context assertions remain unverified until reviewed."
+      },
+      {
+        "name": "controls",
+        "type": "structured",
+        "model": "iso-27001.controls",
+        "title": "Annex A applicability decisions and additional controls"
+      }
+    ]
+  },
+  "behavior": "iso-27001-statement-of-applicability",
+  "externalClaims": [
+    {
+      "id": "certification",
+      "gap": "MoonMind prepares ISMS readiness evidence and a draft Statement of Applicability; it does not certify an ISMS.",
+      "verifiableBy": "Accredited certification body",
+      "nextStep": "Engage an accredited certification body for the stage 1 and stage 2 audits of the recorded ISMS scope."
+    },
+    {
+      "id": "organisational-operation",
+      "evidenceType": "organisational",
+      "gap": "Technical evidence and attributed documentary reviews do not independently verify that the ISMS operates as recorded.",
+      "verifiableBy": "Independent ISMS auditor sampling the organisation's records",
+      "nextStep": "Have an independent auditor sample the recorded management-system and Annex A evidence for the assessment period."
+    }
+  ],
+  "limitations": [
+    "Original readiness summaries are not the licensed standard. Consult the authorised edition for complete requirements.",
+    "SoA and generated policies are drafts. Technical evidence and attributed documentary reviews do not establish certification or independent verification of organisational operation."
+  ],
+  "requirements": [
+    {
+      "id": "4.1",
+      "title": "Business context and climate relevance",
+      "summary": "Retain scoped evidence for business context and climate relevance.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "4.1",
+          "reviewedOn": "2026-11-09"
+        },
+        {
+          "url": "https://www.iso.org/standard/88435.html",
+          "section": "4.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for business context and climate relevance, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "4.2",
+      "title": "Interested parties and relevant obligations, including climate-related needs",
+      "summary": "Retain scoped evidence for interested parties and relevant obligations, including climate-related needs.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "4.2",
+          "reviewedOn": "2026-11-09"
+        },
+        {
+          "url": "https://www.iso.org/standard/88435.html",
+          "section": "4.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for interested parties and relevant obligations, including climate-related needs, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "4.3",
+      "title": "ISMS boundaries, dependencies and scope rationale",
+      "summary": "Retain scoped evidence for isms boundaries, dependencies and scope rationale.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "4.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for isms boundaries, dependencies and scope rationale, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "4.4",
+      "title": "Operating security management processes",
+      "summary": "Retain scoped evidence for operating security management processes.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "4.4",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for operating security management processes, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "5.1",
+      "title": "Leadership decisions and resourcing",
+      "summary": "Retain scoped evidence for leadership decisions and resourcing.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "5.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for leadership decisions and resourcing, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "5.2",
+      "title": "Adopted security policy",
+      "summary": "Retain scoped evidence for adopted security policy.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "5.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for adopted security policy, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "5.3",
+      "title": "Assigned security accountabilities",
+      "summary": "Retain scoped evidence for assigned security accountabilities.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "5.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for assigned security accountabilities, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "6.1.1",
+      "title": "Management-system opportunities and uncertainty",
+      "summary": "Retain scoped evidence for management-system opportunities and uncertainty.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "6.1.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for management-system opportunities and uncertainty, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "6.1.2",
+      "title": "Repeatable risk assessment and acceptance criteria",
+      "summary": "Retain scoped evidence for repeatable risk assessment and acceptance criteria.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "6.1.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for repeatable risk assessment and acceptance criteria, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "6.1.3",
+      "title": "Risk treatment choices and justified applicability",
+      "summary": "Retain scoped evidence for risk treatment choices and justified applicability.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "6.1.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for risk treatment choices and justified applicability, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "6.2",
+      "title": "Measurable objectives and delivery responsibilities",
+      "summary": "Retain scoped evidence for measurable objectives and delivery responsibilities.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "6.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for measurable objectives and delivery responsibilities, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "6.3",
+      "title": "Planned changes to the management system",
+      "summary": "Retain scoped evidence for planned changes to the management system.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "6.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for planned changes to the management system, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "7.1",
+      "title": "Resources available for security operation",
+      "summary": "Retain scoped evidence for resources available for security operation.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "7.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for resources available for security operation, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "7.2",
+      "title": "Competence demonstrated for assigned duties",
+      "summary": "Retain scoped evidence for competence demonstrated for assigned duties.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "7.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for competence demonstrated for assigned duties, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "7.3",
+      "title": "Staff understanding of security responsibilities",
+      "summary": "Retain scoped evidence for staff understanding of security responsibilities.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "7.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for staff understanding of security responsibilities, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "7.4",
+      "title": "Security communications and audiences",
+      "summary": "Retain scoped evidence for security communications and audiences.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "7.4",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for security communications and audiences, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "7.5",
+      "title": "Controlled, available and retained management records",
+      "summary": "Retain scoped evidence for controlled, available and retained management records.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "7.5",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for controlled, available and retained management records, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "8.1",
+      "title": "Operational processes and outsourced dependencies",
+      "summary": "Retain scoped evidence for operational processes and outsourced dependencies.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "8.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for operational processes and outsourced dependencies, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "8.2",
+      "title": "Repeated and change-triggered risk assessments",
+      "summary": "Retain scoped evidence for repeated and change-triggered risk assessments.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "8.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for repeated and change-triggered risk assessments, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "8.3",
+      "title": "Executed treatment plans and retained outcomes",
+      "summary": "Retain scoped evidence for executed treatment plans and retained outcomes.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "8.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for executed treatment plans and retained outcomes, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "9.1",
+      "title": "Measured performance and evaluated effectiveness",
+      "summary": "Retain scoped evidence for measured performance and evaluated effectiveness.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "9.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for measured performance and evaluated effectiveness, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "9.2",
+      "title": "Completed independent internal-audit programme",
+      "summary": "Retain scoped evidence for completed independent internal-audit programme.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "9.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for completed independent internal-audit programme, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "9.3",
+      "title": "Management review decisions and tracked actions",
+      "summary": "Retain scoped evidence for management review decisions and tracked actions.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "9.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for management review decisions and tracked actions, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "10.1",
+      "title": "Demonstrated continuing ISMS improvement",
+      "summary": "Retain scoped evidence for demonstrated continuing isms improvement.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "10.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for demonstrated continuing isms improvement, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "10.2",
+      "title": "Corrected nonconformities and effectiveness follow-up",
+      "summary": "Retain scoped evidence for corrected nonconformities and effectiveness follow-up.",
+      "category": "management_system",
+      "module": "ISMS",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "10.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for corrected nonconformities and effectiveness follow-up, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.1",
+      "title": "Security direction",
+      "summary": "Retain scoped evidence for security direction.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for security direction, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.2",
+      "title": "Security accountability",
+      "summary": "Retain scoped evidence for security accountability.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for security accountability, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.3",
+      "title": "Conflicting duties",
+      "summary": "Retain scoped evidence for conflicting duties.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for conflicting duties, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.4",
+      "title": "Manager oversight",
+      "summary": "Retain scoped evidence for manager oversight.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.4",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for manager oversight, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.5",
+      "title": "Authority liaison",
+      "summary": "Retain scoped evidence for authority liaison.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.5",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for authority liaison, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.6",
+      "title": "Professional security networks",
+      "summary": "Retain scoped evidence for professional security networks.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.6",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for professional security networks, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.7",
+      "title": "Threat knowledge",
+      "summary": "Retain scoped evidence for threat knowledge.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.7",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for threat knowledge, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.8",
+      "title": "Project safeguards",
+      "summary": "Retain scoped evidence for project safeguards.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.8",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for project safeguards, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.9",
+      "title": "Information ownership",
+      "summary": "Retain scoped evidence for information ownership.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.9",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for information ownership, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.10",
+      "title": "Responsible asset use",
+      "summary": "Retain scoped evidence for responsible asset use.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.10",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for responsible asset use, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.11",
+      "title": "Asset return",
+      "summary": "Retain scoped evidence for asset return.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.11",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for asset return, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.12",
+      "title": "Information sensitivity",
+      "summary": "Retain scoped evidence for information sensitivity.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.12",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for information sensitivity, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.13",
+      "title": "Sensitivity labels",
+      "summary": "Retain scoped evidence for sensitivity labels.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.13",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for sensitivity labels, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.14",
+      "title": "Information exchange",
+      "summary": "Retain scoped evidence for information exchange.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.14",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for information exchange, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.15",
+      "title": "Access decisions",
+      "summary": "Retain scoped evidence for access decisions.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.15",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for access decisions, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.16",
+      "title": "Identity administration",
+      "summary": "Retain scoped evidence for identity administration.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.16",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for identity administration, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.17",
+      "title": "Authentication secrets",
+      "summary": "Retain scoped evidence for authentication secrets.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.17",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for authentication secrets, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.18",
+      "title": "Entitlement lifecycle",
+      "summary": "Retain scoped evidence for entitlement lifecycle.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.18",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for entitlement lifecycle, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.19",
+      "title": "Supplier exposure",
+      "summary": "Retain scoped evidence for supplier exposure.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.19",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for supplier exposure, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.20",
+      "title": "Supplier agreements",
+      "summary": "Retain scoped evidence for supplier agreements.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.20",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for supplier agreements, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.21",
+      "title": "Technology supply chains",
+      "summary": "Retain scoped evidence for technology supply chains.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.21",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for technology supply chains, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.22",
+      "title": "Supplier change oversight",
+      "summary": "Retain scoped evidence for supplier change oversight.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.22",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for supplier change oversight, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.23",
+      "title": "Cloud service lifecycle",
+      "summary": "Retain scoped evidence for cloud service lifecycle.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.23",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for cloud service lifecycle, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.24",
+      "title": "Incident preparation",
+      "summary": "Retain scoped evidence for incident preparation.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.24",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for incident preparation, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.25",
+      "title": "Event triage",
+      "summary": "Retain scoped evidence for event triage.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.25",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for event triage, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.26",
+      "title": "Incident handling",
+      "summary": "Retain scoped evidence for incident handling.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.26",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for incident handling, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.27",
+      "title": "Incident learning",
+      "summary": "Retain scoped evidence for incident learning.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.27",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for incident learning, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.28",
+      "title": "Preserved evidence",
+      "summary": "Retain scoped evidence for preserved evidence.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.28",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for preserved evidence, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.29",
+      "title": "Security during disruption",
+      "summary": "Retain scoped evidence for security during disruption.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.29",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for security during disruption, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.30",
+      "title": "Technology recovery readiness",
+      "summary": "Retain scoped evidence for technology recovery readiness.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.30",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for technology recovery readiness, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.31",
+      "title": "Legal obligations",
+      "summary": "Retain scoped evidence for legal obligations.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.31",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for legal obligations, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.32",
+      "title": "Intellectual property",
+      "summary": "Retain scoped evidence for intellectual property.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.32",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for intellectual property, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.33",
+      "title": "Record preservation",
+      "summary": "Retain scoped evidence for record preservation.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.33",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for record preservation, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.34",
+      "title": "Personal information",
+      "summary": "Retain scoped evidence for personal information.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.34",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for personal information, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.35",
+      "title": "Independent security examination",
+      "summary": "Retain scoped evidence for independent security examination.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.35",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for independent security examination, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.36",
+      "title": "Conformance monitoring",
+      "summary": "Retain scoped evidence for conformance monitoring.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.36",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for conformance monitoring, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.5.37",
+      "title": "Repeatable operating procedures",
+      "summary": "Retain scoped evidence for repeatable operating procedures.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.5.37",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for repeatable operating procedures, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.6.1",
+      "title": "Pre-employment checks",
+      "summary": "Retain scoped evidence for pre-employment checks.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.6.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for pre-employment checks, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.6.2",
+      "title": "Employment expectations",
+      "summary": "Retain scoped evidence for employment expectations.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.6.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for employment expectations, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.6.3",
+      "title": "Security learning",
+      "summary": "Retain scoped evidence for security learning.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.6.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for security learning, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.6.4",
+      "title": "Conduct breaches",
+      "summary": "Retain scoped evidence for conduct breaches.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.6.4",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for conduct breaches, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.6.5",
+      "title": "Departures and role changes",
+      "summary": "Retain scoped evidence for departures and role changes.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.6.5",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for departures and role changes, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.6.6",
+      "title": "Confidentiality undertakings",
+      "summary": "Retain scoped evidence for confidentiality undertakings.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.6.6",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for confidentiality undertakings, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.6.7",
+      "title": "Remote work safeguards",
+      "summary": "Retain scoped evidence for remote work safeguards.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.6.7",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for remote work safeguards, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.6.8",
+      "title": "Event reporting",
+      "summary": "Retain scoped evidence for event reporting.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.6.8",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for event reporting, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.7.1",
+      "title": "Facility boundaries",
+      "summary": "Retain scoped evidence for facility boundaries.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.7.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for facility boundaries, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.7.2",
+      "title": "Entry safeguards",
+      "summary": "Retain scoped evidence for entry safeguards.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.7.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for entry safeguards, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.7.3",
+      "title": "Protected work areas",
+      "summary": "Retain scoped evidence for protected work areas.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.7.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for protected work areas, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.7.4",
+      "title": "Physical observation",
+      "summary": "Retain scoped evidence for physical observation.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.7.4",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for physical observation, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.7.5",
+      "title": "Environmental hazards",
+      "summary": "Retain scoped evidence for environmental hazards.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.7.5",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for environmental hazards, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.7.6",
+      "title": "Work in restricted areas",
+      "summary": "Retain scoped evidence for work in restricted areas.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.7.6",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for work in restricted areas, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.7.7",
+      "title": "Unattended information",
+      "summary": "Retain scoped evidence for unattended information.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.7.7",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for unattended information, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.7.8",
+      "title": "Equipment placement",
+      "summary": "Retain scoped evidence for equipment placement.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.7.8",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for equipment placement, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.7.9",
+      "title": "Off-site equipment",
+      "summary": "Retain scoped evidence for off-site equipment.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.7.9",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for off-site equipment, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.7.10",
+      "title": "Media lifecycle",
+      "summary": "Retain scoped evidence for media lifecycle.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.7.10",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for media lifecycle, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.7.11",
+      "title": "Supporting utilities",
+      "summary": "Retain scoped evidence for supporting utilities.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.7.11",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for supporting utilities, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.7.12",
+      "title": "Cable protection",
+      "summary": "Retain scoped evidence for cable protection.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.7.12",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for cable protection, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.7.13",
+      "title": "Equipment upkeep",
+      "summary": "Retain scoped evidence for equipment upkeep.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.7.13",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for equipment upkeep, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.7.14",
+      "title": "Safe equipment retirement",
+      "summary": "Retain scoped evidence for safe equipment retirement.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.7.14",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for safe equipment retirement, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.1",
+      "title": "End-user devices",
+      "summary": "Retain scoped evidence for end-user devices.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for end-user devices, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.2",
+      "title": "Privileged access",
+      "summary": "Retain scoped evidence for privileged access.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for privileged access, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.3",
+      "title": "Information access limits",
+      "summary": "Retain scoped evidence for information access limits.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for information access limits, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.4",
+      "title": "Source access",
+      "summary": "Retain scoped evidence for source access.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.4",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for source access, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.5",
+      "title": "Authentication mechanisms",
+      "summary": "Retain scoped evidence for authentication mechanisms.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.5",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for authentication mechanisms, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.6",
+      "title": "Resource capacity",
+      "summary": "Retain scoped evidence for resource capacity.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.6",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for resource capacity, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.7",
+      "title": "Malicious code defence",
+      "summary": "Retain scoped evidence for malicious code defence.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.7",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for malicious code defence, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.8",
+      "title": "Vulnerability handling",
+      "summary": "Retain scoped evidence for vulnerability handling.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.8",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for vulnerability handling, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.9",
+      "title": "Configuration baselines",
+      "summary": "Retain scoped evidence for configuration baselines.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.9",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for configuration baselines, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.10",
+      "title": "Information deletion",
+      "summary": "Retain scoped evidence for information deletion.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.10",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for information deletion, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.11",
+      "title": "Data masking",
+      "summary": "Retain scoped evidence for data masking.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.11",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for data masking, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.12",
+      "title": "Information leakage",
+      "summary": "Retain scoped evidence for information leakage.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.12",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for information leakage, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.13",
+      "title": "Recoverable backups",
+      "summary": "Retain scoped evidence for recoverable backups.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.13",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for recoverable backups, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.14",
+      "title": "Service redundancy",
+      "summary": "Retain scoped evidence for service redundancy.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.14",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for service redundancy, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.15",
+      "title": "Recorded events",
+      "summary": "Retain scoped evidence for recorded events.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.15",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for recorded events, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.16",
+      "title": "Anomaly monitoring",
+      "summary": "Retain scoped evidence for anomaly monitoring.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.16",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for anomaly monitoring, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.17",
+      "title": "Time consistency",
+      "summary": "Retain scoped evidence for time consistency.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.17",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for time consistency, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.18",
+      "title": "Powerful system utilities",
+      "summary": "Retain scoped evidence for powerful system utilities.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.18",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for powerful system utilities, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.19",
+      "title": "Software installation",
+      "summary": "Retain scoped evidence for software installation.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.19",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for software installation, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.20",
+      "title": "Network protection",
+      "summary": "Retain scoped evidence for network protection.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.20",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for network protection, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.21",
+      "title": "Network service safeguards",
+      "summary": "Retain scoped evidence for network service safeguards.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.21",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for network service safeguards, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.22",
+      "title": "Network separation",
+      "summary": "Retain scoped evidence for network separation.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.22",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for network separation, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.23",
+      "title": "Web access filtering",
+      "summary": "Retain scoped evidence for web access filtering.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.23",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for web access filtering, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.24",
+      "title": "Cryptographic choices",
+      "summary": "Retain scoped evidence for cryptographic choices.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.24",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for cryptographic choices, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.25",
+      "title": "Secure delivery lifecycle",
+      "summary": "Retain scoped evidence for secure delivery lifecycle.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.25",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for secure delivery lifecycle, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.26",
+      "title": "Application security needs",
+      "summary": "Retain scoped evidence for application security needs.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.26",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for application security needs, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.27",
+      "title": "Security architecture",
+      "summary": "Retain scoped evidence for security architecture.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.27",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for security architecture, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.28",
+      "title": "Safer coding",
+      "summary": "Retain scoped evidence for safer coding.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.28",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for safer coding, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.29",
+      "title": "Security tests",
+      "summary": "Retain scoped evidence for security tests.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.29",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for security tests, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.30",
+      "title": "External development",
+      "summary": "Retain scoped evidence for external development.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.30",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for external development, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.31",
+      "title": "Environment separation",
+      "summary": "Retain scoped evidence for environment separation.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.31",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for environment separation, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.32",
+      "title": "Controlled changes",
+      "summary": "Retain scoped evidence for controlled changes.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.32",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for controlled changes, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.33",
+      "title": "Protected test data",
+      "summary": "Retain scoped evidence for protected test data.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.33",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for protected test data, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    },
+    {
+      "id": "A.8.34",
+      "title": "Assessment safeguards",
+      "summary": "Retain scoped evidence for assessment safeguards.",
+      "category": "annex_a",
+      "module": "Annex A",
+      "applicability": "Management-system requirements apply to the ISMS; Annex A inclusion and exclusion need risk-based decisions.",
+      "sources": [
+        {
+          "url": "https://www.iso.org/standard/27001",
+          "section": "A.8.34",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organisational",
+        "technical_context"
+      ],
+      "evidencePrompt": "Provide reviewed records for assessment safeguards, covering this scope and period; drafts and assertions do not establish operation.",
+      "responsibilities": [
+        "Record the accountable owner and independent reviewer where applicable."
+      ],
+      "objectiveBasis": "Purpose-specific documentary review; technical checks are supporting context."
+    }
+  ]
+}

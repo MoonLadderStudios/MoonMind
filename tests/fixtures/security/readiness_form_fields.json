@@ -95,10 +95,6 @@
   },
   "ukgc-rts-security": {
     "licenceClass": {
-      "maxLength": 4096,
-      "minLength": 1,
-      "type": "string",
-      "title": "Licence Class",
       "enum": [
         "remote_betting_host_real",
         "remote_betting_host_virtual",
@@ -115,7 +111,21 @@
         "software_supplier",
         "telephone_only",
         "trading_room"
-      ]
+      ],
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": "string",
+      "title": "Licence Class"
+    },
+    "annualLotterySalesGbp": {
+      "minimum": 0,
+      "type": "number",
+      "title": "Annual Lottery Sales Gbp"
+    },
+    "licenceGrantedOn": {
+      "format": "date",
+      "type": "string",
+      "title": "Licence Granted On"
     }
   },
   "pci-dss-readiness": {
@@ -146,6 +156,55 @@
       "maxItems": 256,
       "type": "array",
       "title": "Payment Channels"
+    }
+  },
+  "iso-27001-readiness": {
+    "scopeStatement": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": "string",
+      "title": "Scope Statement"
+    },
+    "interestedParties": {
+      "items": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 256,
+      "title": "Interested Parties",
+      "type": "array"
+    }
+  },
+  "soc2-readiness": {
+    "assessmentType": {
+      "enum": [
+        "type1",
+        "type2"
+      ],
+      "type": "string",
+      "title": "Assessment Type"
+    },
+    "categories": {
+      "items": {
+        "enum": [
+          "security",
+          "availability",
+          "confidentiality",
+          "processing_integrity",
+          "privacy"
+        ],
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 256,
+      "type": "array",
+      "title": "Categories"
+    },
+    "boundaryReviewed": {
+      "type": "boolean",
+      "title": "Boundary Reviewed"
     }
   }
 }
