@@ -8,8 +8,6 @@ from functools import cache
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 
-import yaml
-
 from pydantic import Field
 
 from moonmind.schemas.repository_scanner_models import RepositoryScan, ScannerRule
@@ -35,10 +33,17 @@ DEFAULT_RULES_PATH = PurePosixPath("/opt/moonmind-scanner-rules/default")
 @cache
 def _default_rule_files() -> dict[tuple[str, str], tuple[str, ...]]:
     """(image path, SHA-256) of each installed default rule file -> its rule IDs."""
+    # Only the worker reads the rule files. The scanner image packages this
+    # module without PyYAML, so importing it at module level breaks the runner.
+    import yaml
+
     files = {}
     for path in sorted(DEFAULT_RULES.glob("*.yml")):
         raw = path.read_bytes()
-        rules = (yaml.safe_load(raw) or {}).get("rules") or []
+        try:
+            rules = (yaml.safe_load(raw) or {}).get("rules") or []
+        except yaml.YAMLError as error:
+            raise ValueError(f"{path.name}: {error}") from error
         files[
             (str(DEFAULT_RULES_PATH / path.name), hashlib.sha256(raw).hexdigest())
         ] = tuple(rule["id"] for rule in rules)
@@ -55,7 +60,7 @@ def default_rule_ids(rules, findings=()) -> list[str]:
     """
     try:
         files = _default_rule_files()
-    except (OSError, ValueError, TypeError, KeyError, yaml.YAMLError):
+    except (OSError, ValueError, TypeError, KeyError):
         return []
     found = {finding.rule_id for finding in findings}
     result = set()
