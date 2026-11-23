@@ -313,6 +313,7 @@ async def test_comparison_accepts_retained_nj_rule_source_metadata(environment):
 
 async def test_retained_nj_report_serves_as_previous_assessment(environment):
     from moonmind.workflows.skills.security_assessment import _record
+    from tests.unit.security.test_assessment_evidence_exports import unpack
     from tests.unit.security.test_legacy_framework_reports import RETAINED
 
     service = environment.service
@@ -322,9 +323,15 @@ async def test_retained_nj_report_serves_as_previous_assessment(environment):
     data, _ = await materialize(service)
     payload = request_payload(data)
     payload["framework"]["previousAssessmentRef"] = previous
+    payload["evidenceExport"] = {"artifactRefs": [previous]}
     result = await invoke(service, payload)
     report = await control(service, result)
     assert report["frameworkPack"]["previousAssessmentStatus"] == "available"
+    archive, manifest = await unpack(service, result)
+    entry = next(r for r in manifest["entries"] if r["sourceArtifactId"] == previous)
+    assert entry["status"] == "included"
+    exported = json.loads(archive.read(entry["memberName"]))
+    assert exported["schemaVersion"] == "framework-audit-preparation/v1"
     changes = report["intelligenceChanges"]
     assert any("framework-audit-preparation/v1" in row for row in changes)
     assert any("edition changed" in row for row in changes)
