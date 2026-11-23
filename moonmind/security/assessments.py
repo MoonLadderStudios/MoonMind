@@ -1003,6 +1003,44 @@ class SecurityPlanInput(Contract):
     ) = Field(default=None, exclude_if=lambda value: value is None)
 
 
+_PlanJobId = Annotated[
+    str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+]
+
+
+class PlannedJobRun(Contract):
+    """A planned job and the workflow steps that run it."""
+
+    job_id: _PlanJobId
+    kind: Text
+    step_ids: Annotated[list[Text], Field(max_length=8)] = Field(default_factory=list)
+
+
+class SkippedPlannedJob(Contract):
+    """A planned job left out before launch, and why."""
+
+    job_id: _PlanJobId
+    kind: Text
+    state: Literal["blocked_admission", "not_run"]
+    reason: Annotated[str, StringConstraints(min_length=1, max_length=500)]
+
+
+class PlanRunInput(Contract):
+    """A plan run's jobs, compared at the conclusion with what actually ran.
+
+    Grants nothing: each job ran under its own admission, and outcomes its
+    steps recorded are checked against their native evidence.
+    """
+
+    identity: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+    jobs: Annotated[list[PlannedJobRun], Field(max_length=32)] = Field(
+        default_factory=list
+    )
+    skipped: Annotated[list[SkippedPlannedJob], Field(max_length=32)] = Field(
+        default_factory=list
+    )
+
+
 class AssessmentRequest(Contract):
     model_config = {
         **Contract.model_config,
@@ -1035,6 +1073,9 @@ class AssessmentRequest(Contract):
     review_ref: Text | None = None
     methodology: MethodologyInput | None = None
     security_plan: SecurityPlanInput | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    plan_run: PlanRunInput | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     github_alerts: GitHubAlertImport | None = None
@@ -1072,6 +1113,8 @@ class AssessmentRequest(Contract):
             raise AssessmentInputError(
                 f"framework.packId names no installed framework pack: {self.framework.pack_id}"
             )
+        if self.plan_run is not None and self.security_plan is None:
+            raise AssessmentInputError("planRun requires the securityPlan it runs")
         if self.previous_assessment_ref and not packs:
             raise AssessmentInputError(
                 "previousAssessmentRef requires a declared framework pack"

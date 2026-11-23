@@ -2130,6 +2130,134 @@ class AssessmentExecution:
         await self.seal(root, dependencies)
         return root, identity, plan
 
+    async def _summary_of_kind(self, ref: str, kind: str | None) -> bool:
+        """Whether ``ref`` is a readable, valid native summary of a job kind."""
+        models = {
+            "repository-scan": ScannerSummary,
+            "image-assessment": ImageAssessmentSummary,
+            "web-assessment": WebAssessmentSummary,
+            "cloud-assessment": CloudAssessmentSummary,
+        }
+        if kind not in models:
+            return False
+        try:
+            _, raw = await self.read(ref)
+            models[kind].model_validate_json(raw)
+        except (TemporalArtifactError, ValueError, TypeError):
+            return False
+        return True
+
+    async def prepare_plan_run(self, request, security_plan):
+        """Compare a plan run's planned jobs with the outcomes its steps recorded.
+
+        Outcomes are untrusted agent records published by the runtime and bound
+        to their step; trusted code checks each cited native summary and can
+        only lower a claimed state. Verified summaries become this assessment's
+        retained reports, so the selected standards conclude from evidence
+        collected once.
+        """
+        from moonmind.security.security_plan_run import (
+            MAX_REPORT_REFS,
+            OUTCOME_LINK,
+            parse_outcome,
+            plan_against_actual,
+        )
+
+        run = request.plan_run
+        plan_ref, identity, plan = security_plan
+        if run.identity != identity:
+            raise ToolFailure(
+                "INVALID_INPUT",
+                "planRun.identity: differs from the selected security plan; review "
+                "the current plan run again.",
+                False,
+            )
+        step_jobs = {step: job.job_id for job in run.jobs for step in job.step_ids}
+        kinds = {job.id: job.kind for job in plan.jobs}
+        recorded = {}
+        # Newest first, so a restarted step's latest outcome wins.
+        for artifact in await self.service.list_for_execution(
+            **self.execution, link_type=OUTCOME_LINK, access=self.access
+        ):
+            job_id = step_jobs.get((artifact.metadata_json or {}).get("step_id"))
+            if (
+                job_id is None
+                or job_id in recorded
+                or getattr(artifact.status, "value", artifact.status) != "complete"
+            ):
+                continue
+            try:
+                _, raw = await self.read(artifact.artifact_id)
+            except TemporalArtifactError:
+                continue
+            outcome = parse_outcome(raw)
+            if outcome is not None and outcome.job_id == job_id:
+                recorded[job_id] = (artifact.artifact_id, outcome)
+        checked = {}
+        for job_id, (_, outcome) in recorded.items():
+            for ref in outcome.report_refs:
+                checked[ref] = await self._summary_of_kind(ref, kinds.get(job_id))
+        result = plan_against_actual(
+            plan, run, {key: value[1] for key, value in recorded.items()}, checked
+        )
+        collected = [
+            r for r in result["jobs"] if r["state"] in {"completed", "partial"}
+        ]
+        refs = list(
+            dict.fromkeys(
+                [
+                    *request.report_refs,
+                    *(ref for r in collected for ref in r["reportRefs"]),
+                ]
+            )
+        )
+        reviews = list(
+            dict.fromkeys(r["reviewRef"] for r in collected if r.get("reviewRef"))
+        )
+        if len(refs) > MAX_REPORT_REFS:
+            result["limitations"] = [
+                f"Only the first {MAX_REPORT_REFS} native summaries feed the "
+                "standards' conclusions."
+            ]
+            refs = refs[:MAX_REPORT_REFS]
+        update = {}
+        if refs:
+            update["report_refs"] = refs
+            if "retained-report" not in request.tools:
+                update["tools"] = [*request.tools, "retained-report"]
+        if len(reviews) == 1 and request.review_ref is None:
+            update["review_ref"] = reviews[0]
+        elif len(reviews) > 1:
+            result.setdefault("limitations", []).append(
+                "Each job's interpretation is linked above; the standards conclude "
+                "from native evidence because one assessment reads one interpretation."
+            )
+        payload = _json(result)
+        key = hashlib.sha256(payload).hexdigest()
+        saved = await self.saved(kind="security.plan-run", key=key)
+        root = (
+            saved[0]
+            if saved
+            else await self.write(payload, kind="security.plan-run", key=key)
+        )
+        required = [
+            plan_ref,
+            *(value[0] for value in recorded.values()),
+            *(ref for ref, valid in checked.items() if valid),
+        ]
+
+        async def dependencies():
+            return [
+                ArtifactDependency(
+                    ref, await self.digest(ref), True, "security.plan-run-evidence"
+                )
+                for ref in dict.fromkeys(required)
+            ]
+
+        await self.seal(root, dependencies)
+        updated = request.model_copy(update=update) if update else request
+        return updated, (root, result)
+
     async def prepare_methodology_plan(self, request):
         if request.methodology is None:
             return None
@@ -2355,6 +2483,9 @@ class AssessmentExecution:
 
     async def execute(self, request: AssessmentRequest) -> ToolResult:
         security_plan = await self.prepare_security_plan(request)
+        plan_run = None
+        if request.plan_run is not None:
+            request, plan_run = await self.prepare_plan_run(request, security_plan)
         methodology_plan = await self.prepare_methodology_plan(request)
         request, framework_pack_context = await self.prepare_framework_pack(request)
         change_control = None
@@ -3613,6 +3744,11 @@ class AssessmentExecution:
                 securityPlanIdentity=plan_identity,
                 securityPlanGaps=len(gap_list(plan)),
             )
+        if plan_run is not None:
+            evidence.append(plan_run[0])
+            outputs.update(
+                securityPlanRunRef=plan_run[0], securityPlanRun=plan_run[1]["counts"]
+            )
         methodology = None
         if methodology_plan is not None:
             try:
@@ -3703,6 +3839,12 @@ class AssessmentExecution:
                 from moonmind.security.security_plan import render_security_plan
 
                 summary += render_security_plan(plan, plan_ref=plan_ref).encode()
+            if plan_run is not None:
+                from moonmind.security.security_plan_run import (
+                    render_plan_against_actual,
+                )
+
+                summary += render_plan_against_actual(plan_run[1]).encode()
             if methodology:
                 from moonmind.security.web_api_methodology import render_methodology
 
@@ -3766,6 +3908,7 @@ class AssessmentExecution:
                 )
                 + ([project_digest] if project_digest else [])
                 + ([security_plan[1]] if security_plan else [])
+                + ([plan_run[0]] if plan_run else [])
                 + (
                     [control_ref]
                     if controls

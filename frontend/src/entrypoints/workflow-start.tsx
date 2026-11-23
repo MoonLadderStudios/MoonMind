@@ -2399,6 +2399,19 @@ function activeAppliedTemplatesForSteps(
   });
 }
 
+/** Preset inputs carried in a Create link: a bounded JSON object, or none. */
+function requestedPresetInputs(raw: string | null): Record<string, unknown> | null {
+  if (!raw || raw.length > 16_384) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function workflowPublishForAppliedTemplates(
   appliedTemplates: AppliedTemplateState[],
 ): Record<string, unknown> | null {
@@ -6769,16 +6782,21 @@ function WorkflowStartPageContent({
   const templateItems = templateOptionsQuery.data || [];
   // `?preset=<slug>` (for example the Security workspace's start action)
   // selects that preset in an untouched first step once the catalog loads.
+  // `presetInputs=<JSON object>` prefills its inputs, such as a retained plan
+  // to run; they are an editable draft that expansion and review still check.
   const requestedPresetAppliedRef = useRef(false);
   useEffect(() => {
     if (pageMode.mode !== "create" || requestedPresetAppliedRef.current) return;
-    const slug = String(new URLSearchParams(window.location.search).get("preset") || "").trim();
+    const params = new URLSearchParams(window.location.search);
+    const slug = String(params.get("preset") || "").trim();
     if (!slug || !templateItems.some((item) => item.key === slug)) return;
     requestedPresetAppliedRef.current = true;
     const [first, ...rest] = stepsRef.current;
     if (!first || rest.length || first.instructions.trim() || first.presetKey) return;
     handleStepTypeChange(first.localId, "preset");
     void handleStepPresetSelectionChange(first.localId, slug);
+    const inputs = requestedPresetInputs(params.get("presetInputs"));
+    if (inputs) updateStepPresetIfCurrent(first.localId, slug, { presetInputValues: inputs });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageMode.mode, templateItems]);
   const hasAssessmentStep = steps.some((step) => {

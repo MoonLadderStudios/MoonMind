@@ -1,0 +1,92 @@
+slug: security-plan-run
+title: Run security plan
+description: Run a retained security plan's jobs through their existing assessment presets, then
+  conclude per selected standard and report the plan against what actually ran.
+tags:
+- security
+- assessment
+- security-plan
+releaseStatus: active
+requiredCapabilities:
+- git
+- sandbox
+annotations:
+  workflowPublish:
+    mode: none
+  inputSchema:
+    type: object
+    required:
+    - security_plan
+    properties:
+      security_plan:
+        type: object
+        title: Security plan
+        additionalProperties: false
+        required:
+        - planRef
+        - identity
+        description: The retained plan's securityPlanRef and securityPlanIdentity outputs. A changed
+          plan has a new identity and needs a new review.
+        properties:
+          planRef:
+            type: string
+            title: Plan ref
+            pattern: ^art_[A-Za-z0-9_-]+$
+          identity:
+            type: string
+            title: Identity
+            pattern: ^[0-9a-f]{64}$
+          readinessRef:
+            type: string
+            title: Readiness ref
+            pattern: ^art_[A-Za-z0-9_-]+$
+      assessment_ref:
+        type: string
+        title: Assessment ref
+        default: ''
+        description: The assessment reference of the saved authorization you will select. Needed when
+          the plan has web or cloud jobs.
+      credential_refs:
+        type: object
+        title: Credential refs
+        default: {}
+        additionalProperties:
+          type: string
+        description: Credential references from the saved authorization's grants, by purpose
+          (cloud_inventory, application_auth). A plan names purposes only.
+      exclude_jobs:
+        type: array
+        title: Exclude jobs
+        default: []
+        maxItems: 32
+        items:
+          type: object
+          additionalProperties: false
+          required:
+          - jobId
+          properties:
+            jobId:
+              type: string
+              title: Job ID
+            reason:
+              type: string
+              title: Reason
+        description: Planned jobs to leave out, such as work the review shows the authorization does
+          not cover. The report shows their requirements as not assessed with this reason.
+      previous_assessment_ref:
+        type: string
+        title: Previous assessment ref
+        default: ''
+        description: The previous plan run's assessment, to compare against. Omit for a first run.
+  defaults:
+    assessment_ref: ''
+    credential_refs: {}
+    exclude_jobs: []
+    previous_assessment_ref: ''
+steps:
+- kind: security-plan-run
+  plan: '{{ inputs.security_plan }}'
+  assessmentRef: '{{ inputs.assessment_ref }}'
+  credentialRefs: '{{ inputs.credential_refs }}'
+  excludeJobs: '{{ inputs.exclude_jobs }}'
+  previousAssessmentRef: '{{ inputs.previous_assessment_ref }}'

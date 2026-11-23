@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -163,6 +164,19 @@ _INCLUDE_STEP_KEYS = frozenset(
 )
 _STEP_KIND = "step"
 _INCLUDE_KIND = "include"
+# A declared extension: derives existing preset steps from a retained,
+# digest-identified security plan (see moonmind.security.security_plan_run).
+_SECURITY_PLAN_RUN_KIND = "security-plan-run"
+_SECURITY_PLAN_RUN_KEYS = frozenset(
+    {
+        "kind",
+        "plan",
+        "assessmentRef",
+        "credentialRefs",
+        "excludeJobs",
+        "previousAssessmentRef",
+    }
+)
 _STEP_TYPE_TOOL = "tool"
 _STEP_TYPE_SKILL = "skill"
 _STEP_TYPE_PRESET = "preset"
@@ -1828,6 +1842,35 @@ def _serialize_template(
     return serialized
 
 
+def _bind_plan_job_steps(
+    resolved_steps: list[dict[str, Any]], step_ids: list[str], job_id: str
+) -> None:
+    """Mark one planned job's expanded steps so its outcome reaches the conclusion."""
+    from moonmind.security.security_plan_run import OUTCOME_PATH, outcome_instructions
+
+    selected = set(step_ids)
+    for step in resolved_steps:
+        if step.get("id") not in selected:
+            continue
+        hint = (step.get("annotations") or {}).get("securityAssessment")
+        if isinstance(hint, dict):
+            hint["planJobId"] = job_id
+        step["instructions"] = step["instructions"] + outcome_instructions(job_id)
+        skill = step.get("skill")
+        if isinstance(skill, dict):
+            args = skill.setdefault("args", {})
+            args["securityPlanJobId"] = job_id
+            args["securityPlanJobOutcomePath"] = OUTCOME_PATH.format(job_id=job_id)
+
+
+def _blank_none(value: Any) -> Any:
+    return (
+        None
+        if value is None or (isinstance(value, str) and not value.strip())
+        else value
+    )
+
+
 def load_seed_template_definitions(seed_dir: Path) -> list[dict[str, Any]]:
     """Load seed template definitions from YAML files."""
 
@@ -1983,8 +2026,11 @@ def _validate_moonspec_remediation_topology(steps: list[dict[str, Any]]) -> None
 class PresetCatalogService:
     """Catalog service for presets."""
 
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, *, artifact_access: Any = None):
         self._session = session
+        # Operator artifact access for expansions that read a retained input,
+        # such as a security plan run. None leaves those expansions refused.
+        self._artifact_access = artifact_access
         self._template_env = SandboxedEnvironment(
             autoescape=False,
             undefined=StrictUndefined,
@@ -2529,10 +2575,24 @@ class PresetCatalogService:
                     f"Step {index} uses forbidden keys: {', '.join(blocked)}."
                 )
             kind = str(raw_step.get("kind") or _STEP_KIND).strip().lower()
-            if kind not in {_STEP_KIND, _INCLUDE_KIND}:
+            if kind not in {_STEP_KIND, _INCLUDE_KIND, _SECURITY_PLAN_RUN_KIND}:
                 raise PresetValidationError(
-                    f"Step {index} kind must be one of: {_STEP_KIND}, {_INCLUDE_KIND}."
+                    f"Step {index} kind must be one of: {_STEP_KIND}, {_INCLUDE_KIND}, "
+                    f"{_SECURITY_PLAN_RUN_KIND}."
                 )
+            if kind == _SECURITY_PLAN_RUN_KIND:
+                unsupported = sorted(
+                    key
+                    for key in raw_step
+                    if str(key).strip() not in _SECURITY_PLAN_RUN_KEYS
+                )
+                if unsupported or "plan" not in raw_step:
+                    raise PresetValidationError(
+                        f"Step {index} security plan run names plan and only: "
+                        f"{', '.join(sorted(_SECURITY_PLAN_RUN_KEYS - {'kind'}))}."
+                    )
+                validated.append(dict(raw_step))
+                continue
             if kind == _INCLUDE_KIND:
                 unsupported = sorted(
                     key
@@ -2736,6 +2796,97 @@ class PresetCatalogService:
             )
         return _normalize_capabilities(capabilities)
 
+    async def _security_plan_run_steps(
+        self, rendered: Mapping[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Derive a plan run's steps from a retained, digest-identified plan.
+
+        Each runnable planned job becomes an include of its existing technical
+        preset, so it keeps that preset's input contract, compiled job,
+        readiness hint and admission. A concluding ``security.assess`` step
+        follows. Nothing here admits a target.
+        """
+        from api_service.services.security_plan_runs import load_retained_plan
+        from moonmind.security.security_plan import SecurityPlanError
+        from moonmind.security.security_plan_run import (
+            CONCLUSION_TITLE,
+            ExcludedJob,
+            PlanRunSelection,
+            derive_plan_run,
+        )
+
+        unsupported = sorted(set(rendered) - _SECURITY_PLAN_RUN_KEYS)
+        if unsupported:
+            raise PresetValidationError(
+                f"Security plan run uses unsupported keys: {', '.join(unsupported)}."
+            )
+        credential_refs = _blank_none(rendered.get("credentialRefs")) or {}
+        try:
+            selection = PlanRunSelection.model_validate(rendered.get("plan"))
+            excluded = [
+                ExcludedJob.model_validate(item)
+                for item in _blank_none(rendered.get("excludeJobs")) or []
+            ]
+            if not isinstance(credential_refs, Mapping) or not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in credential_refs.items()
+            ):
+                raise ValueError("credentialRefs")
+        except (ValueError, TypeError):
+            raise PresetValidationError(
+                "Security plan run: name the retained plan's planRef and identity; "
+                "exclude jobs as {jobId, reason}; map credential purposes to "
+                "credential references."
+            ) from None
+        try:
+            plan = await load_retained_plan(
+                self._session, selection, self._artifact_access
+            )
+            derived = derive_plan_run(
+                plan,
+                selection=selection,
+                assessment_ref=_blank_none(rendered.get("assessmentRef")),
+                credential_refs={
+                    key: value for key, value in credential_refs.items() if value
+                },
+                excluded=excluded,
+                previous_assessment_ref=_blank_none(
+                    rendered.get("previousAssessmentRef")
+                ),
+            )
+        except SecurityPlanError as exc:
+            raise PresetValidationError(f"Security plan run: {exc}") from None
+        steps: list[dict[str, Any]] = [
+            {
+                "kind": _INCLUDE_KIND,
+                "slug": job["slug"],
+                "alias": _normalize_slug(f"plan-job-{job['jobId']}"),
+                "inputMapping": job["inputs"],
+                "planJobId": job["jobId"],
+            }
+            for job in derived["jobs"]
+        ]
+        steps.append(
+            {
+                "type": _STEP_TYPE_TOOL,
+                "title": CONCLUSION_TITLE,
+                "instructions": (
+                    "Assess the selected standards once, from the evidence this run's "
+                    "planned jobs retained, and report every planned job and procedure "
+                    "against what actually ran. Missing evidence stays inconclusive; "
+                    "this run authorizes no remediation, infrastructure change or "
+                    "publication."
+                ),
+                "tool": {
+                    "id": "security.assess",
+                    "requiredCapabilities": ["sandbox"],
+                    "inputs": derived["conclusion"],
+                },
+                "planRunConclusion": True,
+            }
+        )
+        return steps
+
     async def _expand_preset_steps(
         self,
         *,
@@ -2787,9 +2938,19 @@ class PresetCatalogService:
         if input_mapping:
             node["inputMapping"] = dict(input_mapping)
 
-        for source_index, source_step in enumerate(template.steps or [], start=1):
-            rendered = _render_value(
-                self._template_env, source_step, variables=variables
+        # Derived steps join the queue already rendered: plan content is data,
+        # never a template.
+        queue: list[tuple[int, Any, bool]] = [
+            (source_index, source_step, False)
+            for source_index, source_step in enumerate(template.steps or [], start=1)
+        ]
+        plan_job_steps: dict[str, list[str]] = {}
+        while queue:
+            source_index, source_step, derived = queue.pop(0)
+            rendered = (
+                copy.deepcopy(source_step)
+                if derived
+                else _render_value(self._template_env, source_step, variables=variables)
             )
             if not isinstance(rendered, dict):
                 raise PresetValidationError(
@@ -2800,6 +2961,17 @@ class PresetCatalogService:
             rendered.pop("version", None)
             rendered.pop("presetVersion", None)
             kind = str(rendered.get("kind") or _STEP_KIND).strip().lower()
+            if kind == _SECURITY_PLAN_RUN_KIND and not derived:
+                queue[0:0] = [
+                    (source_index, step, True)
+                    for step in await self._security_plan_run_steps(rendered)
+                ]
+                continue
+            plan_job = rendered.pop("planJobId", None) if derived else None
+            conclusion = rendered.pop("planRunConclusion", False) if derived else False
+            if conclusion:
+                for job in rendered["tool"]["inputs"]["planRun"]["jobs"]:
+                    job["stepIds"] = list(plan_job_steps.get(job["jobId"], []))
             if (
                 kind == _STEP_KIND
                 and str(rendered.get("type") or "").strip().lower() == _STEP_TYPE_PRESET
@@ -2877,6 +3049,11 @@ class PresetCatalogService:
                 )
                 node["includes"].append(child_node)
                 node["stepIds"].extend(child_node["stepIds"])
+                if plan_job:
+                    plan_job_steps[plan_job] = list(child_node["stepIds"])
+                    _bind_plan_job_steps(
+                        resolved_steps, child_node["stepIds"], plan_job
+                    )
                 continue
 
             if kind != _STEP_KIND:

@@ -7,8 +7,9 @@ and the authority each planned job would need. It generalizes the web/API test
 plan, which it replaces as the one owner of "what will be tested and how".
 
 A plan grants nothing. It carries no credentials and cannot widen targets,
-actions, credentials, network or budget. Work still launches under a saved
-authorization and the existing rules-of-engagement review.
+actions, credentials, network or budget. [Running a plan](#running-a-plan)
+still launches under a saved authorization and the existing
+rules-of-engagement review.
 
 ## Contents
 
@@ -162,6 +163,58 @@ Nobody answers questions inside the run: missing inputs become open points and
 gaps, and the operator corrects them by editing and rerunning. The saved
 environment's evidence-processing policy is enforced before the planner
 starts, with no fallback provider.
+
+## Running a plan
+
+**Run this plan**, on a retained plan in the Security workspace's reports,
+opens Create with the `security-plan-run` preset and
+`security_plan: {planRef, identity}` filled in. Expansion reads the plan with
+the operator's artifact access, accepts only a plan retained by
+`security.plan` or `security.assess` whose content identity matches, and
+derives the workflow:
+
+- Each planned `repository-scan`, `image-assessment`, `web-assessment` and
+  `cloud-assessment` job becomes its existing technical preset with the
+  plan's input, keeping that preset's input contract, compiled job, readiness
+  check, budget and native evidence. Other kinds reach the conclusion as
+  `not_run` until a preset can launch them.
+- The plan names credential purposes only. `assessment_ref` and
+  `credential_refs` (by purpose) come from the authorization the operator
+  will select; a scoped job missing one fails expansion naming the job.
+- One concluding `security.assess` selects every standard of the plan with
+  `securityPlan`, `planRun` and, for a later run, `previousAssessmentRef`, so
+  a changed pack edition shows as an intelligence change.
+
+The rules-of-engagement review covers the whole payload and names the plan
+and its identity. Its **Not covered** section lists scoped steps the selected
+authorization would refuse, with the admission check's reason. Exclude them
+with `exclude_jobs: [{jobId, reason}]` and review again; they reach the
+conclusion as `blocked_admission` with that reason. The review digest covers
+the derived payload, so a changed plan, exclusion or authorization needs a
+fresh review. Create and API callers share the expansion (`POST
+/api/presets/security-plan-run:expand`, or a `taskTemplate` submitted to
+`/api/executions`); reruns and schedules replay the reviewed payload.
+
+Each planned job's step writes `artifacts/security-plan-run/<jobId>.json`
+(`security-plan-job-outcome/v1`: status, reason, `reportRefs`, `reviewRef`).
+The runtime publishes it linked to the run and bound to its step, and the
+newest record per step wins, so a restarted step replaces its outcome without
+repeating completed jobs. A step that fails outright stops the run like any
+workflow step; resuming restarts that step alone.
+
+The conclusion reports every planned job and procedure as `completed`,
+`partial`, `failed`, `blocked_admission`, `blocked_readiness` or `not_run`,
+with its reason. Outcomes are untrusted: a claim without a valid native
+summary of the job's kind is lowered, and a job with no record is `not_run`.
+Valid summaries become the assessment's `reportRefs`, and a single
+interpretation its `reviewRef`. A requirement is `evidence_collected` only
+when all its planned jobs completed, and otherwise `inconclusive`;
+external-only and organisational gaps carry who can close them. Conclusions
+per standard come from the pack evaluation, never from collection or zero
+findings. The comparison is retained as `security.plan-run`, sealed with the
+plan and the outcomes it judged, and shown as **Plan against actual** in the
+primary report. Running a plan authorizes no edits, infrastructure change or
+publication; findings feed the existing remediation journey.
 
 ## Web/API methodology
 

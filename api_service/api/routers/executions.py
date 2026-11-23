@@ -9687,6 +9687,11 @@ async def _expand_goal_preset_for_workflow_submission(
                     "targetRuntime": target_runtime,
                 },
                 allow_goal_schedule=False,
+                artifact_access=(
+                    ArtifactAccessContext.for_operator(user)
+                    if isinstance(user, OperatorAdmission)
+                    else None
+                ),
             )
         except PresetNotFoundError as exc:
             raise HTTPException(

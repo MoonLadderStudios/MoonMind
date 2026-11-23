@@ -33,12 +33,20 @@ from tests.unit.workflows.temporal.test_remediation_context import temporal_db
 DRAFT_PATH = "artifacts/security-plan/draft.json"
 
 
-async def publish(tmp_path, monkeypatch, *, draft: bytes | None):
+async def publish(
+    tmp_path,
+    monkeypatch,
+    *,
+    draft: bytes | None,
+    path=DRAFT_PATH,
+    key="securityPlanDraftPath",
+    **parameters,
+):
     execution_context(monkeypatch)
     workspace = tmp_path / "workspace"
-    (workspace / "artifacts/security-plan").mkdir(parents=True)
+    (workspace / path).parent.mkdir(parents=True)
     if draft is not None:
-        (workspace / DRAFT_PATH).write_bytes(draft)
+        (workspace / path).write_bytes(draft)
     run_store = ManagedRunStore(tmp_path / "runs")
     run_store.save(
         ManagedRunRecord(
@@ -51,14 +59,14 @@ async def publish(tmp_path, monkeypatch, *, draft: bytes | None):
         )
     )
     result = MoonMindAgentRun()._enrich_result_metadata(
-        request=_request(securityPlanDraftPath=DRAFT_PATH),
+        request=_request(**{key: path}, **parameters),
         result=AgentRunResult(
             summary="Drafted",
             metadata={"agentRunId": "plan-run"},
         ),
         include_parent_execution=True,
     )
-    assert result.metadata["securityPlanDraftPath"] == DRAFT_PATH
+    assert result.metadata[key] == path
     return result, run_store
 
 
@@ -156,3 +164,58 @@ def test_planner_reads_the_context_step_outputs_as_trusted_context():
     assert payload["planningContext"] == context
     assert payload["planningContextRef"] == "art_context"
     assert "unrelated" not in payload
+
+
+@pytest.mark.asyncio
+async def test_plan_run_job_outcome_reaches_the_parent_bound_to_its_step(
+    tmp_path, monkeypatch
+):
+    """A plan run job's outcome reaches the concluding step through the parent."""
+    outcome = json.dumps(
+        {
+            "schemaVersion": "security-plan-job-outcome/v1",
+            "jobId": "web-baseline",
+            "status": "completed",
+            "reportRefs": ["art_summary"],
+        }
+    ).encode()
+    result, run_store = await publish(
+        tmp_path,
+        monkeypatch,
+        draft=outcome,
+        path="artifacts/security-plan-run/web-baseline.json",
+        key="securityPlanJobOutcomePath",
+        # The parent run names the logical step it launched.
+        metadata={
+            "moonmind": {"stepLedger": {"logicalStepId": "web-step", "scope": "step"}}
+        },
+    )
+    async with temporal_db(tmp_path) as session:
+        service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "blobs"),
+        )
+        publisher = TemporalAgentRuntimeActivities(
+            artifact_service=service, run_store=run_store
+        )
+        monkeypatch.setattr(
+            publisher,
+            "execution_notify_completion",
+            AsyncMock(return_value={"status": "skipped"}),
+        )
+        published = await publisher.agent_runtime_publish_artifacts(result)
+        ref = published.metadata["securityPlanJobOutcomeRef"]
+        linked = await service.list_for_execution(
+            namespace="default",
+            workflow_id="parent",
+            run_id="parent-run",
+            link_type="input.security_plan_job",
+            access=access_for_test("workflow:parent"),
+        )
+        assert [item.artifact_id for item in linked] == [ref]
+        # The runtime, not the agent, binds the record to the parent's step.
+        assert linked[0].metadata_json["step_id"] == "web-step"
+        _, body = await service.read(
+            artifact_id=ref, access=access_for_test("workflow:parent")
+        )
+        assert body == outcome

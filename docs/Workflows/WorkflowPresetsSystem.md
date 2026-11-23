@@ -255,7 +255,7 @@ expandPreset(preset_slug, inputs, context) -> expanded_steps
 
 It serves Apply, Reapply, unexpanded Submit, API/MCP, edit/rerun, scheduled authoring, and goal-selected presets.
 
-The compiler loads and pins definition evidence, resolves context bindings, applies semantic defaults to unbound inputs, validates the complete input contract, recursively expands nested presets, resolves the single publication scope, validates the concrete plan and required handoffs, and returns field-addressable diagnostics. Validation happens before effects. External target acquisition records its source and immutable resolved result through trusted boundaries rather than hiding non-deterministic lookup inside a template expression.
+The compiler pins definition evidence, resolves context bindings, defaults unbound inputs, validates the input contract, expands nested presets, resolves the publication scope, validates the plan and handoffs, and returns field-addressable diagnostics before any effect. External target acquisition records its source and resolved result through trusted boundaries, never as a lookup inside a template expression.
 
 Identical definitions, inputs, context, and recorded external evidence produce identical expansion. Large evidence remains artifact-backed.
 
@@ -366,7 +366,9 @@ steps:
       jira_issue: "{{ inputs.jira_issue }}"
 ```
 
-Repository/branch/publishing flow through the enclosing context, not nested input overrides. Each child schema is validated, missing required inputs include ancestry, cycles fail safely, and provenance records the full preset ancestry. Nested preset expansion and dynamically created workflow children remain different operations; both preserve the same publication authority rules.
+Repository, branch and publishing come from the enclosing context, not nested overrides. Child schemas are validated, missing inputs name their ancestry, cycles fail safely, and provenance records the ancestry. Nested expansion and dynamically created workflow children are different operations with the same publication authority.
+
+The one data-derived include is a `kind: security-plan-run` step: it reads a retained plan by `planRef` and content `identity`, includes each planned job's technical preset and appends one conclusion ([Running a plan](../Security/SecurityPlans.md#running-a-plan)). Plan content is never rendered as a template.
 
 ## Jira Breakdown Reconciliation
 
@@ -386,7 +388,7 @@ A goal-only request without authored steps, plan, tool/Skill, or explicit preset
 
 Apply replaces or augments the selected draft segment according to the declared UI mode. Generated task content remains editable with provenance; editing does not mutate the template or create independent authority controls.
 
-Reapply uses the saved selected definition and task inputs unless the user selects a new definition/input. It resolves bindings against current authored workflow context, invalidates stale previews, and preserves explicit publication selection. A policy/default or target change requiring new authority is visible and revalidated before submission. Historical immutable execution snapshots are never rewritten during draft reconstruction.
+Reapply uses the saved definition and inputs unless the user selects new ones. It resolves bindings against the current workflow context, invalidates stale previews and preserves explicit publication selection. A change requiring new authority is visible and revalidated before submission. Draft reconstruction never rewrites immutable execution snapshots.
 
 ## Validation and Errors
 
@@ -409,11 +411,11 @@ A bound-field error points to the editable workflow repository, branch, publicat
 
 ## API, Security, and Persistence
 
-Catalog operations list/read definitions, validate inputs, preview expansion, and expand for submission. The API exposes enough metadata for the shared form and explainable publication preview without exposing credentials or executing arbitrary schemas.
+Catalog operations list/read definitions, validate inputs, preview and expand. The API exposes metadata for the shared form and publication preview, never credentials or arbitrary schema execution.
 
 Widget names are allowlisted, markdown is sanitized, expressions use the safe interpreter, and secrets never appear in defaults or provenance. Binding/default declarations are untrusted data until normalized and admitted. Unsupported authority-bearing metadata blocks execution rather than degrading to a permissive editor.
 
-Persist authored task inputs, selected definition evidence, context/policy intent, expanded-step provenance, and derived target/effect contracts in existing workflow artifacts. Definition evidence is immutable for admitted runs. A preset update changes its content digest, not the old run. A new draft may review and adopt the change; a retry or child cannot silently do so.
+Persist authored inputs, definition evidence, context/policy intent, expanded-step provenance and derived target/effect contracts in existing workflow artifacts. Definition evidence is immutable for admitted runs: a preset update changes its digest, not the old run, and only a new draft may review and adopt it.
 
 Versioned reconstruction distinguishes equal historical passthrough values, conflicting copies, coordinator-local None, old Skill-owned Auto, and mixed per-step policies. Equal proven copies can collapse; ambiguous intent requires review. Supported historical replay retains original bytes and semantics. New authoring has no permanent override aliases.
 

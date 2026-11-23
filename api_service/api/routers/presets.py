@@ -31,6 +31,7 @@ from api_service.services.presets.catalog import (
     PresetValidationError,
 )
 from api_service.services.presets.save import PresetSaveService
+from moonmind.security.operator_admission import OperatorAdmission
 
 
 async def _reject_legacy_scope(request: Request) -> None:
@@ -89,8 +90,15 @@ def _map_service_error(exc: Exception) -> HTTPException:
 
 async def _get_catalog_service(
     session: AsyncSession = Depends(get_async_session),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> PresetCatalogService:
-    return PresetCatalogService(session)
+    from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+
+    # The operator's own artifact access, for expansions that read a retained
+    # input such as a security plan.
+    return PresetCatalogService(
+        session, artifact_access=ArtifactAccessContext.for_operator(user)
+    )
 
 
 async def _get_save_service(

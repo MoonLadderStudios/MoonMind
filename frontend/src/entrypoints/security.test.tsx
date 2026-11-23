@@ -70,3 +70,30 @@ it.each([403, 404, 500])('does not treat an unrelated catalog HTTP %s as disable
   expect(await screen.findByText(/Preset catalog unavailable/)).toBeTruthy();
   expect(fetch.mock.calls.some(([input]) => new URL(String(input), window.location.origin).pathname === '/api/executions')).toBe(false);
 });
+
+it('runs a retained security plan from its report through Create', async () => {
+  const identity = 'a'.repeat(64);
+  vi.spyOn(window, 'fetch').mockImplementation(async input => {
+    const url = new URL(String(input), window.location.origin);
+    let data: unknown;
+    if (url.pathname.endsWith('/presets')) data = { items: [{ slug: 'security-plan', title: 'Security plan', tags: ['security', 'assessment'] }] };
+    else if (url.pathname === '/api/executions') data = { items: [{ workflowId: 'plan:1', title: 'Shop plan', status: 'completed', createdAt: '2026-11-23T12:00:00Z' }], nextPageToken: null };
+    else if (url.pathname.endsWith('/artifacts')) data = { artifacts: [
+      { artifact_id: 'art_plan', links: [{ link_type: 'report.structured', label: 'Security plan' }, { link_type: 'security.plan' }], metadata: { producer: 'security.plan', subject: identity } },
+      // A readable report is not a plan, and a plan-shaped subject alone is not one either.
+      { artifact_id: 'art_report', links: [{ link_type: 'report.primary', label: 'Plan report' }], metadata: { subject: identity } },
+    ] };
+    else data = { namespace: 'default', runId: 'run1', inputParameters: {} };
+    return { ok: true, json: async () => data } as Response;
+  });
+  renderWithClient(<MemoryRouter initialEntries={['/security/reports']}><SecurityPage payload={payload} /></MemoryRouter>);
+  await screen.findByRole('cell', { name: 'Shop plan' });
+  fireEvent.change(screen.getByLabelText('Assessment'), { target: { value: 'plan:1' } });
+  expect(await screen.findByText('Plan report')).toBeTruthy();
+  const runs = screen.getAllByRole('link', { name: 'Run this plan' });
+  expect(runs).toHaveLength(1);
+  const href = new URL(runs[0]!.getAttribute('href')!, window.location.origin);
+  expect(href.pathname).toBe('/workflows/new');
+  expect(href.searchParams.get('preset')).toBe('security-plan-run');
+  expect(JSON.parse(href.searchParams.get('presetInputs')!)).toEqual({ security_plan: { planRef: 'art_plan', identity } });
+});

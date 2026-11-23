@@ -24028,6 +24028,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             # A security planning step's declared draft; publication carries it
             # to the deterministic security.plan step. Absent from older steps.
             "securityPlanDraftPath",
+            # A plan run job's declared outcome record, published for the
+            # concluding security.assess step. Absent from older steps.
+            "securityPlanJobOutcomePath",
             # Built-in vector retrieval is retired (#4105): `rag` /
             # `followUpRetrieval` are never forwarded into new agent requests.
             # Admission rejects explicit retired requirements for new work, so

@@ -61,8 +61,13 @@ async def expand_preset_for_child_run(
     session: Any,
     initial_parameters: Mapping[str, Any] | None,
     allow_goal_schedule: bool = True,
+    artifact_access: Any = None,
 ) -> dict[str, Any]:
-    """Expand stored preset provenance into executable workflow steps."""
+    """Expand stored preset provenance into executable workflow steps.
+
+    ``artifact_access`` is the operator's artifact access, for presets that
+    read a retained input such as a security plan run.
+    """
 
     parameters = _coerce_mapping(initial_parameters)
     workflow_payload = _coerce_mapping(parameters.get("workflow"))
@@ -164,7 +169,11 @@ async def expand_preset_for_child_run(
     )
     if isinstance(target_runtime, str) and target_runtime.strip():
         template_context["targetRuntime"] = target_runtime.strip()
-    catalog = PresetCatalogService(session)
+    catalog = (
+        PresetCatalogService(session)
+        if artifact_access is None
+        else PresetCatalogService(session, artifact_access=artifact_access)
+    )
     expand_kwargs = {
         "slug": template_slug,
         "inputs": template_inputs,

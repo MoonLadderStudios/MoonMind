@@ -324,8 +324,9 @@ async def _retain(
     report = (
         "# Security plan\n\n"
         f"Drafted for {snapshot.project_name} / {snapshot.environment_name}. "
-        "No scanner, cloud, web or network job ran; launch planned work separately "
-        "under a saved authorization.\n" + render_security_plan(plan, plan_ref=plan_ref)
+        "No scanner, cloud, web or network job ran; run planned work with the Run "
+        "security plan preset under a saved authorization.\n"
+        + render_security_plan(plan, plan_ref=plan_ref)
     ).encode()
     report_key = hashlib.sha256(report).hexdigest()
     report_ref = await _saved_report(execution, report_key) or await execution.write(

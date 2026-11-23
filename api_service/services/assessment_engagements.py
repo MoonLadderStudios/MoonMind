@@ -130,6 +130,92 @@ def _review_text(value: str) -> str:
     return re.sub(r"([\\`*_{}\[\]()#+.!|>~-])", r"\\\1", value)
 
 
+def _scope_problem(job_spec: Mapping[str, Any], scope) -> str | None:
+    """Why the authorization would refuse a scoped step's compiled job, if it would.
+
+    Uses the same typed checks as job admission. Repository and image work is
+    unscoped and runs outside the authorization, so it is never reported here.
+    """
+    from moonmind.schemas.container_job_models import ContainerJobSpec
+    from moonmind.security.workload_profiles import (
+        cloud_assessment_within_scope,
+        tls_assessment_within_scope,
+        web_assessment_within_scope,
+    )
+
+    checks = {
+        "webAssessment": web_assessment_within_scope,
+        "cloudAssessment": cloud_assessment_within_scope,
+        "tlsAssessment": tls_assessment_within_scope,
+    }
+    field = next((name for name in checks if job_spec.get(name) is not None), None)
+    if field is None:
+        return None
+    try:
+        spec = ContainerJobSpec.model_validate(dict(job_spec))
+    except (TypeError, ValueError):
+        return "its job input cannot be checked against this authorization"
+    try:
+        checks[field](spec, scope)
+    except PermissionError as exc:
+        return str(exc)
+    return None
+
+
+def _uncovered_steps(workflow: Mapping[str, Any], scope) -> list[str]:
+    items = []
+    for step in workflow.get("steps") or ():
+        if not isinstance(step, Mapping):
+            continue
+        annotations = step.get("annotations")
+        hint = (
+            annotations.get("securityAssessment")
+            if isinstance(annotations, Mapping)
+            else None
+        )
+        if not isinstance(hint, Mapping) or not isinstance(
+            hint.get("jobSpec"), Mapping
+        ):
+            continue
+        problem = _scope_problem(hint["jobSpec"], scope)
+        if problem is None:
+            continue
+        job = f" (planned job {hint['planJobId']})" if hint.get("planJobId") else ""
+        items.append(
+            _review_text(
+                f"{step.get('title') or step.get('id') or 'Step'}{job}: {problem}."
+            )
+        )
+    return items
+
+
+def _plan_run_items(workflow: Mapping[str, Any]) -> list[str]:
+    """The retained plan a plan run is bound to, and planned work it leaves out."""
+    items = []
+    for step in workflow.get("steps") or ():
+        tool = step.get("tool") if isinstance(step, Mapping) else None
+        inputs = tool.get("inputs") if isinstance(tool, Mapping) else None
+        run = inputs.get("planRun") if isinstance(inputs, Mapping) else None
+        plan = inputs.get("securityPlan") if isinstance(inputs, Mapping) else None
+        if not isinstance(run, Mapping) or not isinstance(plan, Mapping):
+            continue
+        items.append(
+            _review_text(
+                f"Security plan {plan.get('planRef')}, identity {run.get('identity')}: "
+                f"{len(run.get('jobs') or [])} planned jobs launch in this workflow."
+            )
+        )
+        items.extend(
+            _review_text(
+                f"Not launched: planned job {item.get('jobId')} ({item.get('kind')}), "
+                f"{item.get('state')}: {item.get('reason')}"
+            )
+            for item in run.get("skipped") or []
+            if isinstance(item, Mapping)
+        )
+    return items
+
+
 def build_assessment_proposal(
     payload: Mapping[str, Any], record: AssessmentAuthorization
 ) -> dict[str, Any]:
@@ -211,7 +297,9 @@ def build_assessment_proposal(
         )
     workflow = plan.get("workflow") or {}
     plan_items = []
+    not_covered = []
     if isinstance(workflow, Mapping):
+        not_covered = _uncovered_steps(workflow, scope)
         if workflow.get("title"):
             plan_items.append(str(workflow["title"]))
         for step in workflow.get("steps") or ():
@@ -229,6 +317,7 @@ def build_assessment_proposal(
                         or "Workflow step"
                     )
                 )
+        plan_items.extend(_plan_run_items(workflow))
     plan_items.extend(
         f"{key}: {plan[key]}"
         for key in (
@@ -315,6 +404,19 @@ def build_assessment_proposal(
         ]))
     if realtime_operations:
         sections.insert(3, ("Real-time operations", realtime_operations))
+    if not_covered:
+        sections.insert(
+            1,
+            (
+                "Not covered",
+                [
+                    *not_covered,
+                    "This authorization would refuse these steps. Remove them (for a "
+                    "plan run, exclude their planned jobs) and review again to launch "
+                    "the rest; the report shows their requirements as not assessed.",
+                ],
+            ),
+        )
     return {
         "schemaVersion": "assessment-engagement/v1",
         "authorizationRef": record.ref,

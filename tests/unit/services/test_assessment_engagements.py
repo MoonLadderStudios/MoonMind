@@ -371,3 +371,110 @@ async def test_direct_preview_checks_project_references_in_initial_parameters(
         validate.await_args.args[0]["assessmentProject"]
         == parameters["assessmentProject"]
     )
+
+
+def _plan_run_payload(identity="a" * 64):
+    from moonmind.security.assessment_preset_inputs import assessment_job_spec
+
+    web = {
+        "mode": "baseline",
+        "assessmentRef": "client-review",
+        "origin": "https://example.test",
+        "routes": [{"path": "/", "methods": ["GET"]}],
+        "egressPolicyRef": "shop-egress",
+    }
+    return {
+        "workflow": {
+            "steps": [
+                {
+                    "id": "code",
+                    "title": "Collect repository evidence",
+                    "skill": {"name": "security-review"},
+                    "annotations": {
+                        "securityAssessment": {
+                            "kind": "repository-scan",
+                            "planJobId": "code-scan",
+                            "jobSpec": {"repositoryScan": {"scanner": "gitleaks"}},
+                        }
+                    },
+                },
+                {
+                    "id": "web",
+                    "title": "Collect evidence and assess",
+                    "skill": {"name": "security-review"},
+                    "annotations": {
+                        "securityAssessment": {
+                            "kind": "web-assessment",
+                            "planJobId": "web-baseline",
+                            "admission": web,
+                            "jobSpec": assessment_job_spec("web-assessment", web),
+                        }
+                    },
+                },
+                {
+                    "id": "conclude",
+                    "type": "tool",
+                    "tool": {
+                        "id": "security.assess",
+                        "inputs": {
+                            "securityPlan": {"planRef": "art_plan"},
+                            "planRun": {
+                                "identity": identity,
+                                "jobs": [
+                                    {"jobId": "code-scan", "stepIds": ["code"]},
+                                    {"jobId": "web-baseline", "stepIds": ["web"]},
+                                ],
+                                "skipped": [
+                                    {
+                                        "jobId": "dns-1",
+                                        "kind": "dns-assessment",
+                                        "state": "not_run",
+                                        "reason": "A plan run cannot launch it yet.",
+                                    }
+                                ],
+                            },
+                        },
+                    },
+                },
+            ]
+        }
+    }
+
+
+def _section(review, label):
+    return next((s["items"] for s in review["sections"] if s["label"] == label), None)
+
+
+def test_review_names_planned_work_the_authorization_does_not_cover():
+    review = build_assessment_proposal(_plan_run_payload(), record())
+    # Shown before launch, right after the workflow plan, with the real
+    # admission check's reason. Repository work is unscoped and never listed.
+    assert review["sections"][1]["label"] == "Not covered"
+    uncovered = _section(review, "Not covered")
+    assert len(uncovered) == 2
+    assert "planned job web\\-baseline" in uncovered[0]
+    assert "network access is not admitted" in uncovered[0]
+    assert "Remove them" in uncovered[1]
+    plan = _section(review, "Workflow plan")
+    # Plan content is untrusted, so it stays literal on Markdown surfaces.
+    assert any(
+        "Security plan art\\_plan, identity " + "a" * 64 in item for item in plan
+    )
+    assert any("Not launched: planned job dns\\-1" in item for item in plan)
+
+
+def test_covered_plan_run_has_no_uncovered_section_and_binds_the_plan_digest():
+    from tests.unit.security.test_assessment_authorizations import authorization, saved
+
+    now = datetime.now(timezone.utc)
+    value = authorization(
+        validFrom=now.replace(year=now.year - 1).isoformat(),
+        validUntil=now.replace(year=now.year + 1).isoformat(),
+    )
+    value["scope"].update(networkRefs=["shop-egress"], maxJobSeconds=1200)
+    covered = AssessmentAuthorizations.model_validate(saved(value)).authorizations[0]
+    review = build_assessment_proposal(_plan_run_payload(), covered)
+    assert _section(review, "Not covered") is None
+    # Another plan identity is another proposal: the earlier review is stale.
+    changed = build_assessment_proposal(_plan_run_payload("b" * 64), covered)
+    assert changed["proposalDigest"] != review["proposalDigest"]
