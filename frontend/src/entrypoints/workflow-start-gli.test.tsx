@@ -8,8 +8,11 @@ afterEach(cleanup);
 
 const preset = readinessPresetForm('security-gli-readiness');
 
-it('uses existing Create fields for saved systems, per-control choices and evidence prompts', () => {
-  const savedSystem = { entityName: 'Saved RGS', entityType: 'rgs', productType: 'interactive_gaming' };
+it('renders the pack profile as typed Create fields, loads saved system inputs and keeps per-control choices', () => {
+  const savedSystem = {
+    entityName: 'Saved RGS', entityType: 'rgs', productType: 'interactive_gaming',
+    jurisdictionBasis: { status: 'adopted', recordVersion: 'synthetic-1' },
+  };
   function Fields() {
     const [values, setValues] = useState<Record<string, unknown>>({ system_inputs: savedSystem });
     return <>
@@ -25,16 +28,20 @@ it('uses existing Create fields for saved systems, per-control choices and evide
   const view = render(<Fields />);
   const system = within(view.getByRole('group', { name: 'Saved assessed business and system inputs' }));
   expect(system.getByLabelText('Entity Type')).toHaveProperty('value', 'rgs');
-  const jsonEditor = system.getByLabelText('Saved assessed business and system inputs JSON') as HTMLTextAreaElement;
-  expect(JSON.parse(jsonEditor.value)).toEqual(savedSystem);
-  const imported = { ...savedSystem, entityName: 'Imported RGS' };
-  fireEvent.change(jsonEditor, { target: { value: JSON.stringify(imported) } });
+  // Typed profile fields replace the free-form JSON editor.
+  expect(system.queryByLabelText('Saved assessed business and system inputs JSON')).toBeNull();
+  const basis = within(system.getByRole('group', { name: 'Jurisdiction Basis' }));
+  expect(basis.getByLabelText('Record Version')).toHaveProperty('value', 'synthetic-1');
+  fireEvent.change(basis.getByLabelText('Record Version'), { target: { value: 'synthetic-2' } });
   fireEvent.change(system.getByLabelText('Entity Type'), { target: { value: 'operator' } });
   const choices = { 'GLI-GSF-2:B': { systems: ['casino'], period: { start: '2026-01-01', end: '2026-12-31' } } };
   fireEvent.change(view.getByLabelText('Requirement scope and period choices'), { target: { value: JSON.stringify(choices) } });
   fireEvent.change(view.getByLabelText('Evidence record artifacts'), { target: { value: 'art_audit_evidence' } });
   const result = JSON.parse(view.getByTestId('saved-values').textContent || '{}');
-  expect(result.system_inputs).toEqual({ ...imported, entityType: 'operator' });
+  expect(result.system_inputs).toEqual({
+    ...savedSystem, entityType: 'operator',
+    jurisdictionBasis: { status: 'adopted', recordVersion: 'synthetic-2' },
+  });
   expect(result.requirement_choices).toEqual(choices);
   expect(result.evidence_refs).toEqual(['art_audit_evidence']);
   expect(view.getByText(/Laboratory evaluation and regulator approval/)).toBeTruthy();

@@ -20,7 +20,7 @@ from moonmind.security.assessments import (
     Observation,
     compare_observations,
 )
-from moonmind.security.frameworks import FrameworkAssessmentInput
+from moonmind.security.frameworks import EvidencePeriod, FrameworkAssessmentInput
 from moonmind.security.ukgc_rts import UKGC_RTS_PACK, prepare_audit
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures/security"
@@ -449,26 +449,18 @@ def test_unknown_native_framework_state_is_unsupported():
         ).build("catalog", {})
 
 
-@pytest.mark.parametrize(
-    "pack_id", ["ukgc-rts-security", "gli-19-readiness", "nj-dge-readiness"]
-)
-def test_existing_framework_owners_preserve_applicability(pack_id):
+def test_existing_framework_owner_preserves_applicability():
     from moonmind.security.frameworks import load_framework_pack
     from moonmind.security.oscal_export import OscalAdapter
-    from tests.unit.security import test_gli_readiness, test_nj_dge, test_ukgc_rts
+    from tests.unit.security import test_ukgc_rts
 
-    source = {
-        "ukgc-rts-security": test_ukgc_rts,
-        "gli-19-readiness": test_gli_readiness,
-        "nj-dge-readiness": test_nj_dge,
-    }[pack_id]
     comparison, _, _, _ = native_fixture()
-    report = source.evaluate()
+    report = test_ukgc_rts.evaluate()
     # A native non-applicable record stays in the catalog and out of selection.
     report["requirements"][0]["status"] = "not_applicable"
     adapter = OscalAdapter(
         comparison=comparison,
-        pack=load_framework_pack(pack_id),
+        pack=load_framework_pack("ukgc-rts-security"),
         framework_report=report,
     )
     catalog = adapter.build("catalog", {})
@@ -484,6 +476,119 @@ def test_existing_framework_owners_preserve_applicability(pack_id):
         json.loads(catalog["catalog"]["controls"][0]["props"][-1]["value"])["status"]
         == "not_applicable"
     )
+
+
+def unified_gaming_report(pack_id, comparison):
+    """A unified control report for one installed gaming pack, as a run writes it."""
+    from moonmind.security.control_assessments import assess_controls
+    from moonmind.security.framework_packs import (
+        compile_framework_plan,
+        readiness_metadata,
+    )
+    from moonmind.security.framework_registry import installed_pack
+    from tests.unit.security import test_gli_readiness, test_nj_dge
+
+    pack = installed_pack(pack_id)[1]
+    if pack_id == "gli-19-readiness":
+        data = test_gli_readiness.fixture()
+        result = test_gli_readiness.evaluate(
+            data, evidence=[data["technicalEvidence"]]
+        )
+    else:
+        data = test_nj_dge.fixture()
+        data["framework"]["requirementChoices"] = {
+            "nj.partner.player-accounts": {"notApplicableReason": "Partner owns accounts"}
+        }
+        from moonmind.security.framework_registry import pack_behavior
+        from moonmind.security.pack_readiness import evaluate_readiness, parse_evidence
+
+        behavior = pack_behavior(pack)
+        result = evaluate_readiness(
+            pack,
+            behavior,
+            profile=data["framework"]["systemInputs"],
+            period=EvidencePeriod.model_validate(data["framework"]["period"]),
+            choices=data["framework"]["requirementChoices"],
+            records=[
+                parse_evidence(behavior, row, f"art_evidence_{i}")
+                for i, row in enumerate(data["evidence"])
+            ],
+            audit=behavior.records_model.model_validate(data["audit"]),
+            admitted_assets=["rgs"],
+        )
+    scope = AssessmentScope(assets=data["framework"]["systemInputs"]["systems"])
+    plan, _ = compile_framework_plan(
+        pack,
+        scope=scope,
+        period=EvidencePeriod.model_validate(data["framework"]["period"]),
+        choices=data["framework"]["requirementChoices"],
+        now=datetime(2026, 11, 23, tzinfo=UTC),
+        readiness=result,
+    )
+    control = assess_controls(
+        plan,
+        comparison,
+        scan_ref="art_scan",
+        comparison_ref="art_comparison",
+        coverage_windows=[],
+        now=datetime(2026, 11, 23, tzinfo=UTC),
+        evidence_availability={},
+    )
+    metadata = {
+        "id": pack.id,
+        "edition": pack.edition,
+        "readiness": readiness_metadata(pack, result),
+    }
+    return pack, control, metadata
+
+
+@pytest.mark.parametrize("pack_id", ["gli-19-readiness", "nj-dge-readiness"])
+def test_unified_gaming_exports_validate_with_unchanged_control_identities(pack_id):
+    from moonmind.security.oscal_export import (
+        OscalAdapter,
+        control_id,
+        readiness_report,
+    )
+
+    golden = json.loads((FIXTURES / "gaming_equivalence.json").read_text())
+    family = "gli" if pack_id.startswith("gli") else "nj"
+    legacy_ids = [
+        key
+        for scenario in golden["scenarios"]
+        if scenario["family"] == family
+        for status in scenario["expected"]["statuses"].values()
+        for key in status
+    ]
+    comparison, _, _, _ = native_fixture()
+    pack, control, metadata = unified_gaming_report(pack_id, comparison)
+    adapter = OscalAdapter(
+        comparison=comparison,
+        pack=pack,
+        framework_report=readiness_report(control, metadata),
+    )
+    catalog = adapter.build("catalog", {})
+    profile = adapter.build("profile", {"catalog": "art_catalog"})
+    validate_document("catalog", catalog)
+    validate_document("profile", profile)
+    controls = [row["id"] for row in catalog["catalog"]["controls"]]
+    assert set(controls) == {control_id(key) for key in legacy_ids}
+    assert controls == [control_id(row.id) for row in pack.requirements]
+    selected = profile["profile"]["imports"][0]["include-controls"][0]["with-ids"]
+    statuses = {
+        row.requirement.id: row.requirement.readiness.status
+        for row in control.requirements
+    }
+    for key, status in statuses.items():
+        assert (control_id(key) in selected) == (
+            status
+            not in {"not_applicable", "not_selected", "excluded", "exclusion_for_review"}
+        )
+    if family == "gli":
+        # Same pack ID and edition, so the exchange identities are unchanged too.
+        assert catalog["catalog"]["uuid"] == uid("gli-19-readiness:4.0::catalog")
+        assert control_id("GLI-GSF-1:Appendix A") in controls
+    else:
+        assert control_id("nj.partner.player-accounts") not in selected
 
 
 def test_native_accepted_risk_and_deviations_remain_attributed():

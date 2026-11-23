@@ -55,6 +55,16 @@ def associated_evidence(*, request, work, outputs, evidence, summary_ref, review
                 )
             }
         )
+    for selection in request.selected_packs:
+        # Readiness evidence, audit records and the compared previous report
+        # are direct inputs of this assessment.
+        refs.update({ref: "" for ref in selection.evidence_refs})
+        for ref in (
+            selection.audit_ref,
+            selection.previous_assessment_ref or request.previous_assessment_ref,
+        ):
+            if ref:
+                refs[ref] = ""
     if request.control_assessment:
         refs.update(
             {

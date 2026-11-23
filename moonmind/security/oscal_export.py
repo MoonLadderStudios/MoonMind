@@ -27,7 +27,8 @@ from moonmind.utils.logging import (
 )
 
 if TYPE_CHECKING:
-    from moonmind.security.assessments import Comparison
+    from moonmind.security.assessments import Comparison, ControlAssessment
+    from moonmind.security.framework_packs import VersionedFrameworkPack
 
 OSCAL_VERSION = "1.2.3"
 NAMESPACE = "https://moonmind.dev/ns/assessment"
@@ -163,6 +164,32 @@ class OscalContext(FrameworkContract):
         )
 
 
+def readiness_report(control: ControlAssessment, metadata: dict) -> dict:
+    """Per-requirement readiness rows of one pack in a unified control report.
+
+    The adapter maps the same states and control identities as a retained
+    legacy framework report, so both export alike.
+    """
+    rows = []
+    for result in control.requirements:
+        row = result.requirement
+        if (row.framework_id, row.framework_edition) != (
+            metadata["id"],
+            metadata["edition"],
+        ) or row.readiness is None:
+            continue
+        rows.append(
+            {
+                "id": row.id,
+                "status": row.readiness.status,
+                "exclusionReason": row.readiness.exclusion_reason,
+                "conclusion": result.conclusion,
+                "evidenceRefs": row.readiness.evidence_refs,
+            }
+        )
+    return {"requirements": rows, "evidence": metadata["readiness"]["evidence"]}
+
+
 def artifact_uri(ref: str) -> str:
     return "urn:moonmind:artifact:" + ref
 
@@ -196,7 +223,7 @@ class OscalAdapter:
         self,
         *,
         comparison: Comparison,
-        pack: FrameworkPack,
+        pack: FrameworkPack | VersionedFrameworkPack,
         framework_report: dict,
         context: OscalContext | None = None,
         ssp: dict | None = None,
@@ -678,10 +705,20 @@ class OscalAdapter:
                         native_assessment=self.rows[r.id],
                     ),
                     "links": [
-                        {"href": s.url, "rel": "reference", "text": s.section}
+                        {
+                            "href": s.url or artifact_uri(s.artifact_ref),
+                            "rel": "reference",
+                            "text": s.section,
+                        }
                         for s in r.sources
                     ]
-                    or [{"href": self.pack.source.url, "rel": "reference"}],
+                    or [
+                        {
+                            "href": self.pack.source.url
+                            or artifact_uri(self.pack.source.artifact_ref),
+                            "rel": "reference",
+                        }
+                    ],
                     "parts": [
                         {
                             "id": control_id(r.id) + ".statement",

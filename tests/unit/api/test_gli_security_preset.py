@@ -74,11 +74,20 @@ async def test_gli_catalog_api_and_saved_system_inputs(tmp_path, monkeypatch):
             expanded = response.json()
             payload = expanded["steps"][0]["tool"]["inputs"]
             parsed = AssessmentRequest.model_validate(payload)
-            assert parsed.framework.system_inputs == values["system_inputs"]
-            assert parsed.framework.requirement_choices["GLI-GSF-2:B"].systems == [
-                "casino"
-            ]
-            assert parsed.framework.audit_ref is None
+            # The saved framework.packId shape normalizes once to the
+            # installed declared pack; system inputs become its profile.
+            assert parsed.framework is None
+            [selection] = parsed.selected_packs
+            assert (selection.pack_id, selection.edition) == ("gli-19-readiness", "4.0")
+            assert selection.profile == values["system_inputs"]
+            assert selection.requirement_choices["GLI-GSF-2:B"].systems == ["casino"]
+            assert selection.audit_ref is None
+            system = detail["inputSchema"]["properties"]["system_inputs"]
+            assert system["additionalProperties"] is False
+            assert set(system["properties"]) == set(values["system_inputs"]) | {
+                "directlyAffectsGaming"
+            }
+            assert "system_inputs" not in (detail.get("uiSchema") or {})
             assert (
                 expanded["appliedTemplate"]["inputs"]["system_inputs"]
                 == values["system_inputs"]

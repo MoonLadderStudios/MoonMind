@@ -7,6 +7,7 @@ import json
 from pydantic import ValidationError
 
 from moonmind.security.assessments import Comparison, content_key
+from moonmind.security.framework_packs import parse_declared_pack
 from moonmind.security.frameworks import load_framework_pack
 from moonmind.security.oscal_export import (
     LIMITATIONS,
@@ -15,6 +16,7 @@ from moonmind.security.oscal_export import (
     OscalAdapter,
     OscalContext,
     UnsupportedExport,
+    readiness_report,
 )
 from moonmind.workflows.temporal.artifacts import ArtifactDependency
 
@@ -30,8 +32,26 @@ def _models(selected):
     return [m for m in MODELS if m in needed]
 
 
+async def _selected_framework(execution, request, framework, controls):
+    """The exported pack, its native rows and the sealed report that holds them."""
+    if framework is not None:
+        return load_framework_pack(request.framework.pack_id), framework[1], framework[0]
+    packs = controls[1].pack_metadata if controls else []
+    if len(packs) != 1 or "readiness" not in packs[0]:
+        raise UnsupportedExport(
+            "Select a native framework assessment before requesting OSCAL export.",
+            "missing_framework",
+        )
+    _, raw = await execution.read(packs[0]["artifactRef"])
+    return (
+        parse_declared_pack(raw),
+        readiness_report(controls[1], packs[0]),
+        controls[0],
+    )
+
+
 async def export_assessment(
-    execution, *, request, comparison, comparison_ref, framework
+    execution, *, request, comparison, comparison_ref, framework, controls=None
 ):
     result = {
         "status": "unsupported",
@@ -47,14 +67,12 @@ async def export_assessment(
                 "OSCAL export supports one framework pack per assessment. This assessment selected multiple packs.",
                 "multiple_framework_packs",
             )
-        if framework is None:
-            raise UnsupportedExport(
-                "Select a native framework assessment before requesting OSCAL export.",
-                "missing_framework",
-            )
+        pack, framework_report, framework_ref = await _selected_framework(
+            execution, request, framework, controls
+        )
         context = None
         ssp = None
-        refs = [comparison_ref, framework[0]]
+        refs = [comparison_ref, framework_ref]
         if selection.context_ref:
             _, raw = await execution.read(selection.context_ref)
             context = OscalContext.model_validate_json(raw)
@@ -70,7 +88,7 @@ async def export_assessment(
                     )
         # Read every required dependency under current access, before exporting
         # it. A historical seal is retention evidence, never a new read grant.
-        for root in (comparison_ref, framework[0]):
+        for root in (comparison_ref, framework_ref):
             proof = await execution.service.dependency_proof(
                 root_artifact_id=root, access=execution.access
             )
@@ -85,8 +103,8 @@ async def export_assessment(
             await execution.read(ref)
         adapter = OscalAdapter(
             comparison=Comparison.model_validate(comparison),
-            pack=load_framework_pack(request.framework.pack_id),
-            framework_report=framework[1],
+            pack=pack,
+            framework_report=framework_report,
             context=context,
             ssp=ssp,
         )

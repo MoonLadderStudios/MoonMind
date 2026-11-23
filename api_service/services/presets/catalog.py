@@ -1841,10 +1841,10 @@ def load_seed_template_definitions(seed_dir: Path) -> list[dict[str, Any]]:
         schema = (document.get("annotations") or {}).get("inputSchema", {})
         system = schema.get("properties", {}).get("system_inputs", {})
         if pack_id := system.pop("x-framework-inputs", None):
-            from moonmind.security.framework_registry import readiness_pack
+            from moonmind.security.framework_registry import framework_input_schema
 
             schema["properties"]["system_inputs"] = {
-                **readiness_pack(pack_id).input_schema(),
+                **framework_input_schema(pack_id),
                 **system,
             }
         document["seedSource"] = str(yaml_path)

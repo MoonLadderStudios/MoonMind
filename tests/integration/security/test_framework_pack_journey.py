@@ -639,7 +639,8 @@ async def test_one_readiness_registration_lists_prepares_and_renders(environment
         systems: list[str]
         sample_size: int = Field(ge=1)
 
-    pack = load_framework_pack("gli-19-readiness")
+    # The legacy registration path remains for the ISO, SOC 2 and UKGC packs.
+    pack = load_framework_pack("ukgc-rts-security")
     pack.id = "fixture-readiness"
 
     def evaluate(selection, *, evidence, audit):
@@ -672,3 +673,103 @@ async def test_one_readiness_registration_lists_prepares_and_renders(environment
         access=recurring.access_for_test("workflow:assessment"),
     )
     assert b"Reviewed fixture sample of 3" in primary
+
+
+async def test_gli_nj_and_declared_pack_conclude_per_framework_from_shared_evidence(
+    environment, monkeypatch
+):
+    """Built-in and operator packs in one plan, evidence read once (#5435)."""
+    from collections import Counter
+
+    from moonmind.security.framework_registry import installed_pack
+    from tests.unit.security.test_gli_readiness import fixture as gli_fixture
+    from tests.unit.security.test_nj_dge import fixture as nj_fixture
+
+    service = environment.service
+    request = await inputs(service)
+    await select_pack(service, request)
+    declared = request.pop("frameworkPack")
+    alone = await recurring.invoke(
+        service, {**request, "frameworkPack": declared}, key="declared-alone"
+    )
+    # One artifact names a GLI and an NJ requirement. Each pack judges only
+    # its own requirement IDs against its own rules.
+    shared = {
+        **gli_fixture()["technicalEvidence"],
+        "kind": "control_evidence",
+        "method": "evidence",
+        "requirementIds": ["GLI-GSF-2:B", "nj.rgs.incidents"],
+        "systems": ["app"],
+        "period": {"start": "2026-11-04", "end": "2026-11-07"},
+        "incidentDisposition": "no_reportable_incidents",
+    }
+    shared.pop("artifactRef")
+    shared_ref = await recurring.put(service, shared)
+    gli = gli_fixture()["framework"]
+    gli["systemInputs"]["systems"] = ["app"]
+    gli["evidenceRefs"] = [shared_ref]
+    nj_pack = installed_pack("nj-dge-readiness")[1]
+    nj_profile = dict(nj_fixture()["framework"]["systemInputs"], systems=["app"])
+    request["framework"] = gli
+    request["frameworkPacks"] = [
+        {
+            "packId": nj_pack.id,
+            "edition": nj_pack.edition,
+            "revision": nj_pack.revision,
+            "period": {"start": "2026-11-04", "end": "2026-11-07"},
+            "profile": nj_profile,
+            "evidenceRefs": [shared_ref],
+        },
+        declared,
+    ]
+    reads = Counter()
+    read = service.read
+
+    async def counted(**kwargs):
+        reads[kwargs["artifact_id"]] += 1
+        return await read(**kwargs)
+
+    monkeypatch.setattr(service, "read", counted)
+    result = await recurring.invoke(service, request, key="combined")
+    assert reads[shared_ref] == 1
+    report = await recurring.read(service, result["controlAssessmentRef"])
+    packs = {pack["id"]: pack for pack in report["frameworkPacks"]}
+    assert list(packs) == ["gli-19-readiness", "nj-dge-readiness", "synthetic"]
+    outputs = {pack["id"]: pack for pack in result["frameworkPacks"]}
+    assert {key: "readiness" in pack for key, pack in outputs.items()} == {
+        "gli-19-readiness": True,
+        "nj-dge-readiness": True,
+        "synthetic": False,
+    }
+    rows = {
+        (row["requirement"]["frameworkId"], row["requirement"]["id"]): row
+        for row in report["requirements"]
+    }
+    readiness = {
+        key: row["requirement"]["readiness"]["status"]
+        for key, row in rows.items()
+        if "readiness" in row["requirement"]
+    }
+    assert readiness["gli-19-readiness", "GLI-GSF-2:B"] == "evidence_recorded"
+    assert readiness["nj-dge-readiness", "nj.rgs.incidents"] == "evidence_recorded"
+    # The shared record supplies nothing it does not name.
+    assert readiness["nj-dge-readiness", "nj.rgs.games-releases"] == "incomplete"
+    assert readiness["gli-19-readiness", "GLI-GSF-2:C"] == "incomplete"
+    for pack_id in ("gli-19-readiness", "nj-dge-readiness"):
+        assert packs[pack_id]["readiness"]["readiness"] == "incomplete"
+        assert packs[pack_id]["conclusionCounts"]["satisfied"] == 0
+        assert {
+            claim["status"] for claim in packs[pack_id]["readiness"]["externalClaims"].values()
+        } == {"Unverified"}
+    # The operator pack concludes from native evidence exactly as it does alone.
+    single = await recurring.read(service, alone["controlAssessmentRef"])
+    assert (
+        rows["synthetic", "control-1"]["conclusion"]
+        == single["requirements"][0]["conclusion"]
+    )
+    assert packs["synthetic"]["conclusionCounts"] == {
+        key: int(single["requirements"][0]["conclusion"] == key)
+        for key in ("satisfied", "not_satisfied", "inconclusive", "not_assessed")
+    }
+    assert result["scanRef"] == alone["scanRef"]
+    assert shared_ref in await recurring.required(service, result["controlAssessmentRef"])

@@ -1,4 +1,4 @@
-"""Public/synthetic readiness behaviors for MoonLadderStudios/MoonMind#5195."""
+"""GLI-19/GSF readiness as installed declared-pack data (#5195, #5435)."""
 
 import copy
 import json
@@ -6,9 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from moonmind.security.frameworks import FrameworkAssessmentInput, load_framework_pack
+from moonmind.security.framework_registry import installed_pack, pack_behavior
+from moonmind.security.frameworks import EvidencePeriod
+from moonmind.security.pack_readiness import evaluate_readiness, parse_evidence
 
 FIXTURE = Path(__file__).resolve().parents[2] / "fixtures/security/gli_readiness.json"
+PACK_ID = "gli-19-readiness"
 
 
 def fixture():
@@ -26,68 +29,107 @@ def request_payload():
     }
 
 
-def evaluate(data=None, evidence=None):
-    from moonmind.security.gli_readiness import prepare_assessment
+def pack():
+    return installed_pack(PACK_ID)[1]
 
+
+def evaluate(data=None, evidence=None):
+    """Readiness for the fixture through the installed pack and its behavior."""
     data = data or fixture()
-    return prepare_assessment(
-        FrameworkAssessmentInput.model_validate(data["framework"]),
-        evidence=evidence or [],
+    framework = data["framework"]
+    behavior = pack_behavior(pack())
+    records = [
+        parse_evidence(behavior, row, row.get("artifactRef") or f"art_evidence_{index}")
+        for index, row in enumerate(evidence or [])
+    ]
+    return evaluate_readiness(
+        pack(),
+        behavior,
+        profile=framework["systemInputs"],
+        period=EvidencePeriod.model_validate(framework["period"]),
+        choices=framework.get("requirementChoices", {}),
+        records=records,
+        audit=None,
+        admitted_assets=["casino"],
     )
 
 
-def test_versioned_pack_uses_shared_contract_and_official_sources():
-    from moonmind.security.frameworks import FrameworkPack
+def requests(result):
+    return result.context["evidenceRequests"]
 
-    pack = load_framework_pack("gli-19-readiness")
-    assert pack.edition == "4.0"
-    assert pack.published_on.isoformat() == "2026-11-03"
-    assert pack.source.url == fixture()["standardSource"]
-    assert FrameworkPack.model_validate_json(pack.model_dump_json()) == pack
-    assert {r.module for r in pack.requirements} == {
+
+def test_installed_pack_is_declared_data_with_modules_rights_and_profile():
+    current = pack()
+    assert current.schema_version == "declared-framework-pack/v1"
+    assert (current.edition, current.published_on.isoformat()) == ("4.0", "2026-11-03")
+    assert current.source.url == fixture()["standardSource"]
+    assert (current.publication_status, current.distribution) == (
+        "published",
+        "redistributable",
+    )
+    assert current.behavior == "gli-module-applicability"
+    assert [m.id for m in current.modules] == [
         "GLI-19",
         "GLI-GSF-1",
         "GLI-GSF-2",
         "GLI-GSF-3",
         "GLI-GSF-5",
-    }
+    ]
+    assert {r.module for r in current.requirements} == {m.id for m in current.modules}
     assert all(
-        r.summary and r.sources and r.evidence_types and r.responsibilities
-        for r in pack.requirements
+        r.summary and r.sources and r.evidence_types and r.responsibilities and r.subject_types
+        for r in current.requirements
     )
+    assert {f.role for f in current.profile.fields} >= {
+        "entity_type",
+        "product_type",
+        "systems",
+        "jurisdiction_basis",
+    }
 
 
 @pytest.mark.parametrize(
     "entity,product,modules",
     [
-        (
-            "operator",
-            "interactive_gaming",
-            {"GLI-19", "GLI-GSF-1", "GLI-GSF-2", "GLI-GSF-5"},
-        ),
-        (
-            "rgs",
-            "interactive_gaming",
-            {"GLI-19", "GLI-GSF-1", "GLI-GSF-2", "GLI-GSF-5"},
-        ),
-        (
-            "ancillary_provider",
-            "ancillary_service",
-            {"GLI-GSF-1", "GLI-GSF-2", "GLI-GSF-3"},
-        ),
+        ("operator", "interactive_gaming", {"GLI-19", "GLI-GSF-1", "GLI-GSF-2", "GLI-GSF-5"}),
+        ("rgs", "interactive_gaming", {"GLI-19", "GLI-GSF-1", "GLI-GSF-2", "GLI-GSF-5"}),
+        ("ancillary_provider", "ancillary_service", {"GLI-GSF-1", "GLI-GSF-2", "GLI-GSF-3"}),
     ],
 )
-def test_entity_modules_and_visible_exclusions(entity, product, modules):
+def test_profile_inputs_select_modules_with_reasons(entity, product, modules):
     data = fixture()
     data["framework"]["systemInputs"].update(
         entityType=entity, productType=product, directlyAffectsGaming=False
     )
-    report = evaluate(data)
+    result = evaluate(data)
     assert {
-        r["module"] for r in report["modules"] if r["status"] == "applicable"
+        m["module"] for m in result.context["modules"] if m["status"] == "applicable"
     } == modules
-    assert all(r["reason"] for r in report["modules"])
-    assert report["readiness"] == "incomplete"
+    assert all(m["reason"] for m in result.context["modules"])
+    assert result.context["readiness"] == "incomplete"
+
+
+def test_gsf3_is_never_assigned_automatically_to_an_rgs():
+    data = fixture()
+    data["framework"]["systemInputs"].update(entityType="rgs", directlyAffectsGaming=False)
+    result = evaluate(data)
+    gsf3 = next(m for m in result.context["modules"] if m["module"] == "GLI-GSF-3")
+    assert gsf3["status"] == "not_applicable"
+    assert {
+        row["status"] for key, row in result.rows.items() if key.startswith("GLI-GSF-3:")
+    } == {"not_applicable"}
+
+
+def test_incomplete_profile_yields_incomplete_applicability_not_a_guess():
+    data = fixture()
+    for key in ("entityType", "productType"):
+        data["framework"]["systemInputs"].pop(key)
+    result = evaluate(data)
+    assert result.context["applicability"]["status"] == "incomplete"
+    assert {m["status"] for m in result.context["modules"]} == {"incomplete"}
+    assert {row["status"] for row in result.rows.values()} == {"applicability_missing"}
+    ids = {r["id"] for r in requests(result)}
+    assert {"scope.entityType", "scope.productType", "module.GLI-19"} <= ids
 
 
 def test_unknown_scope_partner_ownership_and_explicit_exclusion_survive():
@@ -103,19 +145,15 @@ def test_unknown_scope_partner_ownership_and_explicit_exclusion_survive():
             "period": {"start": "2026-11-04", "end": "2026-11-06"},
         },
     }
-    report = evaluate(data)
-    rows = {r["id"]: r for r in report["requirements"]}
+    rows = evaluate(data).rows
     assert rows["GLI-19:3.2"]["status"] == "partner_owned"
-    assert (
-        rows["GLI-19:3.2"]["responsibilityReason"] == "KYC owned by contracted operator"
-    )
+    assert rows["GLI-19:3.2"]["responsibilityReason"] == "KYC owned by contracted operator"
     assert rows["GLI-19:6.10"]["status"] == "excluded"
-    assert rows["GLI-GSF-2:B"]["period"]["end"] == "2026-11-06"
+    assert rows["GLI-GSF-2:B"]["period"].end.isoformat() == "2026-11-06"
     del data["framework"]["systemInputs"]["entityType"]
-    assert evaluate(data)["applicability"]["status"] == "incomplete"
-    assert any(
-        r["id"] == "scope.entityType" for r in evaluate(data)["evidenceRequests"]
-    )
+    result = evaluate(data)
+    assert result.context["applicability"]["status"] == "incomplete"
+    assert any(r["id"] == "scope.entityType" for r in requests(result))
 
 
 @pytest.mark.parametrize(
@@ -124,20 +162,20 @@ def test_unknown_scope_partner_ownership_and_explicit_exclusion_survive():
 def test_other_products_require_their_own_profile(product, profile):
     data = fixture()
     data["framework"]["systemInputs"]["productType"] = product
-    report = evaluate(data)
-    assert report["readiness"] == "incomplete"
-    assert profile in report["applicability"]["reason"]
+    result = evaluate(data)
+    assert result.context["readiness"] == "incomplete"
+    assert profile in result.context["applicability"]["reason"]
 
 
 def test_only_matching_scoped_evidence_can_support_readiness():
     evidence = fixture()["technicalEvidence"]
-    report = evaluate(evidence=[evidence])
-    rows = {r["id"]: r for r in report["requirements"]}
+    result = evaluate(evidence=[evidence])
+    rows = result.rows
     assert rows["GLI-GSF-2:B"]["status"] == "evidence_recorded"
     assert rows["GLI-19:5.2"]["status"] == "incomplete"
     assert rows["GLI-19:1.5"]["status"] == "incomplete"
-    assert report["certification"] == "not_performed"
-    assert report["jurisdictionApproval"] == "not_performed"
+    assert result.context["certification"] == "not_performed"
+    assert result.context["jurisdictionApproval"] == "not_performed"
     for change in (
         {"outcome": "failed"},
         {"edition": "3.0"},
@@ -148,14 +186,13 @@ def test_only_matching_scoped_evidence_can_support_readiness():
         {"provenance": dict(evidence["provenance"], standard="GLI-GSF-2 v0.0")},
     ):
         changed = dict(copy.deepcopy(evidence), **change)
-        assert (
-            next(
-                r
-                for r in evaluate(evidence=[changed])["requirements"]
-                if r["id"] == "GLI-GSF-2:B"
-            )["status"]
-            != "evidence_recorded"
-        )
+        assert evaluate(evidence=[changed]).rows["GLI-GSF-2:B"]["status"] != "evidence_recorded"
+
+
+def test_clean_scan_leaves_game_operational_and_laboratory_gaps_open():
+    result = evaluate(evidence=[fixture()["technicalEvidence"]])
+    missing = {kind for r in requests(result) for kind in r.get("evidenceTypes", [])}
+    assert {"rng", "game_math", "organizational", "laboratory", "regulator"} <= missing
 
 
 def test_publication_is_not_jurisdiction_adoption_or_approval():
@@ -165,27 +202,36 @@ def test_publication_is_not_jurisdiction_adoption_or_approval():
         "status": "unknown",
         "recordVersion": "2",
     }
-    report = evaluate(data)
-    assert report["applicability"]["status"] == "incomplete"
-    assert any(r["id"] == "jurisdiction.adoption" for r in report["evidenceRequests"])
-    assert all(
-        r["status"] == "Unverified" and r["gap"] and r["nextStep"]
-        for r in report["externalVerification"].values()
-    )
+    result = evaluate(data)
+    assert result.context["applicability"]["status"] == "incomplete"
+    assert any(r["id"] == "jurisdiction.adoption" for r in requests(result))
+
+
+def test_laboratory_regulator_and_customer_qualification_stay_unverified():
+    claims = evaluate(evidence=[fixture()["technicalEvidence"]]).context["externalClaims"]
+    for name in ("laboratory", "regulator", "customer"):
+        assert claims[name]["status"] == "Unverified"
+        assert claims[name]["verifiableBy"] and claims[name]["nextStep"]
+    # Laboratory evaluation and regulator approval are separate claims.
+    assert claims["laboratory"]["verifiableBy"] != claims["regulator"]["verifiableBy"]
 
 
 def test_unknown_requirements_and_scope_expansion_are_rejected():
     data = fixture()
     data["framework"]["requirementChoices"] = {"invented": {}}
-    with pytest.raises(ValueError, match="Unknown GLI requirement"):
+    with pytest.raises(ValueError, match="Unknown framework requirement"):
         evaluate(data)
     data["framework"]["requirementChoices"] = {"GLI-GSF-2:B": {"systems": ["outside"]}}
     with pytest.raises(ValueError, match="scope"):
         evaluate(data)
+    data["framework"]["requirementChoices"] = {}
+    data["framework"]["systemInputs"]["systems"] = ["outside"]
+    with pytest.raises(ValueError, match="admitted assessment scope"):
+        evaluate(data)
 
 
 def test_specialized_games_and_operational_controls_remain_visible_without_checks():
-    rows = {r["id"]: r for r in evaluate()["requirements"]}
+    result = evaluate()
     for key in (
         "GLI-19:5.4",
         "GLI-19:5.5",
@@ -194,7 +240,5 @@ def test_specialized_games_and_operational_controls_remain_visible_without_check
         "GLI-GSF-1:GIS-3",
         "GLI-GSF-5:OGIS-5",
     ):
-        assert rows[key]["status"] == "incomplete"
-        assert any(
-            r.get("requirementId") == key for r in evaluate()["evidenceRequests"]
-        )
+        assert result.rows[key]["status"] == "incomplete"
+        assert any(r.get("requirementId") == key for r in requests(result))

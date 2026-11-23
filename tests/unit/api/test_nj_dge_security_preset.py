@@ -69,15 +69,29 @@ async def test_nj_catalog_api_and_saved_system_inputs(tmp_path, monkeypatch):
             expanded = response.json()
             payload = expanded["steps"][0]["tool"]["inputs"]
             parsed = AssessmentRequest.model_validate(payload)
-            assert parsed.framework.pack_id == "nj-dge-readiness"
-            assert parsed.framework.system_inputs == values["system_inputs"]
+            # The saved framework.packId shape normalizes once to the
+            # installed declared pack; system inputs become its profile.
+            assert parsed.framework is None
+            [selection] = parsed.selected_packs
+            assert (selection.pack_id, selection.artifact_ref) == (
+                "nj-dge-readiness",
+                None,
+            )
+            assert selection.profile == values["system_inputs"]
             assert (
-                parsed.framework.requirement_choices[
+                selection.requirement_choices[
                     "nj.rgs.incidents"
                 ].period.start.isoformat()
                 == "2026-03-01"
             )
-            assert parsed.framework.audit_ref is None
+            assert selection.audit_ref is None
+            system = detail["inputSchema"]["properties"]["system_inputs"]
+            assert system["additionalProperties"] is False
+            assert set(system["properties"]) == set(values["system_inputs"]) | {
+                "offersInternetGaming",
+                "annualRules",
+            }
+            assert "system_inputs" not in (detail.get("uiSchema") or {})
             assert (
                 expanded["appliedTemplate"]["inputs"]["system_inputs"]
                 == values["system_inputs"]

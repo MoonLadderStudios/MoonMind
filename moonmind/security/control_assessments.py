@@ -172,6 +172,9 @@ def review_organisational_evidence(request, requirement, availability, now):
     return result
 
 
+READINESS_LIMITATION = "Recorded readiness evidence is not independently verified; laboratory, regulator and customer qualification remain Unverified."
+
+
 def assess_controls(
     plan: ControlAssessmentPlan,
     comparison: Comparison,
@@ -200,14 +203,27 @@ def assess_controls(
         if requirement.applicability == "undetermined":
             limits.append("Applicability has not been established.")
             actions.append("Determine applicability and record its rationale.")
-        if applicable and not requirement.objectives_complete:
+        readiness = requirement.readiness
+        if applicable and readiness is not None:
+            # Readiness evidence is recorded context, not an executed check.
+            limits.append(READINESS_LIMITATION)
+            actions.append(
+                "Obtain independent verification of the recorded evidence; recorded readiness is not a satisfied conclusion."
+                if readiness.status == "evidence_recorded"
+                else "Supply the readiness evidence requested for this requirement, then reassess."
+            )
+        if readiness is not None:
+            if readiness.evidence_refs:
+                methods.add("document_review")
+            evidence_refs.extend(readiness.evidence_refs)
+        if applicable and readiness is None and not requirement.objectives_complete:
             limits.append(
                 "The declared objectives do not cover the complete requirement."
             )
             actions.append(
                 "Identify the complete requirement objectives and their assessment basis."
             )
-        if applicable and not requirement.objectives:
+        if applicable and readiness is None and not requirement.objectives:
             limits.append("No executable objective checks were selected.")
             actions.append(
                 "Select explicit checks and retain their scoped execution evidence."
@@ -391,7 +407,7 @@ def assess_controls(
                     else "satisfied" if coverage == "complete" else "inconclusive"
                 )
             )
-            if conclusion != "satisfied":
+            if conclusion != "satisfied" and readiness is None:
                 actions.append(
                     "Complete or repeat the listed objective checks within the admitted scope and assessment period."
                 )
@@ -433,6 +449,46 @@ def assess_controls(
     )
 
 
+def _render_readiness(readiness, clean) -> list[str]:
+    """Per-framework readiness headline, external claims and the full record."""
+    import json
+
+    from moonmind.utils.logging import redact_evidence_text
+
+    applicability = readiness["applicability"]
+    lines = [
+        f"Readiness: {readiness['readiness']}. Certification and jurisdiction approval: not performed.",
+        f"Applicability: {applicability['status']}. {clean(applicability['reason'])}",
+    ]
+    for module in readiness.get("modules", []):
+        status = (
+            f"; {module['status']}: {clean(module['reason'])}" if "status" in module else ""
+        )
+        lines.append(
+            f"- Module {clean(module['module'])} {clean(module['edition'])}: source {module['sourceStatus']}{status}"
+        )
+    for name, claim in readiness.get("externalClaims", {}).items():
+        lines.append(
+            f"- External claim {clean(name)}: {claim['status']}. Verifiable by {clean(claim['verifiableBy'])}."
+            + (f" Next: {clean(claim['nextStep'])}" if claim.get("nextStep") else "")
+        )
+    unresolved = readiness.get("unresolvedRequirements", [])
+    lines.append(
+        f"Evidence requests: {len(readiness.get('evidenceRequests', []))}. Unresolved requirements: {clean(', '.join(unresolved) or 'none')}."
+    )
+    # The complete scoped record keeps exclusions, partner ownership,
+    # provenance and every request in the export, not just the headline.
+    record = {k: v for k, v in readiness.items() if k != "requirementStatuses"}
+    lines += [
+        "",
+        "```json",
+        redact_evidence_text(json.dumps(record, indent=2, ensure_ascii=False)),
+        "```",
+        "",
+    ]
+    return lines
+
+
 def render_control_assessment(
     report: ControlAssessment, *, structured_ref: str | None = None
 ) -> str:
@@ -465,9 +521,13 @@ def render_control_assessment(
             "",
             f"### Framework pack: {clean(pack['id'])} / {clean(pack['edition'])} / {clean(pack['revision'])}.",
             f"Pack artifact: {clean(pack['artifactRef'])}; SHA-256: {clean(pack['sha256'])}.",
-            f"Publication: {clean(pack['publicationStatus'])}; distribution: {clean(pack['distribution'])}.",
+            f"Publication: {clean(pack['publicationStatus'])}; published: {clean(pack.get('publishedOn') or 'not recorded')}; distribution: {clean(pack['distribution'])}.",
             f"Previous assessment: {clean(pack.get('previousAssessmentStatus', 'initial'))}.",
         ]
+        if pack.get("previousReportSummary"):
+            lines.append(clean(pack["previousReportSummary"]))
+        if pack.get("readiness"):
+            lines += _render_readiness(pack["readiness"], clean)
         for name, label in (
             ("conclusionCounts", "Conclusions"),
             ("coverageCounts", "Coverage"),
@@ -497,7 +557,8 @@ def render_control_assessment(
                 pack["edition"],
             ):
                 lines.append(
-                    f"- {clean(row.id)}: **{result.conclusion}** ({result.coverage})."
+                    f"- {clean(row.id)}: **{result.conclusion}** ({result.coverage})"
+                    + (f"; readiness {row.readiness.status}." if row.readiness else ".")
                 )
 
     # Keep all pack conclusions together. Additional detail is retained by
@@ -514,6 +575,18 @@ def render_control_assessment(
             f"Applicability: {row.applicability}. {clean(row.applicability_reason)}",
             f"Scope: {clean(', '.join(row.scope.assets))}. Period: {row.period.start} to {row.period.end}.",
             f"Conclusion: **{result.conclusion}**. Coverage: {result.coverage}. Evidence: {result.evidence_sufficiency}. Review: {result.review_state}.",
+            *(
+                [
+                    f"Readiness status: {row.readiness.status}. Recorded evidence: {clean(', '.join(row.readiness.evidence_refs) or 'none')}."
+                    + (
+                        f" Exclusion: {clean(row.readiness.exclusion_reason)}."
+                        if row.readiness.exclusion_reason
+                        else ""
+                    )
+                ]
+                if row.readiness
+                else []
+            ),
             f"Methods: {', '.join(result.methods) or 'not assessed'}. Objective basis: {clean(row.objective_basis)}",
             *[
                 f"- {clean(item.id)}: {item.outcome}; {item.checked_cells}/{item.required_cells} asset/rule checks complete."

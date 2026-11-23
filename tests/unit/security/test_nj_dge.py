@@ -1,4 +1,4 @@
-"""New Jersey scoped readiness behaviors for MoonLadderStudios/MoonMind#5196."""
+"""New Jersey DGE readiness as installed declared-pack data (#5196, #5435)."""
 
 import copy
 import json
@@ -6,10 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from moonmind.security.frameworks import FrameworkAssessmentInput, load_framework_pack
+from moonmind.security.framework_registry import installed_pack, pack_behavior
+from moonmind.security.frameworks import EvidencePeriod
+from moonmind.security.pack_readiness import evaluate_readiness, parse_evidence
 
 FIXTURE = Path(__file__).resolve().parents[2] / "fixtures/security/nj_dge.json"
 ANNUAL = {"nj.internet.annual", "nj.network.annual", "nj.rgs.annual"}
+PACK_ID = "nj-dge-readiness"
 
 
 def fixture():
@@ -28,18 +31,42 @@ def request_payload(data=None):
     }
 
 
-def evaluate(data=None):
-    from moonmind.security.nj_dge import prepare_assessment
+class Report(dict):
+    """Rows and readiness context in the shape the assertions below read."""
 
+
+def evaluate(data=None):
     data = data or fixture()
-    return prepare_assessment(
-        FrameworkAssessmentInput.model_validate(data["framework"]),
-        evidence=[
-            dict(row, artifactRef=f"art_evidence_{i}")
+    framework = data["framework"]
+    pack = installed_pack(PACK_ID)[1]
+    behavior = pack_behavior(pack)
+    result = evaluate_readiness(
+        pack,
+        behavior,
+        profile=framework["systemInputs"],
+        period=EvidencePeriod.model_validate(framework["period"]),
+        choices=framework.get("requirementChoices", {}),
+        records=[
+            parse_evidence(behavior, row, f"art_evidence_{i}")
             for i, row in enumerate(data["evidence"])
         ],
-        audit=data["audit"],
+        audit=behavior.records_model.model_validate(data["audit"]),
+        admitted_assets=framework["systemInputs"].get("systems", []),
     )
+    report = Report(result.context)
+    by_id = {r.id: r for r in pack.requirements}
+    report["requirements"] = [
+        {
+            **row,
+            "id": key,
+            "title": by_id[key].title,
+            "source": by_id[key].sources[0].url,
+            "systems": row["systems"],
+            "period": row["period"].model_dump(mode="json"),
+        }
+        for key, row in result.rows.items()
+    ]
+    return report
 
 
 def rows(report):
@@ -66,6 +93,7 @@ def test_entity_rule_applicability(profile, applicable):
         if r["id"] in ANNUAL and r["applicabilityStatus"] == "applicable"
     } == applicable
     assert all(r["reason"] and r["source"] for r in report["requirements"])
+    assert report["applicability"]["status"] == "scoped"
     assert report["reportingConditions"]["annualReportToDivision"] == bool(applicable)
 
 
@@ -186,17 +214,25 @@ def test_scoped_evidence_never_inherits_approval_incident_or_partner_status():
         )
 
 
-def test_source_snapshot_and_external_assurance_are_explicit():
+def test_source_snapshot_modules_and_external_claims_are_explicit():
     report = evaluate()
     assert report["readiness"] == "prepared"
-    assert report["sourceCompleteness"]["status"] == "Unverified"
-    sources = report["ruleSources"]
-    assert {s["section"] for s in sources} >= {"13:69O-1.2", "13:69D-2.4", "13:69O-3.1"}
-    assert all(s["edition"] and s["reviewedOn"] and s["url"] for s in sources)
-    assert report["gliAdoption"]["status"] == "Unverified"
-    assert report["externalAssurance"]["status"] == "Unverified"
+    modules = {m["module"]: m for m in report["modules"]}
+    assert {"13:69O-1.2", "13:69D-2.4", "13:69O-3.1"} <= set(modules)
+    assert all(m["edition"] for m in modules.values())
+    # An unverified rule source stays marked Unverified with its reason.
+    assert {
+        key for key, m in modules.items() if m["sourceStatus"] == "Unverified"
+    } == {"dge-rule-index", "dge-tsb-guidance"}
+    assert all(m["statusReason"] for m in modules.values())
+    claims = report["externalClaims"]
+    assert claims["source-completeness"]["status"] == "Unverified"
+    assert claims["gli-adoption"]["status"] == "Unverified"
+    for name in ("laboratory", "regulator", "customer", "professional-assessment"):
+        assert claims[name]["status"] == "Unverified"
+        assert claims[name]["verifiableBy"] and claims[name]["nextStep"]
     assert report["reportingConditions"]["submissionPerformed"] is False
-    assert load_framework_pack("nj-dge-readiness").id == report["pack"]["id"]
+    assert installed_pack(PACK_ID)[1].distribution == "redistributable"
 
 
 def test_requirement_specific_scope_period_and_exclusion_evidence():

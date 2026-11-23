@@ -1186,6 +1186,46 @@ def _rng_observation(request, summary: RngAssessment, ref: str, created_at: date
     )
 
 
+def _pack_failure(label, exc, field, model=None):
+    """One admission failure per selected pack, without echoing input values."""
+    from moonmind.security.evidence_exports import validation_summary
+    from moonmind.security.framework_packs import VersionedFrameworkPack
+
+    if isinstance(exc, ToolFailure):
+        return ToolFailure(
+            exc.error_code, f"{label}.{field}: {exc.message}", exc.retryable
+        )
+    if isinstance(exc, TemporalArtifactError):
+        code = getattr(exc, "code", None) or (
+            "POLICY_VIOLATION"
+            if isinstance(exc, TemporalArtifactAuthorizationError)
+            else "INVALID_INPUT"
+        )
+        return ToolFailure(
+            code, f"{label}.{field} is unreadable ({type(exc).__name__})", exc.retryable
+        )
+    if isinstance(exc, ValidationError):
+        detail = validation_summary(exc, model or VersionedFrameworkPack)
+    elif isinstance(exc, (UnicodeError, json.JSONDecodeError, RecursionError)):
+        detail = "artifactRef must contain valid framework pack JSON"
+    elif isinstance(exc, ValueError):
+        # The compiler and loader use fixed diagnostics; Pydantic input and
+        # JSON decoder errors (which can contain source text) are handled above.
+        detail = str(exc)
+    else:
+        raise exc
+    return ToolFailure("INVALID_INPUT", f"Invalid {label}: {detail}", False)
+
+
+def _pack_output(pack: dict, keys) -> dict:
+    """Compact activity output; pack narrative stays in the retained report."""
+    output = {key: pack[key] for key in keys}
+    if readiness := pack.get("readiness"):
+        output["readiness"] = readiness["readiness"]
+        output["unresolvedRequirementCount"] = len(readiness["unresolvedRequirements"])
+    return output
+
+
 class AssessmentExecution:
     def __init__(
         self,
@@ -1419,27 +1459,93 @@ class AssessmentExecution:
             self, request, system=system, collected_evidence_refs=collected_evidence_refs
         )
 
-    async def read_declared_pack(self, selection, index, scope, now):
-        from moonmind.security.evidence_exports import validation_summary
-        from moonmind.security.framework_packs import (
-            VersionedFrameworkPack,
-            compile_framework_plan,
-            load_declared_pack,
-            retained_pack_metadata,
-            verify_source_documents,
+    async def retained_pack(self, selection):
+        """The selected pack's bytes, as a retained artifact the report cites."""
+        from moonmind.security.framework_packs import load_declared_pack
+        from moonmind.security.framework_registry import installed_pack
+
+        if selection.artifact_ref is None:
+            raw, pack = installed_pack(selection.pack_id)
+            if (pack.edition, pack.revision) != (selection.edition, selection.revision):
+                raise ValueError(
+                    "installed framework pack edition/revision differs from the selection"
+                )
+            digest = hashlib.sha256(raw).hexdigest()
+            # Retries and reruns in this execution cite the same retained bytes.
+            saved = await self.saved(kind="security.framework-pack", key=digest)
+            if saved and self.digests[saved[0]] == digest:
+                return saved[0], digest, pack
+            ref = await self.write(raw, kind="security.framework-pack", key=digest)
+            return ref, digest, pack
+        _, raw = await self.read(selection.artifact_ref)
+        if self.digests[selection.artifact_ref] != selection.sha256:
+            raise ValueError("sha256 differs from the pack artifact")
+        pack = load_declared_pack(
+            raw,
+            pack_id=selection.pack_id,
+            edition=selection.edition,
+            revision=selection.revision,
         )
+        return selection.artifact_ref, selection.sha256, pack
+
+    async def pack_readiness(self, pack, selection, scope, evidence, shared_ids):
+        """Evaluate a profile pack's recorded evidence, read once per assessment."""
+        from moonmind.security.framework_registry import pack_behavior
+        from moonmind.security.pack_readiness import (
+            evaluate_readiness,
+            input_refs,
+            parse_evidence,
+        )
+
+        behavior = pack_behavior(pack)
+        records, invalid = [], []
+        for ref in dict.fromkeys(selection.evidence_refs):
+            if ref not in evidence:
+                _, body = await self.read(ref)
+                try:
+                    evidence[ref] = json.loads(body)
+                except (UnicodeError, json.JSONDecodeError, RecursionError):
+                    evidence[ref] = None
+            try:
+                records.append(parse_evidence(behavior, evidence[ref], ref))
+            except ValueError:
+                invalid.append(ref)
+        audit = None
+        if selection.audit_ref:
+            if behavior.records_model is None:
+                raise ValueError("This framework accepts evidenceRefs only for audit evidence")
+            _, body = await self.read(selection.audit_ref)
+            audit = behavior.records_model.model_validate_json(body)
+        readiness = evaluate_readiness(
+            pack,
+            behavior,
+            profile=selection.profile,
+            period=selection.period,
+            choices=selection.requirement_choices,
+            records=records,
+            audit=audit,
+            invalid_refs=invalid,
+            admitted_assets=scope.assets,
+            shared_requirement_ids=shared_ids,
+        )
+        refs = [
+            *selection.evidence_refs,
+            *([selection.audit_ref] if selection.audit_ref else []),
+            *input_refs(
+                pack, behavior, profile=selection.profile, records=records, audit=audit
+            ),
+        ]
+        for ref in dict.fromkeys(refs):
+            await self.digest(ref)
+        return readiness, list(dict.fromkeys(refs))
+
+    async def load_selected_pack(self, selection, index):
+        """Read and verify one selected pack before any evidence is evaluated."""
+        from moonmind.security.framework_packs import verify_source_documents
 
         label = f"frameworkPacks[{index}] ({selection.pack_id})"
         try:
-            _, raw = await self.read(selection.artifact_ref)
-            if self.digests[selection.artifact_ref] != selection.sha256:
-                raise ValueError("sha256 differs from the pack artifact")
-            pack = load_declared_pack(
-                raw,
-                pack_id=selection.pack_id,
-                edition=selection.edition,
-                revision=selection.revision,
-            )
+            artifact_ref, digest, pack = await self.retained_pack(selection)
             try:
                 # Operator-owned sources pass the same artifact owner and digest
                 # check as the pack before any native collection starts.
@@ -1455,51 +1561,73 @@ class AssessmentExecution:
                     f"source document is unreadable ({type(exc).__name__})",
                     exc.retryable,
                 ) from None
+        except Exception as exc:
+            raise _pack_failure(label, exc, "artifactRef") from None
+        return artifact_ref, digest, pack
+
+    async def read_declared_pack(
+        self, selection, index, scope, now, evidence=None, loaded=None, shared_ids=()
+    ):
+        from moonmind.security.framework_packs import (
+            compile_framework_plan,
+            readiness_metadata,
+            retained_pack_metadata,
+        )
+
+        label = f"frameworkPacks[{index}] ({selection.pack_id})"
+        evidence = {} if evidence is None else evidence
+        artifact_ref, digest, pack = loaded or await self.load_selected_pack(
+            selection, index
+        )
+        model = None
+        try:
+            readiness, refs = None, []
+            if pack.profile is not None:
+                from moonmind.security.pack_readiness import profile_model
+
+                model = profile_model(pack)
+                readiness, refs = await self.pack_readiness(
+                    pack, selection, scope, evidence, frozenset(shared_ids)
+                )
+            elif selection.profile or selection.evidence_refs or selection.audit_ref:
+                raise ValueError(
+                    "profile, evidenceRefs and auditRef need a pack that declares profile inputs"
+                )
             plan, diagnostics = compile_framework_plan(
                 pack,
                 scope=scope,
                 period=selection.period,
                 choices=selection.requirement_choices,
                 now=now,
+                readiness=readiness,
             )
             metadata = retained_pack_metadata(
-                pack,
-                artifact_ref=selection.artifact_ref,
-                sha256=selection.sha256,
-                now=now,
+                pack, artifact_ref=artifact_ref, sha256=digest, now=now
             )
-        except ValidationError as exc:
-            detail = validation_summary(exc, VersionedFrameworkPack)
-        except (UnicodeError, json.JSONDecodeError, RecursionError):
-            detail = "artifactRef must contain valid framework pack JSON"
-        except ValueError as exc:
-            # The compiler and loader use fixed diagnostics; Pydantic input and
-            # JSON decoder errors (which can contain source text) are handled above.
-            detail = str(exc)
-        except TemporalArtifactError as exc:
-            code = getattr(exc, "code", None) or (
-                "POLICY_VIOLATION"
-                if isinstance(exc, TemporalArtifactAuthorizationError)
-                else "INVALID_INPUT"
-            )
-            raise ToolFailure(
-                code,
-                f"{label}.artifactRef is unreadable ({type(exc).__name__})",
-                exc.retryable,
-            ) from None
-        except ToolFailure as exc:
-            raise ToolFailure(
-                exc.error_code, f"{label}.artifactRef: {exc.message}", exc.retryable
-            ) from None
-        else:
-            metadata["diagnostics"] = diagnostics
-            return plan.requirements, metadata
-        raise ToolFailure("INVALID_INPUT", f"Invalid {label}: {detail}", False)
+            if readiness is not None:
+                metadata["readiness"] = readiness_metadata(pack, readiness)
+                metadata["inputRefs"] = refs
+        except Exception as exc:
+            raise _pack_failure(label, exc, "evidence", model) from None
+        metadata["diagnostics"] = diagnostics
+        return plan.requirements, metadata
 
     async def previous_framework_metadata(self, ref):
+        from moonmind.security.legacy_framework_reports import (
+            legacy_gaming_report,
+            legacy_pack_metadata,
+        )
+
         try:
             _, raw = await self.read(ref)
-            retained = ControlAssessment.model_validate_json(raw)
+            document = json.loads(raw)
+            if legacy_gaming_report(document):
+                # Temporary reader: retained pre-unification gaming reports.
+                packs = legacy_pack_metadata(document)
+                if await _proof(self.service, ref, self.access) is not None:
+                    return packs
+                return None
+            retained = ControlAssessment.model_validate(document)
             packs = retained.pack_metadata
             if (
                 packs
@@ -1521,6 +1649,7 @@ class AssessmentExecution:
             TemporalArtifactUnavailableError,
             ToolFailure,
             ValueError,
+            RecursionError,
         ):
             # An unreadable history record makes only the comparison unavailable.
             # The current assessment still evaluates its own evidence.
@@ -1536,9 +1665,23 @@ class AssessmentExecution:
             return request, []
         requirements, packs = [], []
         now = datetime.now(UTC)
+        loaded = [
+            await self.load_selected_pack(selection, index)
+            for index, selection in enumerate(selections)
+        ]
+        ids = [{row.id for row in pack.requirements} for _, _, pack in loaded]
+        # Evidence records are read once and judged separately by each pack.
+        # A record may name several packs' requirements; none transfers.
+        evidence = {}
         for index, selection in enumerate(selections):
             rows, metadata = await self.read_declared_pack(
-                selection, index, request.scope, now
+                selection,
+                index,
+                request.scope,
+                now,
+                evidence,
+                loaded[index],
+                set().union(*(ids[:index] + ids[index + 1 :])),
             )
             requirements.extend(rows)
             packs.append(metadata)
@@ -1677,6 +1820,8 @@ class AssessmentExecution:
                 required.extend(
                     item["artifactRef"] for item in pack.get("sourceDocuments", [])
                 )
+                # Readiness evidence, its provenance and audit records.
+                required.extend(pack.get("inputRefs", []))
             if review_readable:
                 required.append(request.review_ref)
             if review is not None:
@@ -3071,16 +3216,10 @@ class AssessmentExecution:
                 # Pack narrative belongs in the retained report, not a potentially
                 # multi-megabyte Temporal activity result.
                 frameworkPack=(
-                    {
-                        key: control_report.framework_pack[key]
-                        for key in (
-                            "id",
-                            "edition",
-                            "revision",
-                            "artifactRef",
-                            "sha256",
-                        )
-                    }
+                    _pack_output(
+                        control_report.framework_pack,
+                        ("id", "edition", "revision", "artifactRef", "sha256"),
+                    )
                     if control_report.framework_pack
                     else None
                 ),
@@ -3104,9 +3243,9 @@ class AssessmentExecution:
                 )
             if control_report.framework_packs:
                 outputs["frameworkPacks"] = [
-                    {
-                        k: pack[k]
-                        for k in (
+                    _pack_output(
+                        pack,
+                        (
                             "id",
                             "edition",
                             "revision",
@@ -3115,8 +3254,8 @@ class AssessmentExecution:
                             "conclusionCounts",
                             "coverageCounts",
                             "previousAssessmentStatus",
-                        )
-                    }
+                        ),
+                    )
                     for pack in control_report.framework_packs
                 ]
         github = work.get("githubAlerts")
@@ -3161,10 +3300,6 @@ class AssessmentExecution:
                 frameworkEdition=framework_report["pack"]["edition"],
                 evidenceRequests=framework_report["evidenceRequests"],
             )
-            from moonmind.security.framework_registry import readiness_pack
-
-            fields = readiness_pack(framework_report["pack"]["id"]).output_fields
-            outputs.update({name: framework_report[field] for name, field in fields})
         summary_ref = None
         methodology = None
         if methodology_plan is not None:
@@ -3454,6 +3589,7 @@ class AssessmentExecution:
                 comparison=comparison,
                 comparison_ref=comparison_ref,
                 framework=framework,
+                controls=controls,
             )
         if request.evidence_export is not None and len(request.selected_packs) > 1:
             outputs["evidenceExport"] = {
