@@ -1279,6 +1279,9 @@ def _pack_output(pack: dict, keys) -> dict:
 
 
 class AssessmentExecution:
+    #: Recorded as each written artifact's producer.
+    producer = TOOL_NAME
+
     def __init__(
         self,
         service: Any,
@@ -1445,7 +1448,7 @@ class AssessmentExecution:
             link={**self.execution, "link_type": kind},
             metadata_json={
                 "artifact_type": "security_assessment",
-                "producer": TOOL_NAME,
+                "producer": self.producer,
                 "subject": key,
                 "sensitivity": "restricted",
                 "step_id": self.context["node_id"],

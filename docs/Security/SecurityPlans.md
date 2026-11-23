@@ -128,6 +128,39 @@ unchanged retry reuses the retained one. A plan holds at most 16 standards,
 1,024 requirements and 32 jobs in 8 MiB, the bounds of the combined control
 plan and retained reports.
 
+## Planning from Create
+
+The `security-plan` preset is the Security workspace's start action, and goals
+that name a security plan select it. The operator picks a subject type
+(`application` until endpoint and network journeys land), a saved environment
+through the assessment picker, and standards from the catalog. The run holds
+no assessment scope, credential, egress grant or job reservation, and launches
+no scanner, cloud, web or network job.
+
+1. `security.plan` with `phase: context` checks the subject type and standards
+   (an unavailable pack fails with its reason) and retains a
+   `security-plan-context/v1`: the environment's target candidates, without
+   credential, connection or network references, and every requirement with
+   its allowed methods. The planner receives it as trusted step context.
+2. The `security-review` Skill's [planning procedure](../../.agents/skills/security-review/references/plan.md)
+   reads the repository read-only and writes a draft plan to
+   `artifacts/security-plan/draft.json`. The agent runtime publishes those
+   exact bytes as `securityPlanDraftRef`.
+3. `security.plan` with `phase: retain` derives the trusted content, adds the
+   questions the run cannot answer (such as the evidence period when the
+   environment records none) and validates. A draft that changes the subject
+   type, adds or drops a standard, alters a pack identity or makes an
+   operator's requirement choice is rejected, as is any draft that fails the
+   validation above. A valid plan is retained and sealed with its packs,
+   project snapshot, context and draft, and its readable plan and gap list
+   become the run's primary report. A rejected draft is kept, sealed under a
+   `security.plan-diagnostics` record and a readable report of the diagnostics.
+
+Nobody answers questions inside the run: missing inputs become open points and
+gaps, and the operator corrects them by editing and rerunning. The saved
+environment's evidence-processing policy is enforced before the planner
+starts, with no fallback provider.
+
 ## Web/API methodology
 
 The `methodology` section names the standard that declares procedures and

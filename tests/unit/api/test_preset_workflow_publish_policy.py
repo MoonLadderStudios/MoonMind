@@ -56,6 +56,7 @@ _PUBLISH_NOTHING_PRESETS = frozenset(
         "security-soc2-readiness",
         "security-iso-27001",
         "security-policy-pack",
+        "security-plan",
     }
 )
 
@@ -168,6 +169,13 @@ async def test_no_seed_preset_declares_auto_publish(tmp_path):
                 "assets": ["synthetic-isms"],
                 "system_inputs": {"systems": ["synthetic-isms"]},
                 "period": {"start": "2026-11-01", "end": "2026-11-02"},
+            },
+        ),
+        (
+            "security-plan",
+            {
+                "subject_type": "application",
+                "standards": [{"id": "owasp-asvs-l1", "edition": "5.0.0"}],
             },
         ),
         (

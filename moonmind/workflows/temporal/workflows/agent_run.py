@@ -3104,6 +3104,10 @@ class MoonMindAgentRun:
             if isinstance(value, str) and value.strip():
                 metadata["assessment_artifact_path"] = value.strip()
                 break
+        # A security planning step's draft, published for security.plan.
+        value = request_params.get("securityPlanDraftPath")
+        if isinstance(value, str) and value.strip():
+            metadata["securityPlanDraftPath"] = value.strip()
         for key in ("brief_artifact_path", "briefArtifactPath"):
             value = request_params.get(key)
             if isinstance(value, str) and value.strip():

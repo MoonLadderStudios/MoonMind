@@ -88,3 +88,38 @@ def test_goal_from_payloads_prefers_task_goal() -> None:
         )
         == "task goal"
     )
+
+
+def test_security_plan_goal_selects_the_plan_and_prefills_only_stated_values() -> None:
+    schedule = schedule_preset_from_goal(
+        "Security plan for the shop application against ISO 27001 and general best practices."
+    )
+
+    assert schedule is not None
+    assert schedule.slug == "security-plan"
+    assert schedule.reason == "security_plan_goal"
+    assert schedule.inputs["subject_type"] == "application"
+    assert [item["id"] for item in schedule.inputs["standards"]] == [
+        "iso-27001-readiness",
+        "owasp-asvs-l1",
+    ]
+
+    unstated = schedule_preset_from_goal("Draft a security assessment of our platform.")
+    assert unstated is not None
+    assert unstated.slug == "security-plan"
+    # Nothing the text does not state is guessed.
+    assert unstated.inputs == {}
+
+
+def test_security_wording_keeps_existing_goal_mappings() -> None:
+    cases = {
+        "Implement the security plan preset in Create.": "moonspec-orchestrate",
+        "Fix the security assessment for the login page.": "moonspec-orchestrate",
+        "Break down the security plan design into Jira stories.": "jira-breakdown-orchestrate",
+        "Security plan for MM-747.": "jira-implement",
+        "Security plan for MoonLadderStudios/MoonMind#123": "github-issue-implement",
+        "Add a repository dropdown to Create.": "moonspec-orchestrate",
+    }
+    for goal, slug in cases.items():
+        schedule = schedule_preset_from_goal(goal)
+        assert schedule is not None and schedule.slug == slug, goal

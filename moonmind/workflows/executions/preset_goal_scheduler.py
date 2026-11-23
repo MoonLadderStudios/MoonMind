@@ -61,6 +61,41 @@ def _github_issue_ref(goal: str) -> tuple[str, int] | None:
     return None
 
 
+_SECURITY_PLAN_PATTERN = re.compile(
+    r"^\W*(?:please\W+)?(?:(?:create|draft|make|prepare|plan|start|write|run)\s+)?"
+    r"(?:an?\s+|the\s+|my\s+)?security\s+(?:plan|assessment)\b"
+    r"|\bsecurity\s+(?:plan|assessment)\s+(?:for|of|against|covering)\b"
+)
+# Catalog standards a goal can name, by installed pack ID. Text that names
+# none leaves standards for the operator to choose; nothing is guessed.
+_STANDARD_NAMES = (
+    ("iso-27001-readiness", ("iso 27001", "iso/iec 27001", "iso27001")),
+    ("soc2-readiness", ("soc 2", "soc2")),
+    ("pci-dss-readiness", ("pci dss", "pci-dss")),
+    ("gli-19-readiness", ("gli-19", "gli 19")),
+    ("nj-dge-readiness", ("nj dge", "new jersey dge", "new jersey division of gaming")),
+    ("ukgc-rts-security", ("ukgc", "remote technical standards")),
+    ("owasp-asvs-l1", ("asvs", "owasp", "general best practices", "best practices")),
+)
+
+
+def _security_plan_inputs(lowered: str) -> dict[str, Any]:
+    from moonmind.security.framework_registry import installed_pack
+
+    inputs: dict[str, Any] = {}
+    if _contains_any(lowered, ("application", "app", "web app", "web application")):
+        inputs["subject_type"] = "application"
+    standards = []
+    for pack_id, names in _STANDARD_NAMES:
+        if any(name in lowered for name in names):
+            standards.append(
+                {"id": pack_id, "edition": installed_pack(pack_id)[1].edition}
+            )
+    if standards:
+        inputs["standards"] = standards
+    return inputs
+
+
 def goal_from_payloads(
     *,
     task_payload: Mapping[str, Any],
@@ -101,8 +136,10 @@ def schedule_preset_from_goal(goal: str) -> GoalPresetSchedule | None:
     """Select a seeded task preset from a plain goal.
 
     The selector is intentionally deterministic and conservative: it uses
-    stable Jira-key and task-shape signals, then falls back to MoonSpec
-    orchestration for a general implementation goal.
+    stable Jira-key and task-shape signals, routes a goal that names a security
+    plan or assessment (without implementation, breakdown or orchestration
+    wording) to the security plan, then falls back to MoonSpec orchestration
+    for a general implementation goal.
     """
 
     normalized_goal = _text(goal)
@@ -154,6 +191,19 @@ def schedule_preset_from_goal(goal: str) -> GoalPresetSchedule | None:
                 "constraints": "",
             },
             reason="github_issue_goal",
+        )
+
+    if (
+        _SECURITY_PLAN_PATTERN.search(lowered)
+        and not wants_breakdown
+        and not wants_implementation
+        and not wants_orchestration
+    ):
+        return GoalPresetSchedule(
+            goal=normalized_goal,
+            slug="security-plan",
+            inputs=_security_plan_inputs(lowered),
+            reason="security_plan_goal",
         )
 
     if wants_breakdown:

@@ -10382,6 +10382,57 @@ class TemporalAgentRuntimeActivities:
             published["assessmentVerdict"] = verdict_value
             return published
 
+        async def _publish_security_plan_draft() -> dict[str, Any]:
+            # The planner's declared draft is untrusted bytes: publish them
+            # unchanged so the deterministic security.plan step validates (or
+            # keeps for diagnosis) exactly what was drafted. A missing draft is
+            # reported by that step, not here.
+            draft_path = _metadata_text("securityPlanDraftPath")
+            workspace = _result_workspace() if draft_path else None
+            if workspace is None:
+                return {}
+            from moonmind.security.security_plan import MAX_PLAN_BYTES
+
+            for candidate in _workspace_moonspec_verify_path_candidates(
+                workspace, draft_path
+            ):
+                try:
+                    body = read_regular_file(candidate, limit=MAX_PLAN_BYTES)
+                except FileNotFoundError:
+                    continue
+                except (OSError, ValueError):
+                    logger.warning("Security plan draft is unreadable or oversized")
+                    return {}
+                artifact, _ = (
+                    await self._artifact_service.put_content_addressed_payload_complete(
+                        principal="system:agent_runtime",
+                        payload=body,
+                        content_type="application/json",
+                        scope="security-plan-drafts",
+                        link=_execution_ref("output.security_plan_draft"),
+                        metadata_json={
+                            "name": "security-plan-draft.json",
+                            "path": draft_path,
+                            "artifact_type": "security.plan-draft",
+                            "producer": "activity:agent_runtime.publish_artifacts",
+                            **step_artifact_metadata,
+                        },
+                    )
+                )
+                if await _parent_artifact_read_scope() is not None:
+                    await self._artifact_service.link_artifact(
+                        artifact_id=artifact.artifact_id,
+                        principal="system:agent_runtime",
+                        execution_ref=ExecutionRef(
+                            namespace=info.namespace,
+                            workflow_id=_metadata_text("parentWorkflowId"),
+                            run_id=_metadata_text("parentRunId"),
+                            link_type="input.security_plan_draft",
+                        ),
+                    )
+                return {"securityPlanDraftRef": artifact.artifact_id}
+            return {}
+
         async def _publish_issue_brief_artifact() -> dict[str, Any]:
             # The trusted issue loader owns the durable brief (see
             # docs/Workflows/WorkflowPresetsSystem.md: loader persists the
@@ -10649,6 +10700,16 @@ class TemporalAgentRuntimeActivities:
                     else {}
                 )
                 enriched_metadata_for_result.update(issue_brief_refs)
+                result_dict["metadata"] = enriched_metadata_for_result
+            security_plan_refs = await _publish_security_plan_draft()
+            if security_plan_refs:
+                published_refs.update(security_plan_refs)
+                enriched_metadata_for_result = (
+                    dict(result_dict.get("metadata") or {})
+                    if isinstance(result_dict.get("metadata"), Mapping)
+                    else {}
+                )
+                enriched_metadata_for_result.update(security_plan_refs)
                 result_dict["metadata"] = enriched_metadata_for_result
             # The parent consumes these generated envelopes after the child
             # returns. Verify server-recorded ancestry before publishing them,

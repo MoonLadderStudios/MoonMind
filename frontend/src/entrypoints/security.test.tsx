@@ -24,7 +24,9 @@ it('lists assessment workflows and links back to the existing runner without lau
   renderWithClient(<MemoryRouter initialEntries={['/security']}><SecurityPage payload={payload} /></MemoryRouter>);
   expect(await screen.findByRole('cell', { name: 'Web review' })).toBeTruthy();
   expect(await screen.findByRole('cell', { name: 'Store / Test' })).toBeTruthy();
-  expect(screen.getByRole('link', { name: 'Start assessment' }).getAttribute('href')).toBe('/workflows/new');
+  // The start action leads to the security plan preset in Create.
+  expect(screen.getByRole('link', { name: 'Start a security plan' }).getAttribute('href')).toBe('/workflows/new?preset=security-plan');
+  expect(screen.getByRole('link', { name: 'Start another assessment' }).getAttribute('href')).toBe('/workflows/new');
   expect(screen.getByRole('link', { name: 'Open / resume' }).getAttribute('href')).toBe('/workflows/assess%3A1');
   expect(fetch.mock.calls.some(([input]) => String(input).includes('targetSkillIn=') && !String(input).includes('unrelated'))).toBe(true);
 });

@@ -15,14 +15,14 @@ class ExecutableToolDiscoveryRegistry:
 
         # Discovery supplies the same server-owned contract used by workflow
         # compilation. Direct MCP calls still require ordinary task submission.
-        assessment = default_registry_tool_payload(name="security.assess")
-        self._tools = {
-            "security.assess": ToolMetadata(
-                name=assessment["name"],
-                description=assessment["description"],
-                inputSchema=assessment["inputs"]["schema"],
+        self._tools = {}
+        for name in ("security.assess", "security.plan"):
+            payload = default_registry_tool_payload(name=name)
+            self._tools[name] = ToolMetadata(
+                name=payload["name"],
+                description=payload["description"],
+                inputSchema=payload["inputs"]["schema"],
             )
-        }
 
     def list_tools(self) -> list[ToolMetadata]:
         """Return discoverable Temporal executable tools."""

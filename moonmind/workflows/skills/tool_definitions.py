@@ -85,6 +85,13 @@ def default_registry_tool_payload(*, name: str) -> dict[str, Any]:
             },
         }
 
+    if name == "security.plan":
+        from moonmind.workflows.skills.security_plan_tool import (
+            security_plan_tool_definition,
+        )
+
+        return security_plan_tool_definition()
+
     if name == "gitlab.merge_request":
         from moonmind.workflows.skills.gitlab_merge_request import (
             build_gitlab_merge_request_tool_definition_payload,
