@@ -375,6 +375,10 @@ def _scanner_observation(
             Coverage(
                 source="repository",
                 tool=summary.scanner,
+                # Only a complete run of the admitted configuration, with every
+                # native report retained, is an executed check; others stay
+                # unclassified, like incomplete Prowler collections.
+                evidence_method="deterministic_check" if complete else "unclassified",
                 assets=[a for a in assets if a in request.scope.assets],
                 rule_ids=[],
                 all_rules=admission is not None,
@@ -459,6 +463,9 @@ def _image_observation(
             Coverage(
                 source="image",
                 tool="trivy",
+                evidence_method=(
+                    "deterministic_check" if complete and assets else "unclassified"
+                ),
                 assets=assets,
                 rule_ids=[],
                 all_rules=execution is not None,
@@ -1468,7 +1475,8 @@ class AssessmentExecution:
             raw, pack = installed_pack(selection.pack_id)
             if (pack.edition, pack.revision) != (selection.edition, selection.revision):
                 raise ValueError(
-                    "installed framework pack edition/revision differs from the selection"
+                    "installed framework pack edition/revision differs from the selection;"
+                    f" the installed edition is {pack.edition} revision {pack.revision}"
                 )
             digest = hashlib.sha256(raw).hexdigest()
             # Retries and reruns in this execution cite the same retained bytes.

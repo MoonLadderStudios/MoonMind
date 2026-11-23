@@ -12,6 +12,7 @@ from datetime import date, datetime
 from functools import cache, partial
 
 from moonmind.security.assessments import (
+    ANY_RULE,
     Comparison,
     ControlAssessment,
     ControlAssessmentPlan,
@@ -53,14 +54,20 @@ class CellObservation:
 
 def _observe_cell(observation, windows, now, source, tool, asset, rule):
     cell = CellObservation()
+    any_rule = rule == ANY_RULE
     for index, row in enumerate(observation.coverage):
         if (
             (source, tool) != (row.source, row.tool)
             or asset not in row.assets
-            or rule not in row.rule_ids
+            or not (any_rule or rule in row.rule_ids)
         ):
             continue
         cell.configs.add(row.config_ref)
+        if any_rule and not row.all_rules:
+            cell.incomplete = True
+            cell.limitations.add(
+                "The source does not declare coverage of every rule in its configuration."
+            )
         if row.evidence_method != "unclassified":
             cell.methods.add(row.evidence_method)
         fresh, observed_date = _window(
@@ -88,7 +95,8 @@ def _observe_cell(observation, windows, now, source, tool, asset, rule):
     cell.finding_ids = {
         row.finding_id
         for row in observation.findings
-        if (row.source, row.tool, row.asset, row.rule_id) == (source, tool, asset, rule)
+        if (row.source, row.tool, row.asset) == (source, tool, asset)
+        and (any_rule or row.rule_id == rule)
     }
     return cell
 
@@ -173,6 +181,7 @@ def review_organisational_evidence(request, requirement, availability, now):
 
 
 READINESS_LIMITATION = "Recorded readiness evidence is not independently verified; laboratory, regulator and customer qualification remain Unverified."
+OBSERVATION_LIMITATION = "Observed exposure is review context; it neither establishes nor refutes the requirement."
 
 
 def assess_controls(
@@ -216,7 +225,19 @@ def assess_controls(
             if readiness.evidence_refs:
                 methods.add("document_review")
             evidence_refs.extend(readiness.evidence_refs)
-        if applicable and readiness is None and not requirement.objectives_complete:
+        plan = requirement.evidence_plan
+        if applicable and plan is not None and plan.external_party:
+            limits.append(
+                f"External-only: {plan.external_party} alone can establish this requirement; no MoonMind check applies."
+            )
+            actions.append(
+                f"Obtain and retain the conclusion of {plan.external_party}."
+            )
+        if (
+            applicable
+            and (readiness is None or requirement.objectives)
+            and not requirement.objectives_complete
+        ):
             limits.append(
                 "The declared objectives do not cover the complete requirement."
             )
@@ -255,7 +276,9 @@ def assess_controls(
                             "Point-in-time observations do not cover the selected assessment period."
                         )
                     valid = point in cell.deterministic_dates and not cell.stale
-                    failed |= bool(cell.finding_ids) and valid
+                    failed |= (
+                        bool(cell.finding_ids) and valid and not objective.observation
+                    )
                     if valid and not cell.incomplete:
                         checked += 1
                     else:
@@ -277,9 +300,15 @@ def assess_controls(
                 else (
                     "failed"
                     if failed
-                    else "passed" if coverage == "complete" else "inconclusive"
+                    else (
+                        "passed"
+                        if coverage == "complete" and not objective.observation
+                        else "inconclusive"
+                    )
                 )
             )
+            if applicable and objective.observation:
+                objective_limits.append(OBSERVATION_LIMITATION)
             objectives.append(
                 ControlObjectiveResult(
                     id=objective.id,
@@ -386,6 +415,8 @@ def assess_controls(
                     and requirement.objectives_complete
                     and objectives
                     and all(row.coverage == "complete" for row in objectives)
+                    # Exposure observations never complete a requirement.
+                    and not any(item.observation for item in requirement.objectives)
                     else "partial"
                 )
             )
@@ -407,7 +438,9 @@ def assess_controls(
                     else "satisfied" if coverage == "complete" else "inconclusive"
                 )
             )
-            if conclusion != "satisfied" and readiness is None:
+            if conclusion != "satisfied" and (
+                readiness is None or requirement.objectives
+            ):
                 actions.append(
                     "Complete or repeat the listed objective checks within the admitted scope and assessment period."
                 )
@@ -474,6 +507,10 @@ def _render_readiness(readiness, clean) -> list[str]:
             f"- External claim {clean(name)}: {claim['status']}. Verifiable by {clean(claim['verifiableBy'])}."
             + (f" Next: {clean(claim['nextStep'])}" if claim.get("nextStep") else "")
         )
+    lines.extend(
+        f"- Readiness limitation: {clean(value)}"
+        for value in readiness.get("limitations", [])
+    )
     unresolved = readiness.get("unresolvedRequirements", [])
     lines.append(
         f"Evidence requests: {len(readiness.get('evidenceRequests', []))}. Unresolved requirements: {clean(', '.join(unresolved) or 'none')}."
@@ -489,6 +526,21 @@ def _render_readiness(readiness, clean) -> list[str]:
         "",
     ]
     return lines
+
+
+def _evidence_method(plan, clean) -> str:
+    """One line a reader can scan: how the requirement is evidenced, and by whom."""
+    methods = ", ".join(plan.methods) or "not declared"
+    checks = (
+        f"; MoonMind checks: {plan.checks}" if plan.checks else "; no MoonMind check"
+    )
+    external = (
+        f"; external-only, closed by {clean(plan.external_party)}"
+        if plan.external_party
+        else ""
+    )
+    types = f" ({clean(', '.join(plan.evidence_types))})" if plan.evidence_types else ""
+    return f"evidence {clean(methods)}{types}{checks}{external}"
 
 
 def render_control_assessment(
@@ -560,7 +612,12 @@ def render_control_assessment(
             ):
                 lines.append(
                     f"- {clean(row.id)}: **{result.conclusion}** ({result.coverage})"
-                    + (f"; readiness {row.readiness.status}." if row.readiness else ".")
+                    + (f"; readiness {row.readiness.status}" if row.readiness else "")
+                    + (
+                        f"; {_evidence_method(row.evidence_plan, clean)}."
+                        if row.evidence_plan
+                        else "."
+                    )
                 )
 
     # Keep all pack conclusions together. Additional detail is retained by
@@ -590,6 +647,11 @@ def render_control_assessment(
                 else []
             ),
             f"Methods: {', '.join(result.methods) or 'not assessed'}. Objective basis: {clean(row.objective_basis)}",
+            *(
+                [f"Planned {_evidence_method(row.evidence_plan, clean)}."]
+                if row.evidence_plan
+                else []
+            ),
             *[
                 f"- {clean(item.id)}: {item.outcome}; {item.checked_cells}/{item.required_cells} asset/rule checks complete."
                 for item in result.objectives

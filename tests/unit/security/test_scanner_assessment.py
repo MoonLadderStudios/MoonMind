@@ -115,6 +115,18 @@ def test_clean_rescan_covers_native_rules_without_positive_findings(scanner):
     assert {row["state"] for row in result["findings"]} == {"absent_comparable"}
 
 
+@pytest.mark.parametrize("scanner", ["gitleaks", "opengrep", "trivy"])
+def test_only_complete_admitted_runs_are_deterministic_checks(scanner):
+    method = observe(summary(scanner)).coverage[0].evidence_method
+    assert method == "deterministic_check"
+    partial = summary(scanner)
+    next(iter(partial.results.values())).coverage = "partial"
+    unadmitted = summary(scanner)
+    unadmitted.admission = None
+    for retained in (partial, unadmitted):
+        assert observe(retained).coverage[0].evidence_method == "unclassified"
+
+
 @pytest.mark.parametrize("change", ["version", "rules", "partial", "unexamined"])
 def test_scanner_comparison_keeps_findings_without_comparable_coverage(change):
     baseline = compare_observations(observe(summary()), None, now=NOW)

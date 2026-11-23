@@ -217,19 +217,26 @@ def profile_schema(pack) -> dict:
     )
 
 
-def _three_valued(conditions, profile):
-    """Kleene AND over one condition set: False wins, then unknown, then True."""
+def _three_valued(conditions, profile, missing):
+    """Kleene AND over one condition set: False wins, then unknown, then True.
+
+    A multi-choice input meets a condition when any recorded choice is expected.
+    A required input left empty is unknown, as if omitted, not an exclusion.
+    """
     unknown = []
     for name, expected in conditions.items():
         value = profile.get(name)
-        if value is None:
+        allowed = expected if isinstance(expected, list) else [expected]
+        if value is None or name in missing:
             unknown.append(name)
-        elif value not in (expected if isinstance(expected, list) else [expected]):
+        elif not (
+            set(value) & set(allowed) if isinstance(value, list) else value in allowed
+        ):
             return False, []
     return (None, unknown) if unknown else (True, [])
 
 
-def _rule_applicability(pack, requirement, profile):
+def _rule_applicability(pack, requirement, profile, missing):
     text = pack.applicability_text
     selection = pack.profile.field("selection")
     if selection and requirement.id in selection.choices:
@@ -240,17 +247,21 @@ def _rule_applicability(pack, requirement, profile):
         return "applicable", requirement.applicability
     unknown, applies = set(), False
     for conditions in requirement.applicable_when:
-        value, missing = _three_valued(conditions, profile)
+        value, undecided = _three_valued(conditions, profile, missing)
         if value:
             applies = True
             break
         if value is None:
-            unknown.update(missing)
+            unknown.update(undecided)
     if not applies and unknown:
         field = next(f for f in pack.profile.fields if f.name in unknown)
         return "Unverified", field.unknown_reason or f"Record {field.name}."
     if not applies:
-        return "not_applicable", text.not_applicable
+        return "not_applicable", (
+            f"{text.not_applicable} {requirement.applicability}"
+            if text.cite_rule
+            else text.not_applicable
+        )
     basis = pack.profile.field("applicability_basis")
     return "applicable", " ".join(
         (text.applicable, (basis and profile.get(basis.name)) or text.basis_missing)
@@ -333,10 +344,14 @@ def evaluate_readiness(
     if pack.profile.request_section:
         source["section"] = pack.profile.request_section
     requests: list[dict] = []
-    missing_profile = False
+    missing = {
+        field.name
+        for field in pack.profile.fields
+        if field.required and values.get(field.name) in (None, "", [])
+    }
+    missing_profile = bool(missing)
     for field in pack.profile.fields:
-        if field.required and values.get(field.name) in (None, "", []):
-            missing_profile = True
+        if field.name in missing:
             requests.append({"id": field.request_id, "prompt": field.prompt, **source})
 
     jurisdiction_field = pack.profile.field("jurisdiction_basis")
@@ -404,7 +419,9 @@ def evaluate_readiness(
             if applicability == "incomplete":
                 applicability = "applicability_missing"
         else:
-            applicability, reason = _rule_applicability(pack, requirement, values)
+            applicability, reason = _rule_applicability(
+                pack, requirement, values, missing
+            )
         typed = behavior.evaluate_evidence is None
         jurisdiction = basis.jurisdiction if basis else None
         # Typed evidence references stay visible on every row, applicable or not.

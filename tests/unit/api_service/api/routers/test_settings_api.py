@@ -1447,6 +1447,7 @@ async def test_framework_catalog_lists_installed_readiness_and_skill(settings_ap
         "soc2-readiness",
         "gli-19-readiness",
         "nj-dge-readiness",
+        "pci-dss-readiness",
         "ukgc-rts-security",
         "web-api-methodology",
     }

@@ -534,19 +534,31 @@ class Comparison(Contract):
         return self
 
 
+ANY_RULE = "*"
+
+
 class ControlObjective(Contract):
-    """One explicit absence-of-defect check, not an inferred control mapping."""
+    """One explicit absence-of-defect check, not an inferred control mapping.
+
+    ``*`` selects every rule of a source whose coverage declares all of its
+    configured rules, for scanners whose rule IDs are advisory identifiers.
+    An ``observation`` objective retains exposure facts for review: its
+    findings neither pass nor fail the requirement.
+    """
 
     id: Text
     description: Text
     source: Text
     tool: Text
     rule_ids: Annotated[list[Text], Field(min_length=1, max_length=32)]
+    observation: bool = Field(default=False, exclude_if=lambda value: not value)
 
     @model_validator(mode="after")
     def unique_rules(self):
         if len(set(self.rule_ids)) != len(self.rule_ids):
             raise ValueError("duplicate control objective rule")
+        if ANY_RULE in self.rule_ids and len(self.rule_ids) > 1:
+            raise ValueError("an all-rules objective names no other rule")
         return self
 
 
@@ -583,6 +595,34 @@ class RequirementReadiness(Contract):
     exclusion_reason: Text | None = None
 
 
+class RequirementEvidencePlan(Contract):
+    """How a declared pack requirement can be evidenced.
+
+    ``checks`` counts executable MoonMind objectives; ``external_party`` names
+    who alone can close an external-only requirement, which has no checks.
+    """
+
+    methods: Items
+    evidence_types: Items = Field(default_factory=list)
+    checks: Annotated[int, Field(ge=0, le=32)] = 0
+    external_claim: Text | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    external_party: Text | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def external_only_has_no_checks(self):
+        if (self.external_claim is None) != (self.external_party is None):
+            raise ValueError("an external-only requirement names its claim and party")
+        if self.external_claim and (
+            self.checks or "deterministic_check" in self.methods
+        ):
+            raise ValueError("an external-only requirement has no MoonMind checks")
+        return self
+
+
 class ControlRequirement(Contract):
     organisational_evidence: Annotated[
         list[OrganisationalEvidenceRequest], Field(max_length=32)
@@ -608,6 +648,9 @@ class ControlRequirement(Contract):
     readiness: RequirementReadiness | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    evidence_plan: RequirementEvidencePlan | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def validate_objectives(self):
@@ -622,6 +665,8 @@ class ControlRequirement(Contract):
         for evidence in self.supporting_evidence:
             if set(evidence.objective_ids) - set(ids):
                 raise ValueError("supporting evidence names an unknown objective")
+        if self.evidence_plan and self.evidence_plan.checks != len(ids):
+            raise ValueError("evidence plan check count differs from objectives")
         return self
 
 
