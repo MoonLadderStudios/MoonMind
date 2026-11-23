@@ -214,7 +214,7 @@ def _nj_evidence(pack, requirement, selected, period, records, audit):
     return [r.artifact_ref for r in matched if set(selected) & set(r.systems)], gaps
 
 
-def _nj_context(pack, rows, audit):
+def _nj_context(pack, rows, audit, state=None):
     applicable = [
         key
         for key in sorted(

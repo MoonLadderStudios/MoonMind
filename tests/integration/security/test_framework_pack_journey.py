@@ -627,52 +627,231 @@ async def test_combined_requirement_bound_applies_before_collection(environment)
         await recurring.invoke(service, request)
 
 
-async def test_one_readiness_registration_lists_prepares_and_renders(environment, monkeypatch):
-    from functools import partial
-    from pydantic import Field
+async def test_one_readiness_registration_lists_prepares_and_renders(
+    environment, monkeypatch
+):
+    """An installed pack and its registered behavior are the only registration."""
+    from moonmind.security import framework_registry
+    from moonmind.security.framework_packs import parse_declared_pack
+    from moonmind.security.pack_readiness import PackBehavior, RequirementOutcome
 
-    from moonmind.security.builtin_frameworks import prepare_scoped_framework
-    from moonmind.security.framework_registry import READINESS_PACKS, ReadinessPack, readiness_catalog
-    from moonmind.security.frameworks import FrameworkContract, FrameworkEvidence, load_framework_pack
-
-    class Inputs(FrameworkContract):
-        systems: list[str]
-        sample_size: int = Field(ge=1)
-
-    # The legacy registration path remains for the ISO, SOC 2 and UKGC packs.
-    pack = load_framework_pack("ukgc-rts-security")
-    pack.id = "fixture-readiness"
-
-    def evaluate(selection, *, evidence, audit):
-        return {
-            "schemaVersion": "fixture/v1", "pack": pack.model_dump(mode="json", by_alias=True),
-            "readiness": "incomplete", "evidenceRequests": [],
-            "sampleSize": selection.system_inputs["sampleSize"],
-        }
-
-    entry = ReadinessPack(
-        definition=lambda: pack, input_model=Inputs,
-        prepare=partial(prepare_scoped_framework, prepare=evaluate, evidence_type=FrameworkEvidence),
-        render=lambda report: f"Reviewed fixture sample of {report['sampleSize']}",
-        sector=None, jurisdiction=None, external_evidence=(), conclusion="Fixture review",
+    data = json.loads(framework_registry.installed_pack("ukgc-rts-security")[0])
+    data.update(
+        id="fixture-readiness",
+        title="Fixture readiness",
+        behavior="fixture-sample",
+        requirements=data["requirements"][:2],
+        profile={
+            "requestSource": data["profile"]["requestSource"],
+            "fields": [
+                {"name": "systems", "type": "text_list", "role": "systems"},
+                {"name": "sampleSize", "type": "number"},
+            ],
+        },
     )
-    monkeypatch.setitem(READINESS_PACKS, pack.id, entry)
-    catalog = next(item for item in readiness_catalog() if item["id"] == pack.id)
-    assert catalog["requirementCount"] == len(load_framework_pack(pack.id).requirements)
-    assert catalog["inputSchema"]["properties"]["sampleSize"]["minimum"] == 1
-    result = await recurring.invoke(environment.service, {
-        "scope": {"assets": ["app"]}, "tools": [], "credentialRefs": [], "networkRefs": [],
-        "budget": {"baseSeconds": 60, "maxSeconds": 120, "progressStallSeconds": 60},
-        "framework": {"packId": pack.id, "systemInputs": {"systems": ["app"], "sampleSize": 3},
-                      "period": {"start": "2026-01-01", "end": "2026-01-31"}},
-    })
-    assert result["frameworkEdition"] == pack.edition
+    data.pop("exclusionReview")
+    raw = json.dumps(data).encode()
+    installed = framework_registry.installed_pack
+    behaviors = framework_registry._behaviors()
+    fixture = PackBehavior(
+        required_evidence_fields=(),
+        evaluate_requirement=lambda pack, item: RequirementOutcome(
+            status="incomplete",
+            reason="Fixture review",
+            requests=[{"id": "fixture." + item.requirement.id, "prompt": "Review"}],
+        ),
+        context=lambda pack, rows, audit, state: {
+            "headline": [f"Reviewed fixture sample of {int(state.inputs.sample_size)}"]
+        },
+    )
+    monkeypatch.setattr(
+        framework_registry,
+        "INSTALLED_PACK_IDS",
+        (*framework_registry.INSTALLED_PACK_IDS, "fixture-readiness"),
+    )
+    monkeypatch.setattr(
+        framework_registry,
+        "installed_pack",
+        lambda pack_id: (
+            (raw, parse_declared_pack(raw))
+            if pack_id == "fixture-readiness"
+            else installed(pack_id)
+        ),
+    )
+    monkeypatch.setattr(
+        framework_registry,
+        "_behaviors",
+        lambda: {**behaviors, "fixture-sample": fixture},
+    )
+    catalog = next(
+        item
+        for item in framework_registry.readiness_catalog()
+        if item["id"] == "fixture-readiness"
+    )
+    assert catalog["requirementCount"] == 2
+    assert catalog["inputSchema"]["properties"]["sampleSize"]["minimum"] == 0
+    # A saved framework.packId request selects, prepares and renders it.
+    result = await recurring.invoke(
+        environment.service,
+        {
+            "scope": {"assets": ["app"]},
+            "tools": [],
+            "credentialRefs": [],
+            "networkRefs": [],
+            "budget": {
+                "baseSeconds": 60,
+                "maxSeconds": 120,
+                "progressStallSeconds": 60,
+            },
+            "framework": {
+                "packId": "fixture-readiness",
+                "systemInputs": {"systems": ["app"], "sampleSize": 3},
+                "period": {"start": "2026-01-01", "end": "2026-01-31"},
+            },
+        },
+    )
+    assert result["frameworkPack"]["id"] == "fixture-readiness"
+    assert result["frameworkPack"]["readiness"] == "incomplete"
     assert result["publicationOutcome"] == "published"
     _, primary = await environment.service.read(
         artifact_id=result["reportBundle"]["primary_report_ref"]["artifact_id"],
         access=recurring.access_for_test("workflow:assessment"),
     )
     assert b"Reviewed fixture sample of 3" in primary
+
+
+async def test_iso_and_declared_policy_pack_share_documentary_evidence_per_framework(
+    environment, monkeypatch
+):
+    """ISO/IEC 27001 beside an operator's own policy pack in one run (#5436)."""
+    from collections import Counter
+    from datetime import timedelta
+
+    from moonmind.security.framework_registry import installed_pack
+    from tests.unit.security.test_iso_27001 import selection as iso_selection
+
+    service = environment.service
+    request = await inputs(service)
+    now = datetime.now(UTC)
+    day = now.date().isoformat()
+    period = {"start": day, "end": day}
+    policy_ref = await recurring.put(service, {"record": "Adopted security policy"})
+    adopted = {
+        "id": "adopted-policy",
+        "category": "policy",
+        "purpose": "adoption",
+        "description": "Adopted information security policy",
+        "owner": "Security owner",
+        "revisions": [
+            {
+                "artifactRef": policy_ref,
+                "kind": "operational_record",
+                "source": "Policy register",
+                "collectedAt": (now - timedelta(minutes=30)).isoformat(),
+                "expiresAt": (now + timedelta(days=30)).isoformat(),
+                "period": period,
+                "population": ["app"],
+                "sensitivity": "internal",
+                "review": {
+                    "outcome": "accepted",
+                    "purpose": "adoption",
+                    "reviewer": "Assurance reviewer",
+                    "reason": "Board adoption minute and published policy examined",
+                    "reviewedAt": (now - timedelta(minutes=10)).isoformat(),
+                    "period": period,
+                    "population": ["app"],
+                },
+            }
+        ],
+    }
+    # The operator's policy pack maps its requirement to ISO/IEC 27001 5.2.
+    policy = pack_payload()
+    policy.update(id="acme-isms-policy")
+    policy["requirements"][0]["id"] = "ACME-5.2"
+    policy["mappingTargets"] = [
+        {
+            "id": "iso",
+            "frameworkId": "iso-27001-readiness",
+            "edition": "2022+Amd1:2024",
+            "requirementIds": ["5.2"],
+        }
+    ]
+    policy["mappings"] = [
+        {
+            "id": "M1",
+            "fromRequirementIds": ["ACME-5.2"],
+            "targetId": "iso",
+            "toRequirementIds": ["5.2"],
+            "relation": "equivalent",
+            "rationale": "The adopted policy is the ISMS policy",
+            "source": policy["source"],
+            "basis": "upstream",
+        }
+    ]
+    await select_pack(service, request, policy)
+    declared = request.pop("frameworkPack")
+    declared["requirementChoices"]["ACME-5.2"] = dict(
+        declared["requirementChoices"].pop("control-1"),
+        organisationalEvidence=[adopted],
+    )
+    alone = await recurring.invoke(
+        service, {**request, "frameworkPack": declared}, key="policy-alone"
+    )
+    pack = installed_pack("iso-27001-readiness")[1]
+    profile = dict(iso_selection().system_inputs, systems=["app"])
+    iso = {
+        "packId": pack.id,
+        "edition": pack.edition,
+        "revision": pack.revision,
+        "period": period,
+        "profile": profile,
+        "requirementChoices": {"5.2": {"organisationalEvidence": [adopted]}},
+    }
+    request["frameworkPacks"] = [iso, declared]
+    reads = Counter()
+    read = service.read
+
+    async def counted(**kwargs):
+        reads[kwargs["artifact_id"]] += 1
+        return await read(**kwargs)
+
+    monkeypatch.setattr(service, "read", counted)
+    result = await recurring.invoke(service, request, key="iso-and-policy")
+    # One documentary record, read once, reviewed by each framework.
+    assert reads[policy_ref] == 1
+    report = await recurring.read(service, result["controlAssessmentRef"])
+    packs = {row["id"]: row for row in report["frameworkPacks"]}
+    assert list(packs) == ["iso-27001-readiness", "acme-isms-policy"]
+    rows = {
+        (row["requirement"]["frameworkId"], row["requirement"]["id"]): row
+        for row in report["requirements"]
+    }
+    iso_52 = rows["iso-27001-readiness", "5.2"]
+    assert iso_52["requirement"]["readiness"]["status"] == "evidence_recorded"
+    assert [r["state"] for r in iso_52["organisationalEvidence"]] == ["accepted"]
+    # Recorded readiness is never a satisfied conclusion, and nothing transfers.
+    assert iso_52["conclusion"] == "inconclusive"
+    assert rows["iso-27001-readiness", "9.2"]["requirement"]["readiness"]["status"] == (
+        "incomplete"
+    )
+    assert packs["iso-27001-readiness"]["readiness"]["readiness"] == "incomplete"
+    assert packs["iso-27001-readiness"]["conclusionCounts"]["satisfied"] == 0
+    policy_row = rows["acme-isms-policy", "ACME-5.2"]
+    assert [r["state"] for r in policy_row["organisationalEvidence"]] == ["accepted"]
+    # The operator pack concludes exactly as it does alone.
+    single = await recurring.read(service, alone["controlAssessmentRef"])
+    assert policy_row["conclusion"] == single["requirements"][0]["conclusion"]
+    assert packs["acme-isms-policy"]["conclusionCounts"] == {
+        key: int(single["requirements"][0]["conclusion"] == key)
+        for key in ("satisfied", "not_satisfied", "inconclusive", "not_assessed")
+    }
+    assert any(
+        "reference intelligence only" in row
+        for row in packs["acme-isms-policy"]["diagnostics"]
+    )
+    assert policy_ref in await recurring.required(
+        service, result["controlAssessmentRef"]
+    )
 
 
 async def test_gli_nj_and_declared_pack_conclude_per_framework_from_shared_evidence(

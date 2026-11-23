@@ -8,7 +8,6 @@ from pydantic import ValidationError
 
 from moonmind.security.assessments import Comparison, content_key
 from moonmind.security.framework_packs import parse_declared_pack
-from moonmind.security.frameworks import load_framework_pack
 from moonmind.security.oscal_export import (
     LIMITATIONS,
     MODELS,
@@ -32,14 +31,8 @@ def _models(selected):
     return [m for m in MODELS if m in needed]
 
 
-async def _selected_framework(execution, request, framework, controls):
+async def _selected_framework(execution, controls):
     """The exported pack, its native rows and the sealed report that holds them."""
-    if framework is not None:
-        return (
-            load_framework_pack(request.framework.pack_id),
-            framework[1],
-            framework[0],
-        )
     packs = controls[1].pack_metadata if controls else []
     if len(packs) != 1 or "readiness" not in packs[0]:
         raise UnsupportedExport(
@@ -59,7 +52,7 @@ async def _selected_framework(execution, request, framework, controls):
 
 
 async def export_assessment(
-    execution, *, request, comparison, comparison_ref, framework, controls=None
+    execution, *, request, comparison, comparison_ref, controls=None
 ):
     result = {
         "status": "unsupported",
@@ -76,7 +69,7 @@ async def export_assessment(
                 "multiple_framework_packs",
             )
         pack, framework_report, framework_ref = await _selected_framework(
-            execution, request, framework, controls
+            execution, controls
         )
         context = None
         ssp = None

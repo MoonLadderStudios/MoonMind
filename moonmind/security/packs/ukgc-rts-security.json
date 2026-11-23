@@ -1,0 +1,731 @@
+{
+  "schemaVersion": "declared-framework-pack/v1",
+  "id": "ukgc-rts-security",
+  "edition": "ISO-IEC-27001-2022",
+  "revision": "1",
+  "title": "UKGC RTS security-audit readiness",
+  "source": {
+    "url": "https://www.gamblingcommission.gov.uk/manual/remote-gambling-and-software-technical-standards/4-remote-gambling-and-software-technical-standards-rts-security-requirements",
+    "section": "4",
+    "reviewedOn": "2026-11-07"
+  },
+  "reviewedBy": "MoonMind maintainers",
+  "reviewedOn": "2026-11-07",
+  "publicationStatus": "published",
+  "publishedOn": "2022-10-25",
+  "effectiveFrom": "2022-10-25",
+  "provenance": "Explicit selection of the ISO/IEC 27001:2022 controls that RTS section 4 security requirements name, with original evidence prompts: not all Annex A controls and not the 2013 mapping. The edition names that control set. Audit advice: https://www.gamblingcommission.gov.uk/licensees-and-businesses/guide/security-audit-advice; annual audit testing strategy: https://www.gamblingcommission.gov.uk/strategy/testing-strategy-for-compliance-with-remote-gambling-and-software-technical/7-third-party-annual-security-audit; security guidance: https://www.gamblingcommission.gov.uk/licensees-and-businesses/page/technical-standards-security-requirements",
+  "license": "Apache-2.0 for original MoonMind summaries. Referenced standards retain their own rights.",
+  "distribution": "redistributable",
+  "sector": "Remote gambling",
+  "jurisdiction": "Great Britain",
+  "conclusions": "Audit preparation for scoped RTS controls. The independent audit and regulator decisions remain external.",
+  "profile": {
+    "requestSource": "https://www.gamblingcommission.gov.uk/licensees-and-businesses/guide/security-audit-advice",
+    "fields": [
+      {
+        "name": "operatorName",
+        "type": "text",
+        "role": "entity_name"
+      },
+      {
+        "name": "businessDescription",
+        "type": "text"
+      },
+      {
+        "name": "licenceClass",
+        "type": "structured",
+        "model": "ukgc.licence-class"
+      },
+      {
+        "name": "annualLotterySalesGbp",
+        "type": "number"
+      },
+      {
+        "name": "licenceGrantedOn",
+        "type": "date"
+      },
+      {
+        "name": "operationsStartedOn",
+        "type": "date"
+      },
+      {
+        "name": "firstAuditExtensionApproved",
+        "type": "boolean"
+      },
+      {
+        "name": "regulatorDueOn",
+        "type": "date"
+      },
+      {
+        "name": "lastAuditOn",
+        "type": "date"
+      },
+      {
+        "name": "confirmationRequestedOn",
+        "type": "date"
+      },
+      {
+        "name": "reportRequestedOn",
+        "type": "date"
+      },
+      {
+        "name": "reportReceivedOn",
+        "type": "date"
+      },
+      {
+        "name": "systemIdentification",
+        "type": "text"
+      },
+      {
+        "name": "criticalSystems",
+        "type": "structured",
+        "model": "ukgc.critical-systems"
+      },
+      {
+        "name": "thirdParties",
+        "type": "structured",
+        "model": "ukgc.third-parties"
+      }
+    ]
+  },
+  "behavior": "ukgc-rts-audit-record",
+  "exclusionReview": true,
+  "externalClaims": [
+    {
+      "id": "auditor",
+      "evidenceType": "external_audit",
+      "gap": "Supplied records are preparation evidence; MoonMind has not independently verified an external audit or private inspection.",
+      "verifiableBy": "Qualified independent auditor and operator evidence owner",
+      "nextStep": "Have the independent auditor examine the recorded enquiry, evidence and observation for each selected control and issue the audit report."
+    },
+    {
+      "id": "regulator",
+      "gap": "No regulator submission has been performed and no Gambling Commission decision is inferred.",
+      "verifiableBy": "Gambling Commission",
+      "nextStep": "Submit the full audit report, and any major nonconformity, under the reporting conditions recorded here."
+    }
+  ],
+  "limitations": [
+    "Preparation evidence only. Independent audit and private inspection remain Unverified.",
+    "No regulator submission has been performed."
+  ],
+  "requirements": [
+    {
+      "id": "5.1",
+      "title": "Security policies",
+      "summary": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "category": "organisational",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "5.10",
+      "title": "Acceptable use",
+      "summary": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "category": "organisational",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "5.15",
+      "title": "Access control",
+      "summary": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "category": "organisational",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "5.16",
+      "title": "Identity management",
+      "summary": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "category": "organisational",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "5.17",
+      "title": "Authentication information",
+      "summary": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "category": "organisational",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "5.18",
+      "title": "Access rights",
+      "summary": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "category": "organisational",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "5.19",
+      "title": "Supplier security",
+      "summary": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "category": "organisational",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "5.20",
+      "title": "Supplier agreements",
+      "summary": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "category": "organisational",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "5.21",
+      "title": "ICT supply chain",
+      "summary": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "category": "organisational",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "5.22",
+      "title": "Supplier service oversight",
+      "summary": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "category": "organisational",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "5.23",
+      "title": "Cloud service security",
+      "summary": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "category": "organisational",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "5.24",
+      "title": "Incident preparation",
+      "summary": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "category": "organisational",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "5.25",
+      "title": "Security event assessment",
+      "summary": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "category": "organisational",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "5.26",
+      "title": "Incident response",
+      "summary": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "category": "organisational",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "5.28",
+      "title": "Evidence collection",
+      "summary": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "category": "organisational",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "5.35",
+      "title": "Independent security review",
+      "summary": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "category": "organisational",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply policies, approvals, reviews and supplier/incident records with document versions, dates and responsible staff.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "6.3",
+      "title": "Security education",
+      "summary": "Supply training, personnel-change and remote-work records, and staff interview samples.",
+      "category": "people",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply training, personnel-change and remote-work records, and staff interview samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "6.5",
+      "title": "Employment changes",
+      "summary": "Supply training, personnel-change and remote-work records, and staff interview samples.",
+      "category": "people",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply training, personnel-change and remote-work records, and staff interview samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "6.7",
+      "title": "Remote work",
+      "summary": "Supply training, personnel-change and remote-work records, and staff interview samples.",
+      "category": "people",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply training, personnel-change and remote-work records, and staff interview samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "6.8",
+      "title": "Event reporting",
+      "summary": "Supply training, personnel-change and remote-work records, and staff interview samples.",
+      "category": "people",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply training, personnel-change and remote-work records, and staff interview samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "7.8",
+      "title": "Equipment protection",
+      "summary": "Supply site, equipment and media records and inspection or remote walkthrough observations.",
+      "category": "physical",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply site, equipment and media records and inspection or remote walkthrough observations.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "7.10",
+      "title": "Storage media",
+      "summary": "Supply site, equipment and media records and inspection or remote walkthrough observations.",
+      "category": "physical",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply site, equipment and media records and inspection or remote walkthrough observations.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "7.14",
+      "title": "Equipment disposal and reuse",
+      "summary": "Supply site, equipment and media records and inspection or remote walkthrough observations.",
+      "category": "physical",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply site, equipment and media records and inspection or remote walkthrough observations.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.1",
+      "title": "Endpoint devices",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.2",
+      "title": "Privileged access",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.3",
+      "title": "Access restriction",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.5",
+      "title": "Secure authentication",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.7",
+      "title": "Malware protection",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.13",
+      "title": "Backups",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.15",
+      "title": "Logging",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.17",
+      "title": "Clock synchronisation",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.18",
+      "title": "Privileged utilities",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.20",
+      "title": "Network security",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.21",
+      "title": "Network services",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.22",
+      "title": "Network segregation",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.24",
+      "title": "Cryptography",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.25",
+      "title": "Secure development lifecycle",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.26",
+      "title": "Application security requirements",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.27",
+      "title": "Secure architecture",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.29",
+      "title": "Development and acceptance security testing",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.30",
+      "title": "Outsourced development",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.31",
+      "title": "Environment separation",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.32",
+      "title": "Change management",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    },
+    {
+      "id": "8.33",
+      "title": "Test information",
+      "summary": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "category": "technological",
+      "applicability": "RTS critical systems; exclusions require a recorded reason and remain visible for auditor review.",
+      "evidencePrompt": "Supply configuration, development and test records with versions, dates and examined samples.",
+      "requiredEvidenceMethods": [
+        "enquiry",
+        "evidence",
+        "observation"
+      ],
+      "objectiveBasis": "Recorded enquiry, evidence and observation for each in-scope critical system; no executable objective checks."
+    }
+  ]
+}

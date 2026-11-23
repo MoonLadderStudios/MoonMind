@@ -47,7 +47,7 @@ from moonmind.security.dns_assessments import (
     build_dns_query_plan,
     summarize_dns_assessment,
 )
-from moonmind.security.frameworks import PACK_IDENTIFIER_PATTERN
+from moonmind.security.frameworks import PACK_EDITION_PATTERN, PACK_IDENTIFIER_PATTERN
 from moonmind.security.game_math import GameMathAssessment
 from moonmind.security.github_alerts import alert_observation, correlate_alerts
 from moonmind.security.image_assessments import ImageAssessmentSummary
@@ -1193,6 +1193,37 @@ def _rng_observation(request, summary: RngAssessment, ref: str, created_at: date
     )
 
 
+def _previous_pack(previous, pack):
+    """This pack's metadata in a previous report: exact edition, else its only one."""
+    if not previous:
+        return None
+    exact = [p for p in previous if (p["id"], p["edition"]) == (pack.id, pack.edition)]
+    same = [p for p in previous if p["id"] == pack.id]
+    return (exact or (same if len(same) == 1 else [None]))[0]
+
+
+def _names_requirements(record, ids) -> bool:
+    """Whether a collected record names any of these requirements.
+
+    A record whose requirement IDs cannot be read stays with every pack, so a
+    malformed record remains visible as invalid evidence.
+    """
+    named = record.get("requirementIds") if isinstance(record, dict) else None
+    if not isinstance(named, list):
+        return True
+    return any(isinstance(key, str) and key in ids for key in named)
+
+
+def profile_inputs(pack, profile):
+    """A pack's validated profile, or None when the profile is invalid."""
+    from moonmind.security.pack_readiness import profile_model
+
+    try:
+        return profile_model(pack).model_validate(profile or {})
+    except ValidationError:
+        return None
+
+
 def _pack_failure(label, exc, field, model=None):
     """One admission failure per selected pack, without echoing input values."""
     from moonmind.security.evidence_exports import validation_summary
@@ -1253,6 +1284,9 @@ class AssessmentExecution:
         }
         # Digests of the exact bytes this execution read or wrote.
         self.digests: dict[str, str] = {}
+        # Current documentary revisions read once per assessment: None when
+        # readable, otherwise the reason they were not.
+        self.organisational_availability: dict[str, str | None] = {}
         # Seals also verify history an admitted baseline's own seal verified.
         self.seal_access = self.access
 
@@ -1453,19 +1487,6 @@ class AssessmentExecution:
             "outcome": "complete" if imported.complete(observed_at) else "incomplete",
         }
 
-    async def prepare_framework(
-        self, request: AssessmentRequest, *, collected_evidence_refs=()
-    ) -> tuple[str, dict] | None:
-        if request.framework is None:
-            return None
-        from moonmind.security.framework_registry import readiness_pack
-
-        entry = readiness_pack(request.framework.pack_id)
-        system = entry.input_model.model_validate(request.framework.system_inputs)
-        return await entry.prepare(
-            self, request, system=system, collected_evidence_refs=collected_evidence_refs
-        )
-
     async def retained_pack(self, selection):
         """The selected pack's bytes, as a retained artifact the report cites."""
         from moonmind.security.framework_packs import load_declared_pack
@@ -1496,8 +1517,14 @@ class AssessmentExecution:
         )
         return selection.artifact_ref, selection.sha256, pack
 
-    async def pack_readiness(self, pack, selection, scope, evidence, shared_ids):
-        """Evaluate a profile pack's recorded evidence, read once per assessment."""
+    async def pack_readiness(
+        self, pack, selection, scope, evidence, shared_ids, *, context
+    ):
+        """Evaluate a profile pack's recorded evidence, read once per assessment.
+
+        Review evidence collected by this assessment (identity lifecycle or
+        change control) is judged by each pack for its own requirement IDs.
+        """
         from moonmind.security.framework_registry import pack_behavior
         from moonmind.security.pack_readiness import (
             evaluate_readiness,
@@ -1506,18 +1533,32 @@ class AssessmentExecution:
         )
 
         behavior = pack_behavior(pack)
+        collected = list(context["collected"])
+        ids = {row.id for row in pack.requirements}
         records, invalid = [], []
-        for ref in dict.fromkeys(selection.evidence_refs):
+        for ref in dict.fromkeys([*selection.evidence_refs, *collected]):
             if ref not in evidence:
                 _, body = await self.read(ref)
                 try:
                     evidence[ref] = json.loads(body)
                 except (UnicodeError, json.JSONDecodeError, RecursionError):
                     evidence[ref] = None
+            if ref not in selection.evidence_refs and not _names_requirements(
+                evidence[ref], ids
+            ):
+                # Collected for another selected pack, not invalid evidence here.
+                continue
             try:
                 records.append(parse_evidence(behavior, evidence[ref], ref))
             except ValueError:
                 invalid.append(ref)
+        # Collected records name every framework they can support.
+        shared = set(shared_ids) | {
+            key
+            for record in records
+            if record.artifact_ref in collected
+            for key in record.requirement_ids
+        }
         audit = None
         if selection.audit_ref:
             if behavior.records_model is None:
@@ -1536,18 +1577,72 @@ class AssessmentExecution:
             audit=audit,
             invalid_refs=invalid,
             admitted_assets=scope.assets,
-            shared_requirement_ids=shared_ids,
+            shared_requirement_ids=frozenset(shared),
+            availability=self.organisational_availability,
+            now=context["now"],
+            previous=context["previous"],
+            previous_ref=context["previousRef"],
         )
         refs = [
             *selection.evidence_refs,
+            *collected,
             *([selection.audit_ref] if selection.audit_ref else []),
             *input_refs(
                 pack, behavior, profile=selection.profile, records=records, audit=audit
+            ),
+            # Documentary revisions the behavior reviewed outside the plan.
+            *(
+                ref
+                for ref in behavior.organisational_refs(
+                    profile_inputs(pack, selection.profile)
+                )
+                if self.organisational_availability.get(ref, "unread") is None
             ),
         ]
         for ref in dict.fromkeys(refs):
             await self.digest(ref)
         return readiness, list(dict.fromkeys(refs))
+
+    async def read_organisational_evidence(self, selections, packs):
+        """Read each current documentary revision once for every selected pack.
+
+        An unreadable revision is recorded with its reason; the requirement that
+        cites it stays a gap. The control evaluator reuses these results.
+        """
+        from moonmind.security.framework_registry import pack_behavior
+
+        refs = []
+        for selection, pack in zip(selections, packs):
+            for choice in selection.requirement_choices.values():
+                for request in choice.organisational_evidence:
+                    refs.extend(r.artifact_ref for r in request.revisions[-1:])
+            if pack.profile is not None:
+                inputs = profile_inputs(pack, selection.profile)
+                if inputs is not None:
+                    refs.extend(pack_behavior(pack).organisational_refs(inputs))
+        total = 0
+        for ref in dict.fromkeys(refs):
+            if ref in self.organisational_availability:
+                continue
+            try:
+                if total > _MAX_INPUT_BYTES * 2:
+                    raise ValueError("organisational evidence exceeds byte bound")
+                _, body = await self.read(ref)
+                total += len(body)
+                if total > _MAX_INPUT_BYTES * 2:
+                    raise ValueError("organisational evidence exceeds byte bound")
+                self.organisational_availability[ref] = None
+            except (
+                TemporalArtifactNotFoundError,
+                TemporalArtifactAuthorizationError,
+                TemporalArtifactStateError,
+                TemporalArtifactValidationError,
+                TemporalArtifactStorageAccessError,
+                TemporalArtifactUnavailableError,
+                ToolFailure,
+                ValueError,
+            ) as exc:
+                self.organisational_availability[ref] = type(exc).__name__
 
     async def load_selected_pack(self, selection, index):
         """Read and verify one selected pack before any evidence is evaluated."""
@@ -1576,7 +1671,15 @@ class AssessmentExecution:
         return artifact_ref, digest, pack
 
     async def read_declared_pack(
-        self, selection, index, scope, now, evidence=None, loaded=None, shared_ids=()
+        self,
+        selection,
+        index,
+        scope,
+        now,
+        evidence=None,
+        loaded=None,
+        shared_ids=(),
+        context=None,
     ):
         from moonmind.security.framework_packs import (
             compile_framework_plan,
@@ -1597,7 +1700,18 @@ class AssessmentExecution:
 
                 model = profile_model(pack)
                 readiness, refs = await self.pack_readiness(
-                    pack, selection, scope, evidence, frozenset(shared_ids)
+                    pack,
+                    selection,
+                    scope,
+                    evidence,
+                    frozenset(shared_ids),
+                    context=context
+                    or {
+                        "collected": (),
+                        "now": now,
+                        "previous": None,
+                        "previousRef": None,
+                    },
                 )
             elif selection.profile or selection.evidence_refs or selection.audit_ref:
                 raise ValueError(
@@ -1624,15 +1738,15 @@ class AssessmentExecution:
 
     async def previous_framework_metadata(self, ref):
         from moonmind.security.legacy_framework_reports import (
-            legacy_gaming_report,
             legacy_pack_metadata,
+            legacy_readiness_report,
         )
 
         try:
             _, raw = await self.read(ref)
             document = json.loads(raw)
-            if legacy_gaming_report(document):
-                # Temporary reader: retained pre-unification gaming reports.
+            if legacy_readiness_report(document):
+                # Temporary reader: retained pre-unification readiness reports.
                 packs = legacy_pack_metadata(document)
                 if await _proof(self.service, ref, self.access) is not None:
                     return packs
@@ -1642,10 +1756,12 @@ class AssessmentExecution:
             if (
                 packs
                 and all(
-                    isinstance(p.get(field), str)
-                    and re.fullmatch(PACK_IDENTIFIER_PATTERN, p[field])
+                    isinstance(p.get(field), str) and re.fullmatch(pattern, p[field])
                     for p in packs
-                    for field in ("id", "edition")
+                    for field, pattern in (
+                        ("id", PACK_IDENTIFIER_PATTERN),
+                        ("edition", PACK_EDITION_PATTERN),
+                    )
                 )
                 and await _proof(self.service, ref, self.access) is not None
             ):
@@ -1666,8 +1782,12 @@ class AssessmentExecution:
             pass
         return None
 
-    async def prepare_framework_pack(self, request):
-        """Compile all selected packs and check aggregate bounds before collection."""
+    async def prepare_framework_pack(self, request, collected_evidence_refs=()):
+        """Compile all selected packs and check aggregate bounds before collection.
+
+        Called again with this assessment's collected review evidence, so every
+        profile pack judges that evidence for its own requirements.
+        """
         from moonmind.security.framework_packs import compare_selected_frameworks
 
         selections = request.selected_packs
@@ -1680,10 +1800,19 @@ class AssessmentExecution:
             for index, selection in enumerate(selections)
         ]
         ids = [{row.id for row in pack.requirements} for _, _, pack in loaded]
+        history = {}
+        for selection in selections:
+            ref = selection.previous_assessment_ref or request.previous_assessment_ref
+            if ref and ref not in history:
+                history[ref] = await self.previous_framework_metadata(ref)
+        await self.read_organisational_evidence(
+            selections, [pack for _, _, pack in loaded]
+        )
         # Evidence records are read once and judged separately by each pack.
         # A record may name several packs' requirements; none transfers.
         evidence = {}
         for index, selection in enumerate(selections):
+            ref = selection.previous_assessment_ref or request.previous_assessment_ref
             rows, metadata = await self.read_declared_pack(
                 selection,
                 index,
@@ -1692,6 +1821,12 @@ class AssessmentExecution:
                 evidence,
                 loaded[index],
                 set().union(*(ids[:index] + ids[index + 1 :])),
+                context={
+                    "collected": tuple(collected_evidence_refs),
+                    "now": now,
+                    "previous": _previous_pack(history.get(ref), loaded[index][2]),
+                    "previousRef": ref,
+                },
             )
             requirements.extend(rows)
             packs.append(metadata)
@@ -1704,15 +1839,12 @@ class AssessmentExecution:
                 "INVALID_INPUT", f"frameworkPacks.requirements: {error['msg']}", False
             ) from None
 
-        history = {}
         for selection, metadata in zip(selections, packs):
             metadata["intelligenceChanges"] = []
             metadata["previousAssessmentStatus"] = "initial"
             ref = selection.previous_assessment_ref or request.previous_assessment_ref
             if ref:
                 metadata["previousAssessmentRef"] = ref
-                if ref not in history:
-                    history[ref] = await self.previous_framework_metadata(ref)
         compare_selected_frameworks(packs, history)
         return request.model_copy(update={"control_assessment": plan}), packs
 
@@ -1736,6 +1868,12 @@ class AssessmentExecution:
         availability, readable, total = {}, [], 0
         refs = request.control_assessment.evidence_refs(current_only=True)
         for ref in refs:
+            if ref in self.organisational_availability:
+                # Read once with the framework packs that cite it.
+                availability[ref] = self.organisational_availability[ref]
+                if availability[ref] is None:
+                    readable.append(ref)
+                continue
             try:
                 if total > _MAX_INPUT_BYTES * 2:
                     raise ValueError("control supporting evidence exceeds byte bound")
@@ -2096,18 +2234,15 @@ class AssessmentExecution:
                 "limitations": report["limitations"],
                 "controlOperation": "not_established",
             }
-        try:
-            framework = await self.prepare_framework(
-                request,
-                collected_evidence_refs=(
-                    ([identity["reviewEvidenceRef"]] if identity else [])
-                    + ([change_control["reviewEvidenceRef"]] if change_control else [])
-                ),
+        collected = [
+            *([identity["reviewEvidenceRef"]] if identity else []),
+            *([change_control["reviewEvidenceRef"]] if change_control else []),
+        ]
+        if collected and any(pack.get("readiness") for pack in framework_pack_context):
+            # Readiness packs judge this assessment's review evidence too.
+            request, framework_pack_context = await self.prepare_framework_pack(
+                request, collected_evidence_refs=collected
             )
-        except (ValueError, TypeError) as exc:
-            raise ToolFailure(
-                "INVALID_INPUT", "Invalid framework assessment inputs.", False
-            ) from exc
         now = datetime.now(UTC)
         refs = [*request.report_refs]
         if request.inventory_ref:
@@ -3301,15 +3436,6 @@ class AssessmentExecution:
                 change_control["evidenceRef"],
                 change_control["reviewEvidenceRef"],
             ]
-        if framework:
-            framework_ref, framework_report = framework
-            evidence.append(framework_ref)
-            outputs.update(
-                frameworkRef=framework_ref,
-                frameworkReadiness=framework_report["readiness"],
-                frameworkEdition=framework_report["pack"]["edition"],
-                evidenceRequests=framework_report["evidenceRequests"],
-            )
         summary_ref = None
         methodology = None
         if methodology_plan is not None:
@@ -3422,12 +3548,6 @@ class AssessmentExecution:
                 from moonmind.security.github_change_control import render_summary
 
                 summary += render_summary(change_control).encode()
-            if framework:
-                from moonmind.security.frameworks import render_framework_preparation
-
-                summary += (
-                    "\n" + render_framework_preparation(framework_report)
-                ).encode()
             if controls:
                 from moonmind.security.control_assessments import (
                     render_control_assessment,
@@ -3476,7 +3596,6 @@ class AssessmentExecution:
                     else []
                 )
                 + ([project_digest] if project_digest else [])
-                + ([framework_ref] if framework else [])
                 + (
                     [control_ref]
                     if controls
@@ -3543,12 +3662,6 @@ class AssessmentExecution:
                     principal=self.principal,
                     execution_ref={**self.execution, "link_type": link_type},
                 )
-            if framework:
-                await self.service.link_artifact(
-                    artifact_id=framework_ref,
-                    principal=self.principal,
-                    execution_ref={**self.execution, "link_type": "report.structured"},
-                )
             if controls:
                 await self.service.link_artifact(
                     artifact_id=control_ref,
@@ -3570,11 +3683,7 @@ class AssessmentExecution:
             outputs["reportBundle"] = build_report_bundle_result(
                 primary_report_ref={"artifact_id": summary_ref},
                 structured_ref={
-                    "artifact_id": (
-                        control_ref
-                        if controls
-                        else framework_ref if framework else comparison_ref
-                    )
+                    "artifact_id": (control_ref if controls else comparison_ref)
                 },
                 evidence_refs=[{"artifact_id": ref} for ref in evidence]
                 + ([{"artifact_id": request.review_ref}] if review_readable else []),
@@ -3598,7 +3707,6 @@ class AssessmentExecution:
                 request=request,
                 comparison=comparison,
                 comparison_ref=comparison_ref,
-                framework=framework,
                 controls=controls,
             )
         if request.evidence_export is not None and len(request.selected_packs) > 1:

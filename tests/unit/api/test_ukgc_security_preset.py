@@ -54,7 +54,13 @@ async def test_ukgc_catalog_api_and_saved_system_inputs(tmp_path, monkeypatch):
             assert listed.status_code == 200
             assert SLUG in {p["slug"] for p in listed.json()["items"]}
             detail = (await client.get(f"/api/presets/{SLUG}")).json()
-            assert "system_inputs" in detail["inputSchema"]["properties"]
+            # Typed profile fields replace the free-form JSON editor.
+            assert "system_inputs" not in (detail["uiSchema"] or {})
+            system = detail["inputSchema"]["properties"]["system_inputs"]
+            assert system["additionalProperties"] is False
+            assert {"licenceClass", "thirdParties", "criticalSystems"} <= set(
+                system["properties"]
+            )
             assert "requirement_choices" in detail["inputSchema"]["properties"]
             values = {
                 "system_inputs": fixture()["framework"]["systemInputs"],
@@ -74,9 +80,13 @@ async def test_ukgc_catalog_api_and_saved_system_inputs(tmp_path, monkeypatch):
             expanded = response.json()
             payload = expanded["steps"][0]["tool"]["inputs"]
             parsed = AssessmentRequest.model_validate(payload)
-            assert parsed.framework.system_inputs == values["system_inputs"]
-            assert parsed.framework.requirement_choices["8.29"].systems == ["casino"]
-            assert parsed.framework.audit_ref is None
+            # The saved framework.packId shape normalizes once to the installed
+            # pack; system inputs become its profile.
+            assert parsed.framework is None
+            [selection] = parsed.selected_packs
+            assert selection.profile == values["system_inputs"]
+            assert selection.requirement_choices["8.29"].systems == ["casino"]
+            assert selection.audit_ref is None
             assert (
                 expanded["appliedTemplate"]["inputs"]["system_inputs"]
                 == values["system_inputs"]

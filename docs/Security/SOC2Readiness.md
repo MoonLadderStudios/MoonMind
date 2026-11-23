@@ -1,10 +1,12 @@
 # SOC 2 readiness
 
 Select **SOC 2 Readiness** (`security-soc2-readiness`) from the existing security
-preset catalog, or submit `security.assess` with `framework.packId` set to
-`soc2-readiness`. This is a contextual preset, not a new Create wizard. Ordinary
+preset catalog, or select the installed `soc2-readiness`
+[declared pack](FrameworkPacks.md) in `frameworkPacks`, alone or beside other
+packs. This is a contextual preset, not a new Create wizard. Ordinary
 Create remains Steps-first. Save populated inputs as a normal instance preset
-for reuse; catalog expansion and the direct API use the same evaluator.
+for reuse; a saved `framework.packId` request, the preset and the direct API
+reach the same evaluator.
 
 `tests/fixtures/security/soc2_readiness.json` is a runnable, entirely synthetic
 assessment input with no external account or network requirement. It deliberately
@@ -41,41 +43,44 @@ controls, retrieve paywalled text, or bundle licensed standards.
 
 ## Service inputs and scoped choices
 
-`framework.systemInputs` contains:
+The pack profile (`profile`, or `systemInputs` in a saved request) contains:
 
 - `entityName`, `systems`, `serviceBoundary` and `serviceCommitments` describing
   the assessed service and promised outcomes. Systems must stay within admitted
   `scope.assets`.
 - `categories`: one or more of `security`, `availability`, `confidentiality`,
   `processing_integrity`, `privacy`.
-- `assessmentType`: `type1` for a single date, or `type2` for a period.
+- `assessmentType`: `type1` for a single date, or `type2` for a period. It is
+  required; `categories` defaults to `security`.
 - `subserviceOrganisations`: name, services, method (`inclusive` or `carve_out`),
   responsibilities and `evidenceRequirementIds`. Carve-out does not eliminate
   oversight or complementary responsibility gaps.
 - `complementaryResponsibilities`: applicable customer/provider responsibilities.
   Set `boundaryReviewed` only after reviewing these records, including an
   explicit conclusion when no subservices or complementary duties apply.
-- `requirementEvidence` and `requirementSamples`, described below.
+- `requirementSamples`, described below.
 
-`framework.period.start` and `.end` are ISO dates. Type 1 requires equal dates;
-Type 2 requires start before end. `requirementChoices` is keyed by criterion,
-for example `CC6.1`. It supports systems, period, explicit exclusion reason and
-partner responsibility. Choices cannot widen system scope or the service period.
+The selection's `period.start` and `.end` are ISO dates. Type 1 requires equal
+dates; Type 2 requires start before end. `requirementChoices` is keyed by
+criterion, for example `CC6.1`. It supports systems, period, explicit exclusion
+reason, partner responsibility and documentary evidence. Choices cannot widen
+system scope or the service period.
 A narrower period stays visible as a gap against the overall selected period.
 An exclusion is an attributed scope decision, not an assessor's conclusion.
 
 Missing scope, documentary evidence and supplier responsibilities generate
 specific `evidenceRequests`. The matrix retains every identifier, including
-`not_applicable`, `unassessed`, and `evidence_recorded` rows. Evidence-recorded
+`not_applicable`, `incomplete`, and `evidence_recorded` rows. Evidence-recorded
 means the supplied records meet these readiness checks, not that the criterion
 has been independently examined.
 
 ## Documentary requests and populations
 
 Use the shared organisational evidence contract from
-[Framework Packs](FrameworkPacks.md). `requirementEvidence` maps each criterion
-to requests with an owner, category, purpose (`design`, `adoption`, `occurrence`)
-and immutable revisions. Each revision identifies its retained artifact, source,
+[Framework Packs](FrameworkPacks.md). Each criterion's choice lists
+`organisationalEvidence` requests with an owner, category, purpose (`design`,
+`adoption`, `occurrence`) and immutable revisions; a saved `requirementEvidence`
+map moves there at the request boundary. Each revision identifies its retained artifact, source,
 collection/expiry dates, service population, period, sensitivity and attributed
 review. Only the current revision is used. Superseded identities remain in the
 report history without regaining access. Missing, denied, unreadable, expired or
@@ -124,19 +129,20 @@ than independent assessor opinions.
 
 The existing report owner publishes the requirements/evidence matrix, periods,
 responsibilities, sample context, exceptions, limitations and actionable requests
-in the private readable primary report, with a structured framework artifact.
+in the private readable primary report and the structured control report's
+readiness record.
 Export that primary report through `evidenceExport.artifactRefs`; the existing
 bounded export owner produces a redacted presentation copy. Exporting an
 individual supporting document still follows that owner's supported formats and
 access checks. No report or download grants additional artifact access.
 
-Supply `previousAssessmentRef` to retain the earlier report and record changed
-scope or period. Sufficiency is always reevaluated against the new request;
+Supply `previousAssessmentRef` to retain the earlier report, including a retained
+`soc2-readiness/v1` report, and record changed scope or period. Sufficiency is always reevaluated against the new request;
 changing the period cannot carry forward a prior accepted result unexamined.
 Readable current evidence and the previous report become sealed dependencies.
 Missing evidence remains visible rather than being silently omitted.
 
 Every output is **SOC 2 readiness**, not certification or an issued SOC 2
 examination report. Actual CPA examination, independence decisions and
-organisation-specific qualification remain **Unverified**. Synthetic automated
+organisation-specific qualification remain **Unverified** external claims. Synthetic automated
 acceptance demonstrates implementation behavior, not those external activities.

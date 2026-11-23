@@ -1,6 +1,13 @@
-"""Synthetic ISMS through catalog, real Activity, immutable artifacts and reports."""
+"""Synthetic ISMS through catalog, real Activity, immutable artifacts and reports.
 
+ISO/IEC 27001 runs as an installed pack on the shared control evaluator; the
+saved ``framework.packId`` shape these journeys submit normalizes once at the
+request boundary.
+"""
+
+import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -26,6 +33,19 @@ def payload():
     }
 
 
+async def readiness(service, outputs):
+    """The retained control report and its ISO readiness context."""
+    report = await recurring.read(service, outputs["controlAssessmentRef"])
+    return report, report["frameworkPack"]["readiness"]
+
+
+def statuses(report):
+    return {
+        row["requirement"]["id"]: row["requirement"]["readiness"]["status"]
+        for row in report["requirements"]
+    }
+
+
 async def test_catalog_direct_and_retry_keep_same_soa_and_export(environment, tmp_path):
     service = environment.service
     request = payload()
@@ -41,23 +61,25 @@ async def test_catalog_direct_and_retry_keep_same_soa_and_export(environment, tm
         )
     first = await recurring.invoke(service, expanded["steps"][0]["tool"]["inputs"])
     direct = await recurring.invoke(service, request, key="direct")
-    assert first["frameworkRef"] == direct["frameworkRef"]
-    assert first["frameworkReadiness"] == "incomplete"
-    report = await recurring.read(service, first["frameworkRef"])
-    assert report["statementOfApplicability"]["status"] == "draft"
-    assert {"9.2", "9.3"} <= set(report["unresolvedRequirements"])
+    assert first["controlAssessmentRef"] == direct["controlAssessmentRef"]
+    assert first["frameworkPack"]["readiness"] == "incomplete"
+    report, context = await readiness(service, first)
+    assert report["frameworkPack"]["id"] == "iso-27001-readiness"
+    assert context["statementOfApplicability"]["status"] == "draft"
+    assert {"9.2", "9.3"} <= set(context["unresolvedRequirements"])
     assert first["publicationOutcome"] == "published"
     assert (
-        first["reportBundle"]["structured_ref"]["artifact_id"] == first["frameworkRef"]
+        first["reportBundle"]["structured_ref"]["artifact_id"]
+        == first["controlAssessmentRef"]
     )
     _, markdown = await service.read(
         artifact_id=recurring.report_ref(first),
         access=access_for_test("workflow:assessment"),
     )
-    assert b"Draft Statement of Applicability" in markdown
-    assert report["statementOfApplicability"]["version"].encode() in markdown
+    assert b"Draft Statement of Applicability version" in markdown
+    assert context["statementOfApplicability"]["version"].encode() in markdown
     again = await recurring.invoke(service, request)
-    assert again["frameworkRef"] == first["frameworkRef"]
+    assert again["controlAssessmentRef"] == first["controlAssessmentRef"]
 
 
 async def test_iso_report_preserves_methodology_gaps_and_native_findings(environment):
@@ -73,7 +95,7 @@ async def test_iso_report_preserves_methodology_gaps_and_native_findings(environ
 
     result = await recurring.invoke(service, request)
     comparison = await recurring.read(service, result["comparisonRef"])
-    framework = await recurring.read(service, result["frameworkRef"])
+    _, context = await readiness(service, result)
     _, body = await service.read(
         artifact_id=recurring.report_ref(result),
         access=access_for_test("workflow:assessment"),
@@ -82,14 +104,14 @@ async def test_iso_report_preserves_methodology_gaps_and_native_findings(environ
     assert comparison["coverageStatus"] == "complete"
     assert result["methodologyStatus"] == "incomplete"
     assert result["reportBundle"]["report_scope"] == "partial"
-    assert report.splitlines()[2] == "Coverage: partial. Baseline: initial."
+    assert "Coverage: partial. Baseline: initial." in report.splitlines()
     assert comparison["findings"][0]["findingId"] in report
     assert comparison["observation"]["observedAt"] in report
-    assert framework["statementOfApplicability"]["version"] in report
-    assert {"9.2", "9.3"} <= set(framework["unresolvedRequirements"])
-    assert framework["certification"] == "Unverified"
+    assert context["statementOfApplicability"]["version"] in report
+    assert {"9.2", "9.3"} <= set(context["unresolvedRequirements"])
+    assert context["externalClaims"]["certification"]["status"] == "Unverified"
     retry = await recurring.invoke(service, request)
-    for ref in ("scanRef", "comparisonRef", "frameworkRef", "methodologyRef"):
+    for ref in ("scanRef", "comparisonRef", "controlAssessmentRef", "methodologyRef"):
         assert retry[ref] == result[ref]
 
 
@@ -103,23 +125,23 @@ async def test_revised_scope_preserves_historical_soa_and_current_evidence(envir
     evidence["revisions"].append(dict(evidence["revisions"][0], artifactRef=current))
     request["framework"]["systemInputs"]["requirementEvidence"] = {"9.2": [evidence]}
     first = await recurring.invoke(service, request)
-    original = await recurring.read(service, first["frameworkRef"])
-    assert current in await recurring.required(service, first["frameworkRef"])
-    assert old not in await recurring.required(service, first["frameworkRef"])
-    request["framework"]["previousAssessmentRef"] = first["frameworkRef"]
+    original, prior = await readiness(service, first)
+    assert current in await recurring.required(service, first["controlAssessmentRef"])
+    assert old not in await recurring.required(service, first["controlAssessmentRef"])
+    request["framework"]["previousAssessmentRef"] = first["controlAssessmentRef"]
     request["framework"]["systemInputs"][
         "scopeStatement"
     ] = "Expanded organisational boundaries"
     changed = await recurring.invoke(service, request, key="changed")
-    revised = await recurring.read(service, changed["frameworkRef"])
+    _, revised = await readiness(service, changed)
     assert (
         revised["reassessment"]["previousSoAVersion"]
-        == original["statementOfApplicability"]["version"]
+        == prior["statementOfApplicability"]["version"]
     )
     assert revised["reassessment"]["affectedControlIds"]
-    assert await recurring.read(service, first["frameworkRef"]) == original
-    assert first["frameworkRef"] in await recurring.required(
-        service, changed["frameworkRef"]
+    assert await recurring.read(service, first["controlAssessmentRef"]) == original
+    assert first["controlAssessmentRef"] in await recurring.required(
+        service, changed["controlAssessmentRef"]
     )
 
 
@@ -144,10 +166,10 @@ async def test_fixed_vulnerability_retest_cannot_close_isms_process_gaps(environ
     fixed = await recurring.invoke(service, request, key="fixed")
     comparison = await recurring.read(service, fixed["comparisonRef"])
     assert comparison["findings"][0]["state"] == "remediated_verified"
-    report = await recurring.read(service, fixed["frameworkRef"])
-    assert {"9.2", "9.3", "8.3"} <= set(report["unresolvedRequirements"])
-    assert fixed["frameworkReadiness"] == "incomplete"
-    assert report["certification"] == "Unverified"
+    _, context = await readiness(service, fixed)
+    assert {"9.2", "9.3", "8.3"} <= set(context["unresolvedRequirements"])
+    assert fixed["frameworkPack"]["readiness"] == "incomplete"
+    assert context["externalClaims"]["certification"]["status"] == "Unverified"
 
 
 async def test_missing_current_document_stays_gap_without_reading_superseded(
@@ -174,12 +196,14 @@ async def test_missing_current_document_stays_gap_without_reading_superseded(
 
     monkeypatch.setattr(service, "read", unavailable)
     result = await recurring.invoke(service, request)
-    report = await recurring.read(service, result["frameworkRef"])
-    row = next(r for r in report["requirements"] if r["id"] == "9.2")
-    assert row["status"] == "incomplete"
-    assert row["evidenceReviews"][0]["state"] == "insufficient"
-    assert "unreadable" in " ".join(row["evidenceReviews"][0]["limitations"])
-    assert current not in await recurring.required(service, result["frameworkRef"])
+    report, context = await readiness(service, result)
+    assert statuses(report)["9.2"] == "incomplete"
+    [review] = context["requirementDetails"]["9.2"]["evidenceReviews"]
+    assert review["state"] == "insufficient"
+    assert "unreadable" in " ".join(review["limitations"])
+    assert current not in await recurring.required(
+        service, result["controlAssessmentRef"]
+    )
 
 
 async def test_real_technical_evidence_is_reused_and_sealed_per_requirement(
@@ -209,16 +233,17 @@ async def test_real_technical_evidence_is_reused_and_sealed_per_requirement(
     mapping = await recurring.put(service, record)
     request["framework"]["evidenceRefs"] = [mapping]
     result = await recurring.invoke(service, request, key="mapped")
-    report = await recurring.read(service, result["frameworkRef"])
-    rows = {r["id"]: r for r in report["requirements"]}
+    report, context = await readiness(service, result)
+    details = context["requirementDetails"]
     assert (
-        rows["A.8.8"]["technicalContextRefs"]
-        == rows["9.3"]["technicalContextRefs"]
+        details["A.8.8"]["technicalContextRefs"]
+        == details["9.3"]["technicalContextRefs"]
         == [mapping]
     )
-    assert rows["A.8.8"]["status"] == rows["9.3"]["status"] == "incomplete"
+    # Technical context never replaces the organisational record.
+    assert statuses(report)["A.8.8"] == statuses(report)["9.3"] == "incomplete"
     assert {mapping, scan["scanRef"]} <= await recurring.required(
-        service, result["frameworkRef"]
+        service, result["controlAssessmentRef"]
     )
 
 
@@ -271,24 +296,69 @@ async def test_management_scope_revision_flags_only_affected_requirement_and_pre
     request["scope"]["assets"] = ["isms", "second"]
     request["framework"]["systemInputs"]["systems"] = ["isms", "second"]
     first = await recurring.invoke(service, request)
-    original = await recurring.read(service, first["frameworkRef"])
-    request["framework"]["previousAssessmentRef"] = first["frameworkRef"]
+    original, prior = await readiness(service, first)
+    request["framework"]["previousAssessmentRef"] = first["controlAssessmentRef"]
     request["framework"]["requirementChoices"] = {"9.2": {"systems": ["isms"]}}
     revised = await recurring.invoke(service, request, key="revised-audit-scope")
-    report = await recurring.read(service, revised["frameworkRef"])
-    assert report["reassessment"]["affectedRequirementIds"] == ["9.2"]
-    assert report["reassessment"]["affectedControlIds"] == []
+    _, context = await readiness(service, revised)
+    assert context["reassessment"]["affectedRequirementIds"] == ["9.2"]
+    assert context["reassessment"]["affectedControlIds"] == []
     prompt = next(
         r
-        for r in revised["evidenceRequests"]
+        for r in context["evidenceRequests"]
         if r["id"] == "reassessment.applicability"
     )
     assert prompt["affectedRequirementIds"] == ["9.2"]
     assert (
-        report["statementOfApplicability"]["version"]
-        == original["statementOfApplicability"]["version"]
+        context["statementOfApplicability"]["version"]
+        == prior["statementOfApplicability"]["version"]
     )
-    assert await recurring.read(service, first["frameworkRef"]) == original
-    assert first["frameworkRef"] in await recurring.required(
-        service, revised["frameworkRef"]
+    assert await recurring.read(service, first["controlAssessmentRef"]) == original
+    assert first["controlAssessmentRef"] in await recurring.required(
+        service, revised["controlAssessmentRef"]
     )
+
+
+async def test_retained_legacy_iso_report_renders_exports_and_is_a_previous_assessment(
+    environment,
+):
+    """A retained iso-27001-readiness/v1 report stays usable after #5436."""
+    from moonmind.workflows.skills.security_assessment import _record
+    from tests.unit.security.test_assessment_evidence_exports import unpack
+
+    service = environment.service
+    retained = json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "fixtures/security/legacy_readiness_reports.json"
+        ).read_text()
+    )["reports"]["iso-27001-readiness/v1"]
+    previous = await recurring.put(service, retained)
+    await _record(service, previous, [], access_for_test("workflow:assessment"))
+    request = payload()
+    request["framework"]["previousAssessmentRef"] = previous
+    request["evidenceExport"] = {"artifactRefs": [previous]}
+    result = await recurring.invoke(service, request)
+    report, context = await readiness(service, result)
+    pack = report["frameworkPack"]
+    assert pack["previousAssessmentStatus"] == "available"
+    assert pack["previousReportSummary"].startswith(
+        "Previous iso-27001-readiness/v1 report"
+    )
+    # The legacy report carries no pack digests, so every decision is reviewed.
+    assert context["reassessment"]["previousSoAVersion"] == (
+        retained["statementOfApplicability"]["version"]
+    )
+    assert set(context["reassessment"]["affectedControlIds"]) >= {"A.8.8", "EXTRA.1"}
+    _, markdown = await service.read(
+        artifact_id=recurring.report_ref(result),
+        access=access_for_test("workflow:assessment"),
+    )
+    assert b"Previous iso-27001-readiness/v1 report" in markdown
+    archive, manifest = await unpack(service, result)
+    entries = {row["sourceArtifactId"]: row for row in manifest["entries"]}
+    assert entries[previous]["status"] == "included"
+    assert json.loads(archive.read(entries[previous]["memberName"]))["pack"]["id"] == (
+        "iso-27001-readiness"
+    )
+    assert previous in await recurring.required(service, result["controlAssessmentRef"])

@@ -328,28 +328,21 @@ async def test_gaming_pack_scope_and_exports(environment, case):
     refs = [await recurring.put(service, row) for row in records]
     payload["framework"]["evidenceRefs"] = refs
     first = await recurring.invoke(service, payload, key=case["id"])
-    # GLI and NJ run as installed declared packs on the shared control
-    # evaluator; UKGC RTS still writes its legacy framework report.
-    unified = family in {"gli", "nj"}
-    native_key = "controlAssessmentRef" if unified else "frameworkRef"
+    # Every gaming pack runs as an installed declared pack on the shared
+    # control evaluator.
+    native_key = "controlAssessmentRef"
     original = await service.read(
         artifact_id=first[native_key], access=access_for_test("workflow:assessment")
     )
     native = json.loads(original[1])
-    if unified:
-        context = native["frameworkPack"]["readiness"]
-        edition, readiness = native["frameworkPack"]["edition"], context["readiness"]
-        requests = context["evidenceRequests"]
-        statuses = {
-            r["requirement"]["id"]: r["requirement"]["readiness"]["status"]
-            for r in native["requirements"]
-        }
-        assert first["frameworkPack"]["readiness"] == readiness
-    else:
-        edition, readiness = native["pack"]["edition"], native["readiness"]
-        requests = native["evidenceRequests"]
-        statuses = {r["id"]: r["status"] for r in native["requirements"]}
-        assert first["frameworkReadiness"] == readiness
+    context = native["frameworkPack"]["readiness"]
+    edition, readiness = native["frameworkPack"]["edition"], context["readiness"]
+    requests = context["evidenceRequests"]
+    statuses = {
+        r["requirement"]["id"]: r["requirement"]["readiness"]["status"]
+        for r in native["requirements"]
+    }
+    assert first["frameworkPack"]["readiness"] == readiness
     assert edition == case["edition"]
     measured = {k: v for k, v in statuses.items() if k in case["requirements"]}
     unknowns = sorted(k for k, status in measured.items() if status == "incomplete")
@@ -398,14 +391,10 @@ async def test_gaming_pack_scope_and_exports(environment, case):
         actual,
         [*refs, first[native_key], report_ref],
         provenance={
-            "pack": (
-                {
-                    k: native["frameworkPack"][k]
-                    for k in ("id", "edition", "revision", "sha256")
-                }
-                if unified
-                else native["pack"]
-            ),
+            "pack": {
+                k: native["frameworkPack"][k]
+                for k in ("id", "edition", "revision", "sha256")
+            },
             "scope": payload["scope"],
             "period": payload["framework"]["period"],
             "source": case["source"],

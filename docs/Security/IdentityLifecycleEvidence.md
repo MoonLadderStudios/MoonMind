@@ -136,9 +136,9 @@ execution. Provider profiles, names, email addresses, actors, raw error bodies,
 and credential values are omitted from collected records.
 Ordinary outputs contain counts, limitation codes, and evidence references.
 
-When a framework is selected in the same assessment, the generated
-`technical_assessment` evidence enters the existing framework preparation path
-with the requested `requirementIds`. It supplies review and sampling inputs,
+When readiness packs are selected in the same assessment, each judges the
+generated `technical_assessment` evidence for its own requested
+`requirementIds`. It supplies review and sampling inputs,
 and cannot satisfy a control on its own. Review the matching and limitations,
 sample lifecycle cases including privileged and service accounts, and retain
 the existing enquiry, evidence, and observation records needed by that review.

@@ -1,4 +1,9 @@
-"""Synthetic service journeys through catalog, Activity, retention and export."""
+"""Synthetic service journeys through catalog, Activity, retention and export.
+
+SOC 2 runs as an installed pack on the shared control evaluator; the saved
+``framework.packId`` shape these journeys submit normalizes once at the
+request boundary.
+"""
 
 import copy
 from pathlib import Path
@@ -13,7 +18,6 @@ from tests.unit.api.test_presets_service import template_db
 from tests.unit.security.test_assessment_evidence_exports import unpack
 from tests.unit.security.test_soc2_readiness import (
     complete_requirement,
-    criterion,
     review_sampling,
     selection,
 )
@@ -21,6 +25,23 @@ from tests.unit.security.test_soc2_readiness import (
 environment = recurring.environment
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 ROOT = Path(__file__).resolve().parents[3]
+
+
+async def retained(service, outputs):
+    """The retained control report and its SOC 2 readiness context."""
+    report = await recurring.read(service, outputs["controlAssessmentRef"])
+    return report, report["frameworkPack"]["readiness"]
+
+
+def criterion(report, identifier="CC6.1"):
+    """One criterion's readiness status with the behavior's recorded basis."""
+    row = next(
+        r["requirement"]
+        for r in report["requirements"]
+        if r["requirement"]["id"] == identifier
+    )
+    details = report["frameworkPack"]["readiness"].get("requirementDetails", {})
+    return {"status": row["readiness"]["status"], **details.get(identifier, {})}
 
 
 async def seed(session, tmp_path):
@@ -51,23 +72,25 @@ async def test_selectable_catalog_matches_direct_api_and_exports_matrix(
     direct = copy.deepcopy(payload)
     direct["framework"] = selection().model_dump(mode="json", by_alias=True)
     second = await recurring.invoke(environment.service, direct, key="direct")
-    report = await recurring.read(environment.service, first["frameworkRef"])
-    assert report == await recurring.read(environment.service, second["frameworkRef"])
+    assert first["controlAssessmentRef"] == second["controlAssessmentRef"]
+    report, _ = await retained(environment.service, first)
     assert len(report["requirements"]) == 70
-    assert first["frameworkReadiness"] == "incomplete"
+    assert first["frameworkPack"]["readiness"] == "incomplete"
     retried = await recurring.invoke(environment.service, payload)
-    assert retried["frameworkRef"] == first["frameworkRef"]
+    assert retried["controlAssessmentRef"] == first["controlAssessmentRef"]
     primary = recurring.report_ref(first)
     _, readable = await environment.service.read(
         artifact_id=primary, access=access_for_test("workflow:assessment")
     )
-    assert b"SOC 2 readiness" in readable
-    assert b"CC6.1: unassessed" in readable
+    assert b"SOC 2 readiness only" in readable
+    assert b"CC6.1: **inconclusive** (partial); readiness incomplete" in readable
     assert b"Unverified" in readable
     payload["evidenceExport"] = {"artifactRefs": [primary]}
     result = await recurring.invoke(environment.service, payload, key="export")
     archive, _manifest = await unpack(environment.service, result)
-    assert any(b"SOC 2 readiness" in archive.read(name) for name in archive.namelist())
+    assert any(
+        b"SOC 2 readiness only" in archive.read(name) for name in archive.namelist()
+    )
 
 
 async def test_period_reassessment_reuses_evidence_without_erasing_gaps(environment):
@@ -87,11 +110,11 @@ async def test_period_reassessment_reuses_evidence_without_erasing_gaps(environm
         "framework": request.model_dump(mode="json", by_alias=True),
     }
     first = await recurring.invoke(environment.service, payload)
-    original = await recurring.read(environment.service, first["frameworkRef"])
+    original, _ = await retained(environment.service, first)
     assert criterion(original)["status"] == "evidence_recorded"
-    assert criterion(original, "CC8.1")["status"] == "unassessed"
+    assert criterion(original, "CC8.1")["status"] == "incomplete"
     proof = await environment.service.verified_dependencies(
-        root_artifact_id=first["frameworkRef"],
+        root_artifact_id=first["controlAssessmentRef"],
         access=access_for_test("workflow:assessment"),
     )
     assert set(refs) <= {d.artifact_id for d in proof.dependencies}
@@ -99,12 +122,14 @@ async def test_period_reassessment_reuses_evidence_without_erasing_gaps(environm
     changed_selection["framework"]["systemInputs"]["requirementSamples"]["CC6.1"][
         "selectedRecordIds"
     ] = ["never-supplied-record"]
-    changed_selection["framework"]["previousAssessmentRef"] = first["frameworkRef"]
+    changed_selection["framework"]["previousAssessmentRef"] = first[
+        "controlAssessmentRef"
+    ]
     tampered = await recurring.invoke(
         environment.service, changed_selection, key="sample-change"
     )
-    changed_report = await recurring.read(environment.service, tampered["frameworkRef"])
-    assert criterion(changed_report)["status"] == "unassessed"
+    changed_report, _ = await retained(environment.service, tampered)
+    assert criterion(changed_report)["status"] == "incomplete"
     primary = recurring.report_ref(tampered)
     changed_selection["evidenceExport"] = {"artifactRefs": [primary]}
     exported = await recurring.invoke(
@@ -114,14 +139,20 @@ async def test_period_reassessment_reuses_evidence_without_erasing_gaps(environm
     contents = b"\n".join(archive.read(name) for name in archive.namelist())
     assert b"exact sampling context" in contents
     assert b"never-supplied-record" in contents
-    assert await recurring.read(environment.service, first["frameworkRef"]) == original
+    assert (
+        await recurring.read(environment.service, first["controlAssessmentRef"])
+        == original
+    )
     payload["framework"]["period"]["start"] = "2025-01-01"
-    payload["framework"]["previousAssessmentRef"] = first["frameworkRef"]
+    payload["framework"]["previousAssessmentRef"] = first["controlAssessmentRef"]
     later = await recurring.invoke(environment.service, payload, key="period-change")
-    changed = await recurring.read(environment.service, later["frameworkRef"])
-    assert criterion(changed)["status"] == "unassessed"
-    assert changed["reassessment"]["periodChanged"]
-    assert await recurring.read(environment.service, first["frameworkRef"]) == original
+    changed, context = await retained(environment.service, later)
+    assert criterion(changed)["status"] == "incomplete"
+    assert context["reassessment"]["periodChanged"]
+    assert (
+        await recurring.read(environment.service, first["controlAssessmentRef"])
+        == original
+    )
 
 
 async def test_fixed_technical_finding_leaves_organisational_gap(environment):
@@ -145,9 +176,9 @@ async def test_fixed_technical_finding_leaves_organisational_gap(environment):
     after = await recurring.invoke(environment.service, payload, key="fixed")
     comparison = await recurring.read(environment.service, after["comparisonRef"])
     assert comparison["findings"][0]["state"] == "remediated_verified"
-    report = await recurring.read(environment.service, after["frameworkRef"])
-    assert criterion(report)["status"] == "unassessed"
-    assert after["frameworkReadiness"] == "incomplete"
+    report, _ = await retained(environment.service, after)
+    assert criterion(report)["status"] == "incomplete"
+    assert after["frameworkPack"]["readiness"] == "incomplete"
 
 
 async def test_supporting_document_export_is_current_only_and_access_checked(
@@ -198,15 +229,63 @@ async def test_supporting_document_export_is_current_only_and_access_checked(
     assert entries[old]["status"] == "withheld"
     assert entries[old]["reason"] == "unassociated_evidence"
     proof = await service.verified_dependencies(
-        root_artifact_id=result["frameworkRef"],
+        root_artifact_id=result["controlAssessmentRef"],
         access=access_for_test("workflow:assessment"),
     )
     assert current in {d.artifact_id for d in proof.dependencies}
     assert old not in {d.artifact_id for d in proof.dependencies}
-    row = criterion(await recurring.read(service, result["frameworkRef"]))
+    report, _ = await retained(service, result)
+    row = criterion(report)
     assert row["organisationalEvidence"][0]["supersededRefs"] == [old]
     with pytest.raises(TemporalArtifactAuthorizationError):
         await service.read(
-            artifact_id=result["frameworkRef"],
+            artifact_id=result["controlAssessmentRef"],
             access=access_for_test("workflow:unrelated"),
         )
+
+
+async def test_retained_legacy_soc2_report_renders_exports_and_is_a_previous_assessment(
+    environment,
+):
+    """A retained soc2-readiness/v1 report stays usable after #5436."""
+    import json
+
+    from moonmind.workflows.skills.security_assessment import _record
+
+    service = environment.service
+    legacy = json.loads(
+        (ROOT / "tests/fixtures/security/legacy_readiness_reports.json").read_text()
+    )["reports"]["soc2-readiness/v1"]
+    previous = await recurring.put(service, legacy)
+    await _record(service, previous, [], access_for_test("workflow:assessment"))
+    payload = {
+        "scope": {"assets": ["api"]},
+        "tools": [],
+        "budget": {"baseSeconds": 60, "maxSeconds": 120, "progressStallSeconds": 60},
+        "credentialRefs": [],
+        "networkRefs": [],
+        "framework": dict(
+            selection().model_dump(mode="json", by_alias=True),
+            previousAssessmentRef=previous,
+        ),
+        "evidenceExport": {"artifactRefs": [previous]},
+    }
+    result = await recurring.invoke(service, payload)
+    report, context = await retained(service, result)
+    pack = report["frameworkPack"]
+    assert pack["previousAssessmentStatus"] == "available"
+    # The retained run recorded CC6.1 evidence this run does not supply.
+    assert any(
+        "CC6.1 evidence_recorded -> incomplete" in row
+        for row in report["intelligenceChanges"]
+    )
+    assert context["reassessment"]["previousRef"] == previous
+    _, readable = await service.read(
+        artifact_id=recurring.report_ref(result),
+        access=access_for_test("workflow:assessment"),
+    )
+    assert b"Previous soc2-readiness/v1 report" in readable
+    archive, manifest = await unpack(service, result)
+    entries = {row["sourceArtifactId"]: row for row in manifest["entries"]}
+    assert entries[previous]["status"] == "included"
+    assert previous in await recurring.required(service, result["controlAssessmentRef"])

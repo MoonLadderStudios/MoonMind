@@ -20,8 +20,8 @@ from moonmind.security.assessments import (
     Observation,
     compare_observations,
 )
-from moonmind.security.frameworks import EvidencePeriod, FrameworkAssessmentInput
-from moonmind.security.ukgc_rts import UKGC_RTS_PACK, prepare_audit
+from moonmind.security.framework_registry import installed_pack
+from moonmind.security.frameworks import EvidencePeriod
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures/security"
 MODELS = ["catalog", "profile", "assessment-plan", "assessment-results", "poam"]
@@ -31,17 +31,75 @@ def uid(value):
     return str(uuid5(NAMESPACE_URL, value))
 
 
-def native_fixture():
-    data = json.loads((FIXTURES / "ukgc_rts.json").read_text())
-    selection = FrameworkAssessmentInput.model_validate(data["framework"])
-    report = prepare_audit(
-        selection,
-        evidence=[
-            dict(e, artifactRef=f"art_evidence_{i}")
+UKGC_RTS_PACK = installed_pack("ukgc-rts-security")[1]
+
+
+def ukgc_readiness(data=None):
+    """The fixture's UKGC readiness on the shared pack evaluator."""
+    from moonmind.security.framework_registry import pack_behavior
+    from moonmind.security.frameworks import normalize_installed_framework
+    from moonmind.security.pack_readiness import evaluate_readiness, parse_evidence
+
+    data = data or json.loads((FIXTURES / "ukgc_rts.json").read_text())
+    [selection] = normalize_installed_framework({"framework": data["framework"]})[
+        "frameworkPacks"
+    ]
+    behavior = pack_behavior(UKGC_RTS_PACK)
+    return data, evaluate_readiness(
+        UKGC_RTS_PACK,
+        behavior,
+        profile=selection["profile"],
+        period=EvidencePeriod.model_validate(selection["period"]),
+        choices=selection["requirementChoices"],
+        records=[
+            parse_evidence(behavior, e, f"art_evidence_{i}")
             for i, e in enumerate(data["evidence"])
         ],
-        audit=data["audit"],
+        audit=behavior.records_model.model_validate(data["audit"]),
+        admitted_assets=["casino"],
     )
+
+
+def unified_report(pack, result, data, comparison):
+    """The per-requirement rows an assessment run hands the OSCAL adapter."""
+    from moonmind.security.control_assessments import assess_controls
+    from moonmind.security.framework_packs import (
+        compile_framework_plan,
+        readiness_metadata,
+    )
+    from moonmind.security.oscal_export import readiness_report
+
+    period = EvidencePeriod.model_validate(data["framework"]["period"])
+    systems = sorted({s for row in result.rows.values() for s in row["systems"]})
+    plan, _ = compile_framework_plan(
+        pack,
+        scope=AssessmentScope(assets=systems or ["casino"]),
+        period=period,
+        choices=data["framework"].get("requirementChoices", {}),
+        now=datetime(2026, 11, 23, tzinfo=UTC),
+        readiness=result,
+    )
+    control = assess_controls(
+        plan,
+        comparison,
+        scan_ref="art_scan",
+        comparison_ref="art_comparison",
+        coverage_windows=[],
+        now=datetime(2026, 11, 23, tzinfo=UTC),
+        evidence_availability={},
+    )
+    metadata = {
+        "id": pack.id,
+        "edition": pack.edition,
+        "readiness": json.loads(
+            json.dumps(readiness_metadata(pack, result), default=str)
+        ),
+    }
+    return control, metadata, readiness_report(control, metadata)
+
+
+def native_fixture():
+    data, result = ukgc_readiness()
     now = datetime(2026, 11, 7, 12, tzinfo=UTC)
     scope = AssessmentScope(assets=["casino"])
     finding = Finding(
@@ -72,6 +130,7 @@ def native_fixture():
     comparison = Comparison.model_validate(
         compare_observations(observation, None, now=now)
     )
+    report = unified_report(UKGC_RTS_PACK, result, data, comparison)[2]
     context = {
         "schemaVersion": "oscal-export-context/v1",
         "system": {"identifier": "urn:system:casino", "sspRef": "art_ssp"},
@@ -200,9 +259,15 @@ def validate_document(model, document):
 
 def test_opt_in_request_preserves_native_default():
     from moonmind.security.assessments import AssessmentRequest
-    from tests.unit.security.test_ukgc_rts import request_payload
 
-    payload = request_payload()
+    payload = {
+        "scope": {"assets": ["casino"]},
+        "tools": [],
+        "budget": {"baseSeconds": 30, "maxSeconds": 60, "progressStallSeconds": 30},
+        "credentialRefs": [],
+        "networkRefs": [],
+        "framework": json.loads((FIXTURES / "ukgc_rts.json").read_text())["framework"],
+    }
     payload["oscalExport"] = {"models": MODELS, "contextRef": "art_context"}
     assert (
         AssessmentRequest.model_validate(payload).oscal_export.context_ref
@@ -450,17 +515,14 @@ def test_unknown_native_framework_state_is_unsupported():
 
 
 def test_existing_framework_owner_preserves_applicability():
-    from moonmind.security.frameworks import load_framework_pack
     from moonmind.security.oscal_export import OscalAdapter
-    from tests.unit.security import test_ukgc_rts
 
-    comparison, _, _, _ = native_fixture()
-    report = test_ukgc_rts.evaluate()
+    comparison, report, _, _ = native_fixture()
     # A native non-applicable record stays in the catalog and out of selection.
     report["requirements"][0]["status"] = "not_applicable"
     adapter = OscalAdapter(
         comparison=comparison,
-        pack=load_framework_pack("ukgc-rts-security"),
+        pack=UKGC_RTS_PACK,
         framework_report=report,
     )
     catalog = adapter.build("catalog", {})
@@ -621,7 +683,6 @@ async def test_restricted_declared_pack_is_not_copied_into_exports():
         ),
         comparison=comparison,
         comparison_ref="art_comparison",
-        framework=None,
         controls=(
             "art_control",
             SimpleNamespace(pack_metadata=[{**metadata, "artifactRef": "art_pack"}]),
@@ -705,3 +766,69 @@ def test_schema_validation_enforces_names_and_rejects_unknown_fields():
     changed["assessment-plan"]["invented-field"] = True
     with pytest.raises(jsonschema.ValidationError):
         validate_document("assessment-plan", changed)
+
+
+@pytest.mark.parametrize(
+    "scenario_id",
+    ["iso-responsibility-A.8.8-base", "soc2-complete", "ukgc-exclusion-and-narrowed"],
+)
+def test_migrated_built_in_exports_validate_with_unchanged_control_identities(
+    scenario_id,
+):
+    """ISO/IEC 27001, SOC 2 and UKGC RTS export all five models from the unified
+    report, with the control IDs the retired per-pack owners exported."""
+    from moonmind.security.oscal_export import OscalAdapter, OscalContext, control_id
+    from tests.unit.security.test_legacy_readiness_equivalence import (
+        GOLDEN,
+        SCENARIOS,
+        evaluated,
+        selection,
+    )
+
+    scenario = SCENARIOS[scenario_id]
+    pack = installed_pack(selection(scenario)["packId"])[1]
+    comparison, _, context, ssp = native_fixture()
+    data = {"framework": scenario["framework"]}
+    _, _, report = unified_report(pack, evaluated(scenario), data, comparison)
+    # The plan reviews one included control of this pack on the casino system.
+    context["procedures"][0]["controlId"] = {
+        "iso-27001-readiness": "A.8.8",
+        "soc2-readiness": "CC6.1",
+        "ukgc-rts-security": "5.15",
+    }[pack.id]
+    ssp["system-security-plan"]["control-implementation"][
+        "implemented-requirements"
+    ] = [{"control-id": control_id(row.id)} for row in pack.requirements]
+    adapter = OscalAdapter(
+        comparison=comparison,
+        pack=pack,
+        framework_report=report,
+        context=OscalContext.model_validate(context),
+        ssp=ssp,
+    )
+    refs = {model: f'art_{model.replace("-", "_")}' for model in MODELS}
+    built = {model: adapter.build(model, refs) for model in MODELS}
+    for model, document in built.items():
+        validate_document(model, document)
+    controls = [row["id"] for row in built["catalog"]["catalog"]["controls"]]
+    assert controls == [
+        row[3] for row in GOLDEN["legacyPacks"][pack.id]["requirements"]
+    ]
+    selected = built["profile"]["profile"]["imports"][0]["include-controls"][0][
+        "with-ids"
+    ]
+    for row in report["requirements"]:
+        assert (control_id(row["id"]) in selected) == (
+            row["status"]
+            not in {
+                "not_applicable",
+                "not_selected",
+                "excluded",
+                "exclusion_for_review",
+            }
+        )
+    if pack.id == "iso-27001-readiness":
+        # Same pack ID and edition, so the exchange identities are unchanged too.
+        assert built["catalog"]["catalog"]["uuid"] == uid(
+            "iso-27001-readiness:2022+Amd1:2024:urn:system:casino:catalog"
+        )

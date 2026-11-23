@@ -859,9 +859,9 @@ def test_oscal_projection_preserves_generated_ids_reference_graph_and_native_con
     import copy
 
     from moonmind.security.oscal_export import OscalAdapter, OscalContext
-    from moonmind.security.ukgc_rts import UKGC_RTS_PACK
     from tests.unit.security.test_oscal_export import (
         MODELS,
+        UKGC_RTS_PACK,
         native_fixture,
         validate_document,
     )

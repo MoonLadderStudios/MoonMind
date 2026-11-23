@@ -1,0 +1,1680 @@
+{
+  "schemaVersion": "declared-framework-pack/v1",
+  "id": "soc2-readiness",
+  "edition": "TSC-2017-POF-2022_DC-2018-IG-2022",
+  "revision": "1",
+  "amendments": [
+    "POF-2022",
+    "DC-IG-2022"
+  ],
+  "title": "SOC 2 readiness",
+  "source": {
+    "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+    "section": "TSP 100",
+    "reviewedOn": "2026-11-09"
+  },
+  "reviewedBy": "MoonMind maintainers",
+  "reviewedOn": "2026-11-09",
+  "publicationStatus": "published",
+  "publishedOn": "2022-10-01",
+  "effectiveFrom": "2018-12-15",
+  "provenance": "Criteria identifiers and short original topic labels for the 2017 Trust Services Criteria with the 2022 revised points of focus, and the 2018 description criteria with 2022 implementation guidance (https://www.aicpa-cima.com/resources/download/get-description-criteria-for-your-organizations-soc-2-r-report). No licensed AICPA text is reproduced. The 2017 criteria apply to periods ending on or after 2018-12-15; the 2022 revision month is recorded as its publication date. The October 2026 exposure draft (https://www.aicpa-cima.com/news/article/aicpa-proposes-update-of-soc-2-r-trust-services-criteria-to-enhance-the-relevance-usability-and-value-of-cpas-reports) is not operative here.",
+  "license": "Apache-2.0 for original MoonMind summaries. Referenced standards retain their own rights.",
+  "distribution": "redistributable",
+  "sector": "Service organisations",
+  "conclusions": "SOC 2 readiness. An independent CPA issues the examination report.",
+  "profile": {
+    "requestSource": "https://www.aicpa-cima.com/resources/download/get-description-criteria-for-your-organizations-soc-2-r-report",
+    "fields": [
+      {
+        "name": "entityName",
+        "type": "text",
+        "role": "entity_name",
+        "required": true,
+        "requestId": "scope.entity_name",
+        "prompt": "Supply the service's entity name."
+      },
+      {
+        "name": "systems",
+        "type": "text_list",
+        "role": "systems",
+        "required": true,
+        "requestId": "scope.systems",
+        "prompt": "Supply the service's systems."
+      },
+      {
+        "name": "serviceBoundary",
+        "type": "text",
+        "required": true,
+        "requestId": "scope.service_boundary",
+        "prompt": "Supply the service's service boundary."
+      },
+      {
+        "name": "serviceCommitments",
+        "type": "text_list",
+        "required": true,
+        "requestId": "scope.service_commitments",
+        "prompt": "Supply the service's service commitments."
+      },
+      {
+        "name": "categories",
+        "type": "choices",
+        "title": "Trust services categories (security when omitted)",
+        "choices": [
+          "security",
+          "availability",
+          "confidentiality",
+          "processing_integrity",
+          "privacy"
+        ]
+      },
+      {
+        "name": "assessmentType",
+        "type": "choice",
+        "choices": [
+          "type1",
+          "type2"
+        ]
+      },
+      {
+        "name": "edition",
+        "type": "choice",
+        "choices": [
+          "TSC-2017-POF-2022_DC-2018-IG-2022"
+        ]
+      },
+      {
+        "name": "subserviceOrganisations",
+        "type": "structured",
+        "model": "soc2.subservices"
+      },
+      {
+        "name": "complementaryResponsibilities",
+        "type": "text_list"
+      },
+      {
+        "name": "boundaryReviewed",
+        "type": "boolean"
+      },
+      {
+        "name": "licensedSourceContext",
+        "type": "text"
+      },
+      {
+        "name": "requirementSamples",
+        "type": "structured",
+        "model": "soc2.samples",
+        "title": "Period population samples by criterion"
+      }
+    ]
+  },
+  "behavior": "soc2-period-sampling",
+  "externalClaims": [
+    {
+      "id": "examination",
+      "gap": "No CPA examination or issued SOC 2 report was performed.",
+      "verifiableBy": "Independent CPA firm",
+      "nextStep": "Engage an independent CPA firm for a Type 1 or Type 2 SOC 2 examination of the recorded service boundary and period."
+    },
+    {
+      "id": "independence",
+      "gap": "Practitioner independence has not been established.",
+      "verifiableBy": "Independent CPA firm under AICPA independence rules",
+      "nextStep": "Obtain the examining firm's independence confirmation for this engagement."
+    },
+    {
+      "id": "organizational",
+      "evidenceType": "organizational",
+      "gap": "Attributions and synthetic verification do not establish this organisation's real-world readiness.",
+      "verifiableBy": "Service organisation management with its independent CPA",
+      "nextStep": "Have the examining CPA test the recorded design and operating evidence and samples."
+    }
+  ],
+  "limitations": [
+    "SOC 2 readiness only, not certification or an issued examination report.",
+    "Technical findings and agent recommendations cannot establish design, historical operation, populations or organisational events.",
+    "Recorded reviews and sample choices are attributed inputs, not independent assessor conclusions."
+  ],
+  "requirements": [
+    {
+      "id": "CC1.1",
+      "title": "CC1.1: Governance",
+      "summary": "Prepare a scoped review of governance for CC1.1.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC1.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC1.1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC1.2",
+      "title": "CC1.2: Governance",
+      "summary": "Prepare a scoped review of governance for CC1.2.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC1.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC1.2; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC1.3",
+      "title": "CC1.3: Governance",
+      "summary": "Prepare a scoped review of governance for CC1.3.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC1.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC1.3; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC1.4",
+      "title": "CC1.4: Governance",
+      "summary": "Prepare a scoped review of governance for CC1.4.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC1.4",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC1.4; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC1.5",
+      "title": "CC1.5: Governance",
+      "summary": "Prepare a scoped review of governance for CC1.5.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC1.5",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC1.5; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC2.1",
+      "title": "CC2.1: Information exchange",
+      "summary": "Prepare a scoped review of information exchange for CC2.1.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC2.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC2.1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC2.2",
+      "title": "CC2.2: Information exchange",
+      "summary": "Prepare a scoped review of information exchange for CC2.2.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC2.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC2.2; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC2.3",
+      "title": "CC2.3: Information exchange",
+      "summary": "Prepare a scoped review of information exchange for CC2.3.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC2.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC2.3; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC3.1",
+      "title": "CC3.1: Risk decisions",
+      "summary": "Prepare a scoped review of risk decisions for CC3.1.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC3.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC3.1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC3.2",
+      "title": "CC3.2: Risk decisions",
+      "summary": "Prepare a scoped review of risk decisions for CC3.2.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC3.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC3.2; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC3.3",
+      "title": "CC3.3: Risk decisions",
+      "summary": "Prepare a scoped review of risk decisions for CC3.3.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC3.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC3.3; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC3.4",
+      "title": "CC3.4: Risk decisions",
+      "summary": "Prepare a scoped review of risk decisions for CC3.4.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC3.4",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC3.4; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC4.1",
+      "title": "CC4.1: Control evaluation",
+      "summary": "Prepare a scoped review of control evaluation for CC4.1.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC4.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC4.1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC4.2",
+      "title": "CC4.2: Control evaluation",
+      "summary": "Prepare a scoped review of control evaluation for CC4.2.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC4.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC4.2; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC5.1",
+      "title": "CC5.1: Control implementation",
+      "summary": "Prepare a scoped review of control implementation for CC5.1.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC5.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC5.1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC5.2",
+      "title": "CC5.2: Control implementation",
+      "summary": "Prepare a scoped review of control implementation for CC5.2.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC5.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC5.2; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC5.3",
+      "title": "CC5.3: Control implementation",
+      "summary": "Prepare a scoped review of control implementation for CC5.3.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC5.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC5.3; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC6.1",
+      "title": "CC6.1: Access safeguards",
+      "summary": "Prepare a scoped review of access safeguards for CC6.1.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC6.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC6.1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC6.2",
+      "title": "CC6.2: Access safeguards",
+      "summary": "Prepare a scoped review of access safeguards for CC6.2.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC6.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC6.2; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC6.3",
+      "title": "CC6.3: Access safeguards",
+      "summary": "Prepare a scoped review of access safeguards for CC6.3.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC6.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC6.3; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC6.4",
+      "title": "CC6.4: Access safeguards",
+      "summary": "Prepare a scoped review of access safeguards for CC6.4.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC6.4",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC6.4; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC6.5",
+      "title": "CC6.5: Access safeguards",
+      "summary": "Prepare a scoped review of access safeguards for CC6.5.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC6.5",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC6.5; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC6.6",
+      "title": "CC6.6: Access safeguards",
+      "summary": "Prepare a scoped review of access safeguards for CC6.6.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC6.6",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC6.6; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC6.7",
+      "title": "CC6.7: Access safeguards",
+      "summary": "Prepare a scoped review of access safeguards for CC6.7.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC6.7",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC6.7; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC6.8",
+      "title": "CC6.8: Access safeguards",
+      "summary": "Prepare a scoped review of access safeguards for CC6.8.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC6.8",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC6.8; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC7.1",
+      "title": "CC7.1: Operational detection and response",
+      "summary": "Prepare a scoped review of operational detection and response for CC7.1.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC7.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC7.1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC7.2",
+      "title": "CC7.2: Operational detection and response",
+      "summary": "Prepare a scoped review of operational detection and response for CC7.2.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC7.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC7.2; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC7.3",
+      "title": "CC7.3: Operational detection and response",
+      "summary": "Prepare a scoped review of operational detection and response for CC7.3.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC7.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC7.3; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC7.4",
+      "title": "CC7.4: Operational detection and response",
+      "summary": "Prepare a scoped review of operational detection and response for CC7.4.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC7.4",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC7.4; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC7.5",
+      "title": "CC7.5: Operational detection and response",
+      "summary": "Prepare a scoped review of operational detection and response for CC7.5.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC7.5",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC7.5; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC8.1",
+      "title": "CC8.1: Change safeguards",
+      "summary": "Prepare a scoped review of change safeguards for CC8.1.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC8.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC8.1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC9.1",
+      "title": "CC9.1: Risk mitigation",
+      "summary": "Prepare a scoped review of risk mitigation for CC9.1.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC9.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC9.1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "CC9.2",
+      "title": "CC9.2: Risk mitigation",
+      "summary": "Prepare a scoped review of risk mitigation for CC9.2.",
+      "category": "security",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "CC9.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for CC9.2; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "A1.1",
+      "title": "A1.1: Service resilience",
+      "summary": "Prepare a scoped review of service resilience for A1.1.",
+      "category": "availability",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "A1.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for A1.1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "A1.2",
+      "title": "A1.2: Service resilience",
+      "summary": "Prepare a scoped review of service resilience for A1.2.",
+      "category": "availability",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "A1.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for A1.2; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "A1.3",
+      "title": "A1.3: Service resilience",
+      "summary": "Prepare a scoped review of service resilience for A1.3.",
+      "category": "availability",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "A1.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for A1.3; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "C1.1",
+      "title": "C1.1: Confidential information lifecycle",
+      "summary": "Prepare a scoped review of confidential information lifecycle for C1.1.",
+      "category": "confidentiality",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "C1.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for C1.1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "C1.2",
+      "title": "C1.2: Confidential information lifecycle",
+      "summary": "Prepare a scoped review of confidential information lifecycle for C1.2.",
+      "category": "confidentiality",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "C1.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for C1.2; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "PI1.1",
+      "title": "PI1.1: Processing outcomes",
+      "summary": "Prepare a scoped review of processing outcomes for PI1.1.",
+      "category": "processing_integrity",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "PI1.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for PI1.1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "PI1.2",
+      "title": "PI1.2: Processing outcomes",
+      "summary": "Prepare a scoped review of processing outcomes for PI1.2.",
+      "category": "processing_integrity",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "PI1.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for PI1.2; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "PI1.3",
+      "title": "PI1.3: Processing outcomes",
+      "summary": "Prepare a scoped review of processing outcomes for PI1.3.",
+      "category": "processing_integrity",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "PI1.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for PI1.3; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "PI1.4",
+      "title": "PI1.4: Processing outcomes",
+      "summary": "Prepare a scoped review of processing outcomes for PI1.4.",
+      "category": "processing_integrity",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "PI1.4",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for PI1.4; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "PI1.5",
+      "title": "PI1.5: Processing outcomes",
+      "summary": "Prepare a scoped review of processing outcomes for PI1.5.",
+      "category": "processing_integrity",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "PI1.5",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for PI1.5; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "P1.1",
+      "title": "P1.1: Privacy disclosures",
+      "summary": "Prepare a scoped review of privacy disclosures for P1.1.",
+      "category": "privacy",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "P1.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for P1.1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "P2.1",
+      "title": "P2.1: Privacy choices",
+      "summary": "Prepare a scoped review of privacy choices for P2.1.",
+      "category": "privacy",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "P2.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for P2.1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "P3.1",
+      "title": "P3.1: Collection boundaries",
+      "summary": "Prepare a scoped review of collection boundaries for P3.1.",
+      "category": "privacy",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "P3.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for P3.1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "P3.2",
+      "title": "P3.2: Collection boundaries",
+      "summary": "Prepare a scoped review of collection boundaries for P3.2.",
+      "category": "privacy",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "P3.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for P3.2; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "P4.1",
+      "title": "P4.1: Personal information lifecycle",
+      "summary": "Prepare a scoped review of personal information lifecycle for P4.1.",
+      "category": "privacy",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "P4.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for P4.1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "P4.2",
+      "title": "P4.2: Personal information lifecycle",
+      "summary": "Prepare a scoped review of personal information lifecycle for P4.2.",
+      "category": "privacy",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "P4.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for P4.2; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "P4.3",
+      "title": "P4.3: Personal information lifecycle",
+      "summary": "Prepare a scoped review of personal information lifecycle for P4.3.",
+      "category": "privacy",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "P4.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for P4.3; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "P5.1",
+      "title": "P5.1: Individual access",
+      "summary": "Prepare a scoped review of individual access for P5.1.",
+      "category": "privacy",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "P5.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for P5.1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "P5.2",
+      "title": "P5.2: Individual access",
+      "summary": "Prepare a scoped review of individual access for P5.2.",
+      "category": "privacy",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "P5.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for P5.2; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "P6.1",
+      "title": "P6.1: Third-party disclosure",
+      "summary": "Prepare a scoped review of third-party disclosure for P6.1.",
+      "category": "privacy",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "P6.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for P6.1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "P6.2",
+      "title": "P6.2: Third-party disclosure",
+      "summary": "Prepare a scoped review of third-party disclosure for P6.2.",
+      "category": "privacy",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "P6.2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for P6.2; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "P6.3",
+      "title": "P6.3: Third-party disclosure",
+      "summary": "Prepare a scoped review of third-party disclosure for P6.3.",
+      "category": "privacy",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "P6.3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for P6.3; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "P6.4",
+      "title": "P6.4: Third-party disclosure",
+      "summary": "Prepare a scoped review of third-party disclosure for P6.4.",
+      "category": "privacy",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "P6.4",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for P6.4; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "P6.5",
+      "title": "P6.5: Third-party disclosure",
+      "summary": "Prepare a scoped review of third-party disclosure for P6.5.",
+      "category": "privacy",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "P6.5",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for P6.5; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "P6.6",
+      "title": "P6.6: Third-party disclosure",
+      "summary": "Prepare a scoped review of third-party disclosure for P6.6.",
+      "category": "privacy",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "P6.6",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for P6.6; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "P6.7",
+      "title": "P6.7: Third-party disclosure",
+      "summary": "Prepare a scoped review of third-party disclosure for P6.7.",
+      "category": "privacy",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "P6.7",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for P6.7; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "P7.1",
+      "title": "P7.1: Information quality",
+      "summary": "Prepare a scoped review of information quality for P7.1.",
+      "category": "privacy",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "P7.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for P7.1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "P8.1",
+      "title": "P8.1: Privacy oversight",
+      "summary": "Prepare a scoped review of privacy oversight for P8.1.",
+      "category": "privacy",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022",
+          "section": "P8.1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for P8.1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "DC1",
+      "title": "DC1: Service offering",
+      "summary": "Prepare a scoped review of service offering for DC1.",
+      "category": "description",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/get-description-criteria-for-your-organizations-soc-2-r-report",
+          "section": "DC1",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for DC1; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "DC2",
+      "title": "DC2: Promised outcomes",
+      "summary": "Prepare a scoped review of promised outcomes for DC2.",
+      "category": "description",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/get-description-criteria-for-your-organizations-soc-2-r-report",
+          "section": "DC2",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for DC2; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "DC3",
+      "title": "DC3: System composition",
+      "summary": "Prepare a scoped review of system composition for DC3.",
+      "category": "description",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/get-description-criteria-for-your-organizations-soc-2-r-report",
+          "section": "DC3",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for DC3; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "DC4",
+      "title": "DC4: Significant incidents",
+      "summary": "Prepare a scoped review of significant incidents for DC4.",
+      "category": "description",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/get-description-criteria-for-your-organizations-soc-2-r-report",
+          "section": "DC4",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for DC4; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "DC5",
+      "title": "DC5: Criteria and controls",
+      "summary": "Prepare a scoped review of criteria and controls for DC5.",
+      "category": "description",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/get-description-criteria-for-your-organizations-soc-2-r-report",
+          "section": "DC5",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for DC5; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "DC6",
+      "title": "DC6: Customer responsibilities",
+      "summary": "Prepare a scoped review of customer responsibilities for DC6.",
+      "category": "description",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/get-description-criteria-for-your-organizations-soc-2-r-report",
+          "section": "DC6",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for DC6; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "DC7",
+      "title": "DC7: Subservice responsibilities",
+      "summary": "Prepare a scoped review of subservice responsibilities for DC7.",
+      "category": "description",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/get-description-criteria-for-your-organizations-soc-2-r-report",
+          "section": "DC7",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for DC7; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "DC8",
+      "title": "DC8: Excluded criteria",
+      "summary": "Prepare a scoped review of excluded criteria for DC8.",
+      "category": "description",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/get-description-criteria-for-your-organizations-soc-2-r-report",
+          "section": "DC8",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for DC8; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    },
+    {
+      "id": "DC9",
+      "title": "DC9: Period changes",
+      "summary": "Prepare a scoped review of period changes for DC9.",
+      "category": "description",
+      "applicability": "Common criteria apply to all selected categories; other criteria follow the explicit category and scope choices.",
+      "sources": [
+        {
+          "url": "https://www.aicpa-cima.com/resources/download/get-description-criteria-for-your-organizations-soc-2-r-report",
+          "section": "DC9",
+          "reviewedOn": "2026-11-09"
+        }
+      ],
+      "evidenceTypes": [
+        "organizational"
+      ],
+      "evidencePrompt": "Supply design records and, for Type 2, period operating records for DC9; identify populations, samples, exceptions and response owners.",
+      "responsibilities": [
+        "service organization management"
+      ],
+      "objectiveBasis": "Readiness documentary review, not exhaustive control testing."
+    }
+  ]
+}

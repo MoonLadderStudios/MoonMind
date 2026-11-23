@@ -13,7 +13,7 @@ from api_service.services.single_user_conversion import run_guarded_upgrade
 from moonmind.config.settings import settings
 from moonmind.security.assessments import AssessmentRequest
 from tests.unit.api.test_presets_service import template_db
-from tests.unit.security.test_soc2_readiness import selection
+from tests.unit.security.test_soc2_readiness import documentary_request, selection
 
 ROOT = Path(__file__).resolve().parents[3]
 SLUG = "security-soc2-readiness"
@@ -51,10 +51,21 @@ async def test_soc2_catalog_api_and_saved_system_inputs(tmp_path, monkeypatch):
             assert listed.status_code == 200
             assert SLUG in {p["slug"] for p in listed.json()["items"]}
             detail = (await client.get(f"/api/presets/{SLUG}")).json()
-            assert "system_inputs" in detail["inputSchema"]["properties"]
+            # Typed profile fields replace the free-form JSON editor.
+            assert "system_inputs" not in (detail["uiSchema"] or {})
+            system = detail["inputSchema"]["properties"]["system_inputs"]
+            assert system["additionalProperties"] is False
+            assert {
+                "assessmentType",
+                "requirementSamples",
+                "subserviceOrganisations",
+            } <= set(system["properties"])
             assert "requirement_choices" in detail["inputSchema"]["properties"]
             values = {
-                "system_inputs": selection().system_inputs,
+                "system_inputs": {
+                    **selection().system_inputs,
+                    "requirementEvidence": {"CC6.1": [documentary_request()]},
+                },
                 "period": selection().period.model_dump(mode="json"),
                 "assets": ["api"],
                 "requirement_choices": {
@@ -71,9 +82,21 @@ async def test_soc2_catalog_api_and_saved_system_inputs(tmp_path, monkeypatch):
             expanded = response.json()
             payload = expanded["steps"][0]["tool"]["inputs"]
             parsed = AssessmentRequest.model_validate(payload)
-            assert parsed.framework.system_inputs == values["system_inputs"]
-            assert parsed.framework.requirement_choices["CC6.1"].systems == ["api"]
-            assert parsed.framework.audit_ref is None
+            # The saved framework.packId shape normalizes once to the installed
+            # pack: system inputs become its profile and saved documentary
+            # evidence moves to its requirement's choice, without loss.
+            assert parsed.framework is None
+            [chosen] = parsed.selected_packs
+            saved_system = dict(values["system_inputs"])
+            saved_evidence = saved_system.pop("requirementEvidence")
+            assert chosen.profile == saved_system
+            choice = chosen.requirement_choices["CC6.1"]
+            assert choice.systems == ["api"]
+            assert [
+                item.model_dump(mode="json", by_alias=True, exclude_none=True)
+                for item in choice.organisational_evidence
+            ] == saved_evidence["CC6.1"]
+            assert chosen.audit_ref is None
             assert (
                 expanded["appliedTemplate"]["inputs"]["system_inputs"]
                 == values["system_inputs"]

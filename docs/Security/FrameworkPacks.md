@@ -2,12 +2,11 @@
 
 `security.assess` accepts an operator-supplied framework pack through the same
 artifact admission, Skill invocation and report path as native security evidence.
-There is no remote registry, scheduler or source download. ISO/IEC 27001, SOC 2
-and UKGC RTS preparation packs still use `framework` and their own modules.
-GLI-19/GSF, New Jersey DGE and PCI DSS v4.0.1 ship as installed declared packs, so they and
-operator packs use `frameworkPacks` and the shared requirement evaluator, and
-can be combined in one plan. [SOC 2 readiness](SOC2Readiness.md) uses the shared
-preset catalog, documentary evidence owner and private reports.
+There is no remote registry, scheduler or source download. Every built-in
+readiness pack (GLI-19/GSF, New Jersey DGE, PCI DSS v4.0.1, ISO/IEC 27001,
+[SOC 2](SOC2Readiness.md) and UKGC RTS) ships as an installed declared pack, so
+built-in and operator packs use `frameworkPacks` and the shared requirement
+evaluator, and any of them can be combined in one plan.
 
 ## Selecting packs
 
@@ -17,9 +16,11 @@ in saved environments. Each entry describes its edition, rights, supported
 subjects, evidence, conclusion limits and input schema. Unavailable entries
 include a reason. A missing effective date is unknown. Publication of a
 readiness pack does not establish that a jurisdiction adopted the standard.
-In Create, readiness presets show typed system inputs. The GLI and New Jersey
-presets generate them from the pack's declared profile; the other presets also
-offer an advanced JSON editor for a complete saved system record.
+Each readiness preset in Create is a thin selection of one catalog entry: it
+names the installed pack by `framework.packId` and shows typed fields generated
+from the pack's declared profile, with no free-form JSON editor. None is
+retired, because each keeps prompts specific to its standard; all of them run
+the same `security.assess` path as a direct request.
 
 Settings can register a declared pack using its exact artifact reference, ID,
 edition, revision and SHA-256. Catalog reads use the caller’s artifact access
@@ -36,9 +37,11 @@ each pack ID and edition pair once. The singular `frameworkPack` form in saved
 requests and schedules selects one pack through the same evaluator. A saved
 request, preset, rerun or schedule that passes `framework.packId` for an
 installed pack is normalized once at the request boundary to the currently
-installed edition and revision: `systemInputs` becomes `profile`, and
-`requirementChoices`, `evidenceRefs`, `auditRef` and `previousAssessmentRef`
-carry over unchanged.
+installed edition and revision, so saved work follows the installed pack without
+edits: `systemInputs` becomes `profile`, saved `requirementEvidence` moves to
+each requirement's choice as `organisationalEvidence`, and `evidenceRefs`,
+`auditRef` and `previousAssessmentRef` carry over unchanged. A saved shape the
+pack cannot read is refused at admission.
 Key each selection’s optional `requirementChoices` by requirement ID. A choice
 can narrow `systems` and `period`, and records `applicability` plus `applicabilityReason`. Omitted
 applicability remains undetermined. Explicit applicable/not-applicable choices
@@ -100,8 +103,10 @@ Use `schemaVersion: declared-framework-pack/v1` with:
 A pack may also declare readiness content, each part omitted when unused so
 existing packs keep their digests:
 
-- `profile`: typed inputs the operator supplies (`text`, `boolean`, `choice`,
-  `choices`, `text_list` or `jurisdiction_basis`). A `role` gives a field shared
+- `profile`: typed inputs the operator supplies (`text`, `boolean`, `number`,
+  `date`, `choice`, `choices`, `text_list`, `jurisdiction_basis`, or
+  `structured` with a `model` whose record shape the pack's behavior registers,
+  such as ISO/IEC 27001 risks or UKGC critical systems). A `role` gives a field shared
   meaning: `entity_type`, `product_type`, `systems` (bounds requirement scope),
   `jurisdiction_basis` (adoption with source, record version and dates),
   `applicability_basis` and `selection` (selectable requirements). A `required`
@@ -115,9 +120,13 @@ existing packs keep their digests:
   `unknownReason`. `applicabilityText` supplies the applicable, not-applicable
   and not-selected reasons; `citeRule` appends each requirement's own
   applicability statement to its not-applicable reason.
-- `behavior`: a registered judgement that cannot be data, such as GLI module
-  applicability by entity and product, or New Jersey annual-assessment record
-  checks with approval, operator and incident qualifiers. Unknown behaviors are
+- `behavior`: a registered judgement that cannot be data: GLI module
+  applicability by entity and product, New Jersey annual-assessment records with
+  approval, operator and incident qualifiers, the ISO/IEC 27001 Statement of
+  Applicability with its risk-treatment links, SOC 2 period-aware sampling, and
+  the UKGC audit record with auditor independence. A behavior can own a
+  requirement's whole conclusion when the judgement is more than evidence
+  matching; scope, period and choice checks stay shared. Unknown behaviors are
   refused.
 - `externalClaims`: assurances only an outside party can give, each with `gap`,
   `verifiableBy` and `nextStep`. They are always reported Unverified.
@@ -149,7 +158,12 @@ requirement only when it passed, names the pack edition and the module standard
 period, and, for regulator evidence, the recorded jurisdiction. External audits
 also need reliance covering the period. Records are read once per assessment;
 a record may name requirements of several selected packs, and each pack judges
-only its own, so no conclusion transfers.
+only its own, so no conclusion transfers. Review evidence the same assessment
+collects (identity lifecycle, change control) is judged the same way.
+Current documentary revisions in `requirementChoices` are also read once, then
+reviewed by every pack that cites them: ISO/IEC 27001 beside an organisation's
+own ISMS policy pack can cite one adopted-policy revision, and each pack
+concludes for its own requirements.
 
 Requirement readiness is one of `evidence_recorded`, `incomplete`,
 `partner_owned`, `excluded`, `exclusion_for_review`, `not_applicable`,
@@ -211,13 +225,14 @@ history leaves comparison Unverified. A change in revision,
 objectives, rights or profile inputs is reported as an intelligence change.
 Both export tools return an explicit unsupported result for a multi-pack run.
 
-A retained `gli-readiness/v1` or New Jersey `framework-audit-preparation/v1`
-report, written before these packs moved to this contract, still serves as
-`previousAssessmentRef`. A temporary reader compares matching requirement IDs,
-marks pack revision, digests and missing requirements Unverified, summarises the
-previous report in the new one, and lets evidence export include it. Remove the
-reader when no such report remains in retention, or when the legacy
-`framework-pack/v1` contract is retired and its retained reports are migrated.
+A retained report written before a built-in moved to this contract
+(`gli-readiness/v1`, `iso-27001-readiness/v1`, `soc2-readiness/v1`, or New Jersey
+or UKGC `framework-audit-preparation/v1`) still renders, exports and serves as
+`previousAssessmentRef`. A temporary reader compares matching requirement IDs
+(renamed statuses such as `unassessed` count as `incomplete`), marks pack
+revision, digests and missing requirements Unverified, summarises the previous
+report in the new one, and lets evidence export include it. Nothing writes these
+schemas any more; remove the reader once none remains in retention.
 
 ## Packs from your own policy
 
@@ -368,50 +383,57 @@ validation by a QSA, ISA or acquirer remain Unverified external claims.
 
 ## ISO/IEC 27001 ISMS readiness
 
-The contextual `security-iso-27001` preset and `framework.packId:
-iso-27001-readiness` use the existing assessment/API and retained report path.
-Ordinary Create remains Steps-first. Save `system_inputs` in an instance preset
-when reusing an ISMS scope. The pack identifies ISO/IEC 27001:2022 and its published
-Amd 1:2024 climate changes, using original readiness summaries and reference
-identifiers rather than redistributing licensed standard text. Consult an
+Select `iso-27001-readiness` edition `2022+Amd1:2024`, or use the
+`security-iso-27001` preset. The pack identifies the ISO/IEC 27001:2022
+management-system clauses and 93 Annex A references with Amd 1:2024 climate
+changes, using original readiness prompts rather than licensed text. Consult an
 appropriately licensed copy for the complete normative requirements.
 
-`systemInputs` records `systems`, `scopeStatement`, `context`, `interestedParties`,
-`climateRelevance`, `risks`, `controls` and `requirementEvidence`. Management-system
-clauses remain distinct from the 93 Annex A references. A risk has an `id`,
-`version`, description, owner, assessment, treatment, `treatmentPlan`, `controlIds`
-and `residualRiskApproval`; accepting a risk also needs `acceptanceReason`.
-Missing treatment and approval records remain actions rather than inferred success.
+The profile records `systems`, `scopeStatement`, `context`, `interestedParties`,
+`climateRelevance`, `risks` and `controls`. A risk has an `id`, `version`,
+description, owner, assessment, treatment, `treatmentPlan`, `controlIds` and
+`residualRiskApproval`; accepting a risk also needs `acceptanceReason`. Missing
+treatment and approval records remain actions rather than inferred success.
 
-Key controls by reference such as `A.8.8`; necessary additional controls use an
+Key `controls` by reference such as `A.8.8`; necessary additional controls use an
 `EXTRA.` identifier and a title. Each decision retains `decision` (include,
 exclude or undetermined), rationale, `riskIds`, owner and declared
 `implementationStatus`. An exclusion without rationale, or of a control linked
 to current risk treatment, stays unresolved. A scanner mapping is never needed
-to retain a necessary control. Requirement choices may narrow systems and periods,
-not expand them or exclude management-system requirements.
+to retain a necessary control. Management-system clauses stay distinct from
+Annex A and cannot be excluded. Annex A scope, responsibility and documentary
+evidence go in `requirementChoices`; an additional control is not a pack
+requirement, so its decision records its own `systems`, `period`, responsibility
+and `organisationalEvidence`.
 
-`requirementEvidence` maps clause/control IDs to the shared organisational evidence
-requests described above. These preserve purpose-specific reviews and historical
-revisions, but only current revisions are read, admitted and retained as evidence.
-Internal audits, management reviews, training and corrective actions need records
-of occurrence; a policy draft or management assertion does not prove they happened.
-Management-clause evidence must match the clause’s documentary category; an
-internal audit does not establish management review. Control evidence covers
-design, adoption and occurrence separately. Missing, denied, expired,
-out-of-population or wrong-purpose evidence remains a gap.
-`evidenceRefs` can reuse scoped technical records for several requirement IDs,
-without transferring one requirement's conclusion to another. Technical context
-never replaces the organisational record review.
+Each management clause needs current evidence of its own category and purpose;
+an internal audit does not establish management review. Annex A controls need
+design, adoption and occurrence evidence separately. Internal audits,
+management reviews, training and corrective actions need records of occurrence;
+a policy draft or management assertion does not prove they happened. Missing,
+denied, expired, out-of-population or wrong-purpose evidence remains a gap.
+`evidenceRefs` can reuse scoped technical records for several requirement IDs
+as context (`technicalContextRefs`); technical context never replaces the
+organisational record.
 
-The structured framework artifact and primary report export the draft Statement
-of Applicability with a content-derived version, inclusion/exclusion rationale,
-implementation assertions, evidence coverage and risk links. Link a previous
-framework artifact using `previousAssessmentRef`: changed risk, scope, period,
-responsibility agreement or edition identifies affected controls and evidence for
-review without editing the old artifact. The current report retains the prior
-reference and SoA version.
+The readiness record keeps the draft Statement of Applicability with a version
+derived from the scope, period and decisions, each decision's rationale,
+implementation assertion, evidence status and risk links, and the risk-treatment
+actions. The readable report names the SoA version. With `previousAssessmentRef`,
+changed risk, scope, period, responsibility or pack identity names the affected
+controls and requirements for review, and a management-only change flags only
+that clause; the earlier report is never edited.
 
 Readiness describes recorded evidence only. Generated policies and SoAs remain
 drafts, a passed vulnerability retest cannot close missing ISMS process evidence,
-and actual organisational operation and certification remain **Unverified**.
+and certification and actual organisational operation remain **Unverified**
+external claims.
+
+## UKGC RTS security-audit preparation
+
+`ukgc-rts-security` (edition `ISO-IEC-27001-2022`, the control set RTS section 4
+selects) is described in [UKGC RTS audit preparation](PassiveRepoScan.md#ukgc-rts-audit-preparation).
+Its behavior derives annual-audit applicability, audit targets and reporting
+conditions from the profile, needs enquiry, evidence and observation on every
+in-scope critical system, and reads the audit record from `auditRef`. The
+independent audit and regulator decisions remain Unverified.

@@ -1694,10 +1694,58 @@ async def test_cancellation_starts_no_successor_and_retains_completed_work(
     assert (await read(service, first["scanRef"]))["scanOutcome"] == "completed"
 
 
-@pytest.mark.parametrize("bounded", [False, True, "cancel_before_admission"])
-@pytest.mark.parametrize("authored_runtime", ["codex_cli", None])
+def saved_framework_inputs(pack_id):
+    """A schedule's saved framework.packId step inputs for one built-in pack."""
+    from tests.unit.security import test_iso_27001, test_soc2_readiness, test_ukgc_rts
+    from tests.unit.security.test_gli_readiness import fixture as gli_fixture
+
+    if pack_id == "gli-19-readiness":
+        framework = gli_fixture()["framework"]
+        framework["systemInputs"]["systems"] = ["app"]
+    elif pack_id == "iso-27001-readiness":
+        framework = test_iso_27001.selection(systems=["app"]).model_dump(
+            mode="json", by_alias=True
+        )
+    elif pack_id == "soc2-readiness":
+        framework = test_soc2_readiness.selection(systems=["app"]).model_dump(
+            mode="json", by_alias=True
+        )
+    else:
+        framework = test_ukgc_rts.fixture()["framework"]
+        system = framework["systemInputs"]
+        for row in system["criticalSystems"]:
+            row["systems"] = ["app"]
+        for row in system["thirdParties"]:
+            row["systems"] = ["app"]
+    return framework
+
+
+SAVED_PACKS = (
+    "gli-19-readiness",
+    "iso-27001-readiness",
+    "soc2-readiness",
+    "ukgc-rts-security",
+)
+
+
+@pytest.mark.parametrize(
+    ("bounded", "authored_runtime", "saved_pack"),
+    [
+        *[(False, "codex_cli", pack_id) for pack_id in SAVED_PACKS],
+        (False, None, None),
+        (True, "codex_cli", None),
+        (True, None, None),
+        ("cancel_before_admission", "codex_cli", None),
+        ("cancel_before_admission", None, None),
+    ],
+)
 async def test_product_api_security_schedule_lifecycle(
-    environment, temporal_environment, monkeypatch, authored_runtime, bounded
+    environment,
+    temporal_environment,
+    monkeypatch,
+    authored_runtime,
+    bounded,
+    saved_pack,
 ):
     """Real HTTP -> service/DB -> Temporal occurrence -> planner/Activity/artifact.
 
@@ -1736,14 +1784,12 @@ async def test_product_api_security_schedule_lifecycle(
 
         await select_pack(service, request)
         pack_attachment = [{"artifactId": request["frameworkPack"]["artifactRef"]}]
-    saved_framework = not bounded and authored_runtime is not None
+    saved_framework = saved_pack is not None
     if saved_framework:
-        # A schedule saved before GLI-19 moved onto the declared pack contract
-        # keeps its framework.packId inputs and needs no edit (#5435).
-        from tests.unit.security.test_gli_readiness import fixture as gli_fixture
-
-        request["framework"] = gli_fixture()["framework"]
-        request["framework"]["systemInputs"]["systems"] = ["app"]
+        # A schedule saved before a built-in moved onto the declared pack
+        # contract keeps its framework.packId inputs and needs no edit
+        # (#5435 for GLI-19, #5436 for ISO/IEC 27001, SOC 2 and UKGC RTS).
+        request["framework"] = saved_framework_inputs(saved_pack)
     await record_finished(environment, "assessment")
     async def artifact_client(_self):
         return client
@@ -1971,8 +2017,8 @@ async def test_product_api_security_schedule_lifecycle(
             if pack_attachment:
                 assert result["controlAssessmentCounts"]["not_satisfied"] == 1
             if saved_framework:
-                assert node["inputs"]["framework"]["packId"] == "gli-19-readiness"
-                assert result["frameworkPack"]["id"] == "gli-19-readiness"
+                assert node["inputs"]["framework"]["packId"] == saved_pack
+                assert result["frameworkPack"]["id"] == saved_pack
                 assert result["frameworkPack"]["readiness"] == "incomplete"
             # The occurrence admits the attached baseline through its seal.
             assert result["baselineStatus"] == "available"

@@ -12,8 +12,6 @@ requiredCapabilities:
 annotations:
   workflowPublish:
     mode: none
-  uiSchema:
-    system_inputs: {showJsonEditor: true}
   inputSchema:
     type: object
     required:
@@ -30,7 +28,7 @@ annotations:
         description: Admit the system identifiers examined by this assessment.
       system_inputs:
         title: Saved ISMS scope, risks and applicability decisions
-        description: Record control decisions by Annex A or EXTRA. identifier. Supply the risk owner, rationale and evidence for each decision.
+        description: Record the ISMS scope and context, the risk register, and a Statement of Applicability decision with its rationale for each Annex A control or EXTRA. additional control. An additional control also records its own scope, responsibility and documentary evidence.
         x-framework-inputs: iso-27001-readiness
       period:
         type: object
@@ -51,9 +49,10 @@ annotations:
         type: object
         title: Requirement scope and period choices
         description: Key by clause or control ID, such as 9.2 or A.8.8. Select systems and period within
-          the admitted ISMS scope and assessment period. Partner responsibility requires responsibilityReason;
-          it does not remove evidence needs. Management-system requirements cannot be excluded; Annex
-          A exclusions need justified SoA decisions.
+          the admitted ISMS scope and assessment period, and supply organisationalEvidence (design,
+          adoption or occurrence records with their attributed review). Partner responsibility requires
+          responsibilityReason; it does not remove evidence needs. Management-system requirements cannot
+          be excluded; Annex A exclusions need justified SoA decisions.
       evidence_refs:
         type: array
         title: Evidence record artifacts

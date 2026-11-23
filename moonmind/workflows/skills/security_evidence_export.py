@@ -32,12 +32,12 @@ def associated_evidence(*, request, work, outputs, evidence, summary_ref, review
     ):
         if ref:
             refs[ref] = ""
-    if request.framework:
-        refs.update({ref: "" for ref in request.framework.evidence_refs})
+    if request.selected_packs:
         from moonmind.security.organisational_evidence import (
             organisational_evidence_refs,
         )
 
+        # Current documentary revisions only; superseded ones stay unassociated.
         refs.update(
             {
                 ref: ""
@@ -46,9 +46,10 @@ def associated_evidence(*, request, work, outputs, evidence, summary_ref, review
                         "tool": {
                             "id": "security.assess",
                             "inputs": {
-                                "framework": request.framework.model_dump(
-                                    mode="json", by_alias=True
-                                )
+                                "frameworkPacks": [
+                                    selection.model_dump(mode="json", by_alias=True)
+                                    for selection in request.selected_packs
+                                ]
                             },
                         }
                     }
@@ -80,7 +81,7 @@ def associated_evidence(*, request, work, outputs, evidence, summary_ref, review
         for ref in summary["nativeRefs"].values():
             refs[ref] = "native:" + summary["scanner"]
     refs.update({ref: "" for ref in work.get("productEvidenceRefs", [])})
-    for key in ("comparisonRef", "controlAssessmentRef", "frameworkRef"):
+    for key in ("comparisonRef", "controlAssessmentRef"):
         if outputs.get(key):
             refs[outputs[key]] = ""
     refs[outputs["scanRef"]] = "scan"

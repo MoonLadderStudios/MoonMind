@@ -20,7 +20,7 @@ from pydantic import (
 )
 
 from moonmind.security.evidence_exports import prepare_evidence_payload
-from moonmind.security.frameworks import FrameworkContract, FrameworkPack, Text
+from moonmind.security.frameworks import FrameworkContract, Text
 from moonmind.utils.logging import (
     EVIDENCE_TRANSFORMATION_LIMITATIONS,
     EVIDENCE_TRANSFORMATION_VERSION,
@@ -167,8 +167,8 @@ class OscalContext(FrameworkContract):
 def readiness_report(control: ControlAssessment, metadata: dict) -> dict:
     """Per-requirement readiness rows of one pack in a unified control report.
 
-    The adapter maps the same states and control identities as a retained
-    legacy framework report, so both export alike.
+    Control identities derive from requirement IDs, so a pack keeps its
+    exported control IDs across contract and revision changes that keep them.
     """
     rows = []
     for result in control.requirements:
@@ -223,7 +223,7 @@ class OscalAdapter:
         self,
         *,
         comparison: Comparison,
-        pack: FrameworkPack | VersionedFrameworkPack,
+        pack: VersionedFrameworkPack,
         framework_report: dict,
         context: OscalContext | None = None,
         ssp: dict | None = None,

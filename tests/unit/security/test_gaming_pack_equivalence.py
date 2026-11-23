@@ -1,6 +1,6 @@
 """GLI-19/GSF and NJ DGE on the unified pack contract match their legacy results.
 
-``gaming_equivalence.json`` froze the legacy framework-pack/v1 evaluators'
+``gaming_equivalence.json`` froze the retired per-pack evaluators'
 requirement-level statuses, reasons, scope overrides, evidence requests and
 external-claim boundaries before the migration (MoonLadderStudios/MoonMind#5435).
 """

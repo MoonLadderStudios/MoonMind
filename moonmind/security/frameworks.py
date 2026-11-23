@@ -1,4 +1,4 @@
-"""Framework packs and scoped evidence on the existing assessment path."""
+"""Shared framework selection, evidence and saved-request contracts."""
 
 from __future__ import annotations
 
@@ -55,6 +55,14 @@ PackIdentifier = Annotated[
         strip_whitespace=True, pattern=PACK_IDENTIFIER_PATTERN, max_length=128
     ),
 ]
+# Editions can name amendments, such as ISO/IEC 27001 "2022+Amd1:2024".
+PACK_EDITION_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.:/+-]{0,127}$"
+PackEdition = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, pattern=PACK_EDITION_PATTERN, max_length=128
+    ),
+]
 
 
 class FrameworkContract(BaseModel):
@@ -82,30 +90,6 @@ class FrameworkRequirement(FrameworkContract):
     )
     evidence_types: Strings = Field(default_factory=list)
     responsibilities: Strings = Field(default_factory=list)
-
-
-class FrameworkModule(FrameworkContract):
-    id: Text
-    edition: Text
-    published_on: date
-    source: FrameworkSource
-    applicability: Text
-
-
-class FrameworkPack(FrameworkContract):
-    schema_version: Literal["framework-pack/v1"] = "framework-pack/v1"
-    id: Text
-    title: Text
-    edition: Text
-    published_on: date | None = None
-    modules: Annotated[list[FrameworkModule], Field(max_length=16)] = Field(
-        default_factory=list
-    )
-    source: FrameworkSource
-    guidance_sources: Strings
-    requirements: Annotated[
-        list[FrameworkRequirement], Field(min_length=1, max_length=256)
-    ]
 
 
 class EvidencePeriod(FrameworkContract):
@@ -230,7 +214,7 @@ class FrameworkPackIdentity(FrameworkContract):
 
     artifact_ref: Annotated[str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")]
     pack_id: PackIdentifier
-    edition: PackIdentifier
+    edition: PackEdition
     revision: PackIdentifier
     sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
@@ -284,6 +268,8 @@ def normalize_installed_framework(data):
     Saved presets, reruns and schedules keep their legacy shape. This single
     request-boundary step selects the currently installed edition and revision;
     system inputs become profile inputs and ``auditRef`` stays the audit record.
+    Saved per-requirement documentary evidence (``requirementEvidence``) moves to
+    that requirement's choice, where every pack keeps organisational evidence.
     Any other ``framework`` value, including an invalid one, is left for the
     ordinary model validation to accept or reject.
     """
@@ -301,16 +287,22 @@ def normalize_installed_framework(data):
     except ValidationError:
         return data
     pack = installed_pack(legacy.pack_id)[1]
+    # A saved shape this pack cannot read is an admission error, not a guess.
+    profile, choices = saved_profile_and_choices(
+        pack,
+        legacy.system_inputs,
+        {
+            key: choice.model_dump(mode="json", by_alias=True, exclude_none=True)
+            for key, choice in legacy.requirement_choices.items()
+        },
+    )
     selection = {
         "packId": pack.id,
         "edition": pack.edition,
         "revision": pack.revision,
         "period": legacy.period.model_dump(mode="json"),
-        "requirementChoices": {
-            key: choice.model_dump(mode="json", by_alias=True, exclude_none=True)
-            for key, choice in legacy.requirement_choices.items()
-        },
-        "profile": legacy.system_inputs,
+        "requirementChoices": choices,
+        "profile": profile,
         "evidenceRefs": legacy.evidence_refs,
         "auditRef": legacy.audit_ref,
         "previousAssessmentRef": legacy.previous_assessment_ref,
@@ -326,12 +318,50 @@ def normalize_installed_framework(data):
     return normalized
 
 
+def saved_profile_and_choices(pack, system_inputs, choices):
+    """Saved system inputs as an installed pack's profile and requirement choices.
+
+    Raises ``ValueError`` when the saved shape is malformed.
+    """
+    profile = dict(system_inputs or {})
+    choices = {key: dict(value) for key, value in (choices or {}).items()}
+    evidence = profile.pop(
+        "requirementEvidence", profile.pop("requirement_evidence", {})
+    )
+    if not isinstance(evidence, dict):
+        raise ValueError("saved requirementEvidence must be an object")
+    ids = {row.id for row in pack.requirements}
+    leftover = {}
+    for key, requests in evidence.items():
+        if not isinstance(requests, list):
+            raise ValueError("saved requirementEvidence entries must be lists")
+        if key in ids:
+            choice = choices.setdefault(key, {})
+            choice["organisationalEvidence"] = [
+                *choice.get("organisationalEvidence", []),
+                *requests,
+            ]
+        else:
+            leftover[key] = requests
+    from moonmind.security.framework_registry import pack_behavior
+
+    migrate = pack_behavior(pack).saved_inputs
+    if migrate is not None:
+        profile, choices = migrate(profile, choices, leftover, ids)
+    elif leftover:
+        # Unknown requirements stay visible to profile validation.
+        profile["requirementEvidence"] = leftover
+    return profile, choices
+
+
 class FrameworkAssessmentInput(FrameworkContract):
     pack_id: Text
     system_inputs: Annotated[dict[str, Any], Field(max_length=64)]
     period: EvidencePeriod
+    # Saved choices migrate to an installed pack's declared choices, so they
+    # accept that shape, including requirement-local documentary evidence.
     requirement_choices: Annotated[
-        dict[Text, RequirementChoice], Field(max_length=256)
+        dict[Text, DeclaredRequirementChoice], Field(max_length=256)
     ] = Field(default_factory=dict)
     evidence_refs: Annotated[list[Text], Field(max_length=64)] = Field(
         default_factory=list
@@ -393,15 +423,3 @@ class FrameworkEvidence(FrameworkContract):
             and self.reliance is not None
             and self.reliance.valid_for.covers(period)
         )
-
-
-def load_framework_pack(pack_id: str) -> FrameworkPack:
-    from moonmind.security.framework_registry import readiness_pack
-
-    return readiness_pack(pack_id).pack.model_copy(deep=True)
-
-
-def render_framework_preparation(report: dict) -> str:
-    from moonmind.security.framework_registry import readiness_pack
-
-    return readiness_pack(report["pack"]["id"]).render(report)

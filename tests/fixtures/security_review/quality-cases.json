@@ -955,7 +955,7 @@
       "variant": "defective",
       "split": "regression",
       "source": "First-party synthetic scoped records; Apache-2.0. Evidence recorded is not external approval.",
-      "edition": "ISO/IEC 27001:2022",
+      "edition": "ISO-IEC-27001-2022",
       "requirements": [
         "8.32"
       ],
@@ -984,7 +984,7 @@
       "variant": "corrected",
       "split": "regression",
       "source": "First-party synthetic scoped records; Apache-2.0. Evidence recorded is not external approval.",
-      "edition": "ISO/IEC 27001:2022",
+      "edition": "ISO-IEC-27001-2022",
       "requirements": [
         "8.32"
       ],
@@ -1013,7 +1013,7 @@
       "variant": "clean",
       "split": "regression",
       "source": "First-party synthetic scoped records; Apache-2.0. Evidence recorded is not external approval.",
-      "edition": "ISO/IEC 27001:2022",
+      "edition": "ISO-IEC-27001-2022",
       "requirements": [
         "8.32"
       ],
@@ -1042,7 +1042,7 @@
       "variant": "held-out",
       "split": "held-out",
       "source": "tests/fixtures/security_review/gaming-heldout.json#uk",
-      "edition": "ISO/IEC 27001:2022",
+      "edition": "ISO-IEC-27001-2022",
       "requirements": [
         "8.32"
       ],

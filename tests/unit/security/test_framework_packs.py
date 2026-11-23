@@ -748,16 +748,43 @@ def test_saved_framework_pack_id_normalizes_once_at_the_request_boundary():
         legacy_request("nj-dge-readiness", dict(framework, auditRef="art_annual"))
     )
     assert nj.selected_packs[0].audit_ref == "art_annual"
-    # Other built-ins keep their own path; invalid saved input stays an error.
+    # Every built-in normalizes; saved documentary evidence moves to its
+    # requirement's choice, where every pack keeps organisational evidence.
+    evidence = {
+        "id": "audit",
+        "category": "internal_audit",
+        "purpose": "occurrence",
+        "description": "Saved audit programme",
+        "owner": "Assurance",
+    }
     iso = AssessmentRequest.model_validate(
         legacy_request(
-            "iso-27001-readiness", {"systemInputs": {}, "period": framework["period"]}
+            "iso-27001-readiness",
+            {
+                "systemInputs": {
+                    "systems": ["casino"],
+                    "requirementEvidence": {"9.2": [evidence]},
+                },
+                "period": framework["period"],
+                "requirementChoices": {"9.2": {"systems": ["casino"]}},
+            },
         )
     )
-    assert iso.framework.pack_id == "iso-27001-readiness" and not iso.selected_packs
+    assert iso.framework is None
+    [selection] = iso.selected_packs
+    assert selection.profile == {"systems": ["casino"]}
+    choice = selection.requirement_choices["9.2"]
+    assert choice.systems == ["casino"]
+    assert [item.id for item in choice.organisational_evidence] == ["audit"]
     with pytest.raises(ValueError, match="framework"):
         AssessmentRequest.model_validate(
             legacy_request("gli-19-readiness", {"systemInputs": {}})
+        )
+    with pytest.raises(ValueError, match="no installed framework pack"):
+        AssessmentRequest.model_validate(
+            legacy_request(
+                "retired-readiness", {"systemInputs": {}, "period": framework["period"]}
+            )
         )
 
 

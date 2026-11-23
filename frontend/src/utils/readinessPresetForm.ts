@@ -13,8 +13,8 @@ const yaml = createRequire(import.meta.url)('js-yaml') as {
 };
 
 // The API expands the seed's framework reference before Create receives the form.
-// The catalog API test checks these representative controls against each pack's
-// declared profile (installed gaming packs) or typed input model (other built-ins).
+// The catalog API test checks these representative controls against each
+// installed pack's declared profile.
 export function readinessPresetForm(slug: string): PresetForm {
   const { annotations } = yaml.load(readFileSync(`api_service/data/presets/${slug}.yaml`, 'utf8'));
   const fields = annotations.inputSchema.properties;
