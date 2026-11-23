@@ -19,6 +19,12 @@ from api_service.services.assessment_projects import (
     resolve_saved_assessment_project,
 )
 from api_service.services.framework_catalog import FrameworkCatalog, framework_catalog
+from api_service.services.policy_pack_drafts import (
+    PolicyPackAcceptRequest,
+    PolicyPackDraftRequest,
+    accept_policy_pack,
+    draft_policy_pack,
+)
 from api_service.services.repository_scanner_readiness import (
     repository_scanner_readiness,
 )
@@ -37,7 +43,10 @@ from moonmind.config.container_backend_settings import (
     resolve_container_backend_settings,
 )
 from moonmind.workflows.executions.repository_contract import RepositoryRouteError
-from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    TemporalArtifactError,
+)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 SETTINGS_CURRENT_USER_DEP = get_instance_access
@@ -271,6 +280,63 @@ async def list_framework_packs(
             return await framework_catalog(session, access)
     except SQLAlchemyError:
         return _settings_db_error_response(key="security.assessment_projects")
+
+
+def _policy_pack_error(exc: Exception) -> JSONResponse:
+    if isinstance(exc, SettingsValidationError):
+        error = exc.to_settings_error()
+        return _error_response(_settings_validation_status(error), error)
+    if isinstance(exc, PermissionError):
+        return _error_response(423, settings_error("read_only_setting", str(exc)))
+    if isinstance(exc, TemporalArtifactError):
+        return _error_response(
+            409,
+            settings_error(
+                "framework_pack_artifact_unavailable",
+                f"A framework pack artifact is unavailable ({type(exc).__name__}).",
+            ),
+        )
+    if str(exc) == "version_conflict":
+        return _error_response(
+            409,
+            settings_error(
+                "version_conflict",
+                "Saved environments changed during acceptance. Retry the accept step.",
+            ),
+        )
+    return _error_response(422, settings_error("invalid_framework_pack", str(exc)))
+
+
+@router.post("/framework-packs/drafts")
+async def draft_framework_pack(
+    payload: PolicyPackDraftRequest,
+    user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
+    access: ArtifactAccessContext = Depends(get_artifact_access),
+):
+    """Check a drafting response deterministically; the draft is never operative."""
+    try:
+        async with db_base.async_session_maker() as session:
+            return await draft_policy_pack(payload, session=session, access=access)
+    except SQLAlchemyError:
+        return _settings_db_error_response(key="security.assessment_projects")
+    except (ValueError, TemporalArtifactError) as exc:
+        return _policy_pack_error(exc)
+
+
+@router.post("/framework-packs/accept")
+async def accept_framework_pack(
+    payload: PolicyPackAcceptRequest,
+    user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
+    access: ArtifactAccessContext = Depends(get_artifact_access),
+):
+    """Publish an operator-reviewed revision and register it in one environment."""
+    try:
+        async with db_base.async_session_maker() as session:
+            return await accept_policy_pack(payload, session=session, access=access)
+    except SQLAlchemyError:
+        return _settings_db_error_response(key="security.assessment_projects")
+    except (ValueError, PermissionError, TemporalArtifactError) as exc:
+        return _policy_pack_error(exc)
 
 
 @router.post("/assessment-projects/resolve")

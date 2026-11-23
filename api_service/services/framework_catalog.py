@@ -13,6 +13,7 @@ from moonmind.security.framework_packs import (
     load_declared_pack,
     parse_declared_pack,
     validate_pack_effectivity,
+    verify_source_documents,
 )
 from moonmind.security.framework_registry import readiness_catalog, subject_availability
 from moonmind.security.frameworks import (
@@ -207,6 +208,28 @@ async def _registered_entry(identity, artifacts, access, now, schema):
         )
     except (ValueError, RecursionError):
         entry["reason"] = "Check the retained pack format, ID, edition and revision."
+        return entry
+
+    async def digest(ref):
+        artifact, _, _, policy = await artifacts.get_metadata(
+            artifact_id=ref, access=access
+        )
+        if not policy.raw_access_allowed:
+            raise TemporalArtifactError("raw access denied")
+        _, body = await artifacts.read(artifact_id=ref, access=access)
+        return sha256(body).hexdigest()
+
+    try:
+        await verify_source_documents(pack, digest)
+    except TemporalArtifactError:
+        entry["reason"] = (
+            "Restore access to the pack's source documents or register a revision drafted from readable ones."
+        )
+        return entry
+    except ValueError:
+        entry["reason"] = (
+            "A source document changed since this revision. Draft and accept a new revision."
+        )
         return entry
     return _describe(entry, pack, now)
 

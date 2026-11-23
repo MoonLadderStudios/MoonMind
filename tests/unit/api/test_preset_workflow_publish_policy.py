@@ -55,6 +55,7 @@ _PUBLISH_NOTHING_PRESETS = frozenset(
         "security-gli-readiness",
         "security-soc2-readiness",
         "security-iso-27001",
+        "security-policy-pack",
     }
 )
 
