@@ -462,7 +462,9 @@ def _render_readiness(readiness, clean) -> list[str]:
     ]
     for module in readiness.get("modules", []):
         status = (
-            f"; {module['status']}: {clean(module['reason'])}" if "status" in module else ""
+            f"; {module['status']}: {clean(module['reason'])}"
+            if "status" in module
+            else ""
         )
         lines.append(
             f"- Module {clean(module['module'])} {clean(module['edition'])}: source {module['sourceStatus']}{status}"

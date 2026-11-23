@@ -1513,7 +1513,9 @@ class AssessmentExecution:
         audit = None
         if selection.audit_ref:
             if behavior.records_model is None:
-                raise ValueError("This framework accepts evidenceRefs only for audit evidence")
+                raise ValueError(
+                    "This framework accepts evidenceRefs only for audit evidence"
+                )
             _, body = await self.read(selection.audit_ref)
             audit = behavior.records_model.model_validate_json(body)
         readiness = evaluate_readiness(

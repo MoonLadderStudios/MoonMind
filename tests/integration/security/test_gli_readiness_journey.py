@@ -45,7 +45,9 @@ def statuses(control):
 
 async def complete_synthetic_evidence(service):
     data = fixture()
-    active = {key for key, row in evaluate().rows.items() if row["status"] == "incomplete"}
+    active = {
+        key for key, row in evaluate().rows.items() if row["status"] == "incomplete"
+    }
     pack = installed_pack(PACK_ID)[1]
     grouped = {}
     for requirement in pack.requirements:
@@ -103,8 +105,12 @@ async def test_catalog_and_direct_entrypoints_export_identical_scoped_results(
     assert second["controlAssessmentRef"] == first["controlAssessmentRef"]
     context = readiness(prepared)
     assert context["evidenceRequests"] == []
-    assert context["certification"] == context["jurisdictionApproval"] == "not_performed"
-    assert all(row["status"] == "Unverified" for row in context["externalClaims"].values())
+    assert (
+        context["certification"] == context["jurisdictionApproval"] == "not_performed"
+    )
+    assert all(
+        row["status"] == "Unverified" for row in context["externalClaims"].values()
+    )
     # Recorded readiness never becomes a satisfied requirement conclusion.
     assert "satisfied" not in {row["conclusion"] for row in prepared["requirements"]}
     _, exported = await service.read(
@@ -154,12 +160,22 @@ async def test_passing_vulnerability_scan_leaves_game_operational_and_lab_gaps(
     missing_types = {
         kind for r in context["evidenceRequests"] for kind in r.get("evidenceTypes", [])
     }
-    assert {"rng", "game_math", "organizational", "laboratory", "regulator"} <= missing_types
+    assert {
+        "rng",
+        "game_math",
+        "organizational",
+        "laboratory",
+        "regulator",
+    } <= missing_types
     prompt = next(
-        r["prompt"] for r in context["evidenceRequests"] if r.get("artifactRef") == certificate
+        r["prompt"]
+        for r in context["evidenceRequests"]
+        if r.get("artifactRef") == certificate
     )
     assert all(field in prompt for field in ("evidenceType", "outcome", "edition"))
-    assert context["certification"] == context["jurisdictionApproval"] == "not_performed"
+    assert (
+        context["certification"] == context["jurisdictionApproval"] == "not_performed"
+    )
 
 
 async def test_edition_and_adoption_reassessments_preserve_previous_reports(
@@ -192,7 +208,10 @@ async def test_edition_and_adoption_reassessments_preserve_previous_reports(
     assert second["controlAssessmentRef"] != first["controlAssessmentRef"]
     changed = await report(service, second["controlAssessmentRef"])
     assert changed["frameworkPack"]["edition"] == "synthetic-next-edition"
-    assert changed["frameworkPack"]["previousAssessmentRef"] == first["controlAssessmentRef"]
+    assert (
+        changed["frameworkPack"]["previousAssessmentRef"]
+        == first["controlAssessmentRef"]
+    )
     assert changed["frameworkPack"]["previousAssessmentStatus"] == "available"
     assert any("edition" in row for row in changed["intelligenceChanges"])
     # The recorded adoption names edition 4.0, so the new edition is not adopted.
@@ -202,11 +221,17 @@ async def test_edition_and_adoption_reassessments_preserve_previous_reports(
     )
     payload["framework"]["previousAssessmentRef"] = second["controlAssessmentRef"]
     third = await invoke(service, payload, key="adoption-change")
-    refs = {first["controlAssessmentRef"], second["controlAssessmentRef"], third["controlAssessmentRef"]}
+    refs = {
+        first["controlAssessmentRef"],
+        second["controlAssessmentRef"],
+        third["controlAssessmentRef"],
+    }
     assert len(refs) == 3
     adopted = await report(service, third["controlAssessmentRef"])
     assert readiness(adopted)["jurisdictionBasis"]["recordVersion"] == "synthetic-2"
-    assert any("profile inputs changed" in row for row in adopted["intelligenceChanges"])
+    assert any(
+        "profile inputs changed" in row for row in adopted["intelligenceChanges"]
+    )
     proof = await service.verified_dependencies(
         root_artifact_id=third["controlAssessmentRef"], access=ACCESS
     )
@@ -262,7 +287,9 @@ async def test_provenance_and_adoption_artifacts_are_sealed_with_record(environm
     row["artifactRef"] = "authored-fake-ref"
     record_ref = await put(service, row)
     payload["framework"]["evidenceRefs"] = [record_ref]
-    payload["framework"]["systemInputs"]["jurisdictionBasis"]["sourceRef"] = adoption_ref
+    payload["framework"]["systemInputs"]["jurisdictionBasis"][
+        "sourceRef"
+    ] = adoption_ref
     result = await invoke(service, payload)
     control = await report(service, result["controlAssessmentRef"])
     assert readiness(control)["evidence"][0]["artifactRef"] == record_ref
@@ -278,7 +305,9 @@ async def test_provenance_and_adoption_artifacts_are_sealed_with_record(environm
 @pytest.mark.parametrize(
     "previous", [{"pack": None}, {"pack": {"id": "gli-19-readiness"}}]
 )
-async def test_invalid_previous_report_leaves_comparison_unverified(environment, previous):
+async def test_invalid_previous_report_leaves_comparison_unverified(
+    environment, previous
+):
     # A broken history record no longer blocks the current evidence: the
     # comparison is reported Unverified, as for every declared pack.
     payload = request_payload()
@@ -319,3 +348,27 @@ async def test_retained_gli_readiness_report_serves_as_previous_assessment(
     assert b"Previous gli-readiness/v1 report" in exported
     assert previous in await recurring.required(service, result["controlAssessmentRef"])
     assert (await service.read(artifact_id=previous, access=ACCESS))[1] == original
+
+
+async def test_retained_report_exports_beside_the_reassessment(environment):
+    from moonmind.workflows.skills.security_assessment import _record
+    from tests.unit.security.test_assessment_evidence_exports import unpack
+    from tests.unit.security.test_legacy_framework_reports import RETAINED
+
+    service = environment.service
+    previous = await put(service, RETAINED["gli-readiness/v1"])
+    await _record(service, previous, [], ACCESS)
+    payload = request_payload()
+    payload["framework"]["previousAssessmentRef"] = previous
+    payload["evidenceExport"] = {"artifactRefs": [previous]}
+    result = await invoke(service, payload)
+    archive, manifest = await unpack(service, result)
+    entry = next(
+        row for row in manifest["entries"] if row["sourceArtifactId"] == previous
+    )
+    assert entry["status"] == "included"
+    exported = json.loads(archive.read(entry["memberName"]))
+    assert exported["schemaVersion"] == "gli-readiness/v1"
+    assert [row["id"] for row in exported["requirements"]] == [
+        row["id"] for row in RETAINED["gli-readiness/v1"]["requirements"]
+    ]

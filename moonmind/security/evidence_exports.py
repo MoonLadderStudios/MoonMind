@@ -179,6 +179,18 @@ def _validate_json(payload, *, hint: str):
     if schema in models:
         models[schema].model_validate(payload)
         return schema
+    from moonmind.security.legacy_framework_reports import (
+        legacy_gaming_report,
+        legacy_pack_metadata,
+    )
+
+    if legacy_gaming_report(payload):
+        # Retained pre-unification GLI/NJ reports stay exportable.
+        try:
+            legacy_pack_metadata(payload)
+        except ValueError:
+            raise WithheldEvidence("malformed_evidence") from None
+        return schema
     if hint == "scan":
         if (
             not {"observation", "scanOutcome", "originalOutcomes", "diagnostics"}

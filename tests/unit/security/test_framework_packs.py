@@ -555,7 +555,9 @@ def profile_payload():
         "notSelected": "Not selected.",
     }
     row = data["requirements"][0]
-    row.update(objectives=[], objectivesComplete=False, evidenceTypes=["organisational"])
+    row.update(
+        objectives=[], objectivesComplete=False, evidenceTypes=["organisational"]
+    )
     row["applicableWhen"] = [{"entityType": "operator"}]
     return data
 
@@ -576,7 +578,12 @@ def profile_payload():
         (lambda d: d.pop("applicabilityText"), "applicabilityText"),
         (
             lambda d: d["profile"]["fields"].append(
-                {"name": "rules", "type": "choices", "choices": ["R9"], "role": "selection"}
+                {
+                    "name": "rules",
+                    "type": "choices",
+                    "choices": ["R9"],
+                    "role": "selection",
+                }
             ),
             "selection names unknown",
         ),
@@ -637,10 +644,18 @@ def test_declared_profile_rules_drive_applicability_and_refuse_guesses():
             admitted_assets=["app"],
         ).rows["R1"]
 
-    assert status({"entityType": "operator", "systems": ["app"]})["status"] == "incomplete"
-    assert status({"entityType": "supplier", "systems": ["app"]})["status"] == "not_applicable"
+    assert (
+        status({"entityType": "operator", "systems": ["app"]})["status"] == "incomplete"
+    )
+    assert (
+        status({"entityType": "supplier", "systems": ["app"]})["status"]
+        == "not_applicable"
+    )
     unknown = status({"systems": ["app"]})
-    assert (unknown["status"], unknown["reason"]) == ("Unverified", "Record the entity type.")
+    assert (unknown["status"], unknown["reason"]) == (
+        "Unverified",
+        "Record the entity type.",
+    )
     # A profile pack compiles only from its readiness result.
     with pytest.raises(ValueError, match="readiness"):
         compile(pack)
@@ -705,7 +720,9 @@ def test_saved_framework_pack_id_normalizes_once_at_the_request_boundary():
     assert nj.selected_packs[0].audit_ref == "art_annual"
     # Other built-ins keep their own path; invalid saved input stays an error.
     iso = AssessmentRequest.model_validate(
-        legacy_request("iso-27001-readiness", {"systemInputs": {}, "period": framework["period"]})
+        legacy_request(
+            "iso-27001-readiness", {"systemInputs": {}, "period": framework["period"]}
+        )
     )
     assert iso.framework.pack_id == "iso-27001-readiness" and not iso.selected_packs
     with pytest.raises(ValueError, match="framework"):

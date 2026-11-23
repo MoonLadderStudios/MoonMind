@@ -759,7 +759,8 @@ async def test_gli_nj_and_declared_pack_conclude_per_framework_from_shared_evide
         assert packs[pack_id]["readiness"]["readiness"] == "incomplete"
         assert packs[pack_id]["conclusionCounts"]["satisfied"] == 0
         assert {
-            claim["status"] for claim in packs[pack_id]["readiness"]["externalClaims"].values()
+            claim["status"]
+            for claim in packs[pack_id]["readiness"]["externalClaims"].values()
         } == {"Unverified"}
     # The operator pack concludes from native evidence exactly as it does alone.
     single = await recurring.read(service, alone["controlAssessmentRef"])
@@ -772,4 +773,6 @@ async def test_gli_nj_and_declared_pack_conclude_per_framework_from_shared_evide
         for key in ("satisfied", "not_satisfied", "inconclusive", "not_assessed")
     }
     assert result["scanRef"] == alone["scanRef"]
-    assert shared_ref in await recurring.required(service, result["controlAssessmentRef"])
+    assert shared_ref in await recurring.required(
+        service, result["controlAssessmentRef"]
+    )

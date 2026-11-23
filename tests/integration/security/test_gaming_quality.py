@@ -353,7 +353,9 @@ async def test_gaming_pack_scope_and_exports(environment, case):
     assert edition == case["edition"]
     measured = {k: v for k, v in statuses.items() if k in case["requirements"]}
     unknowns = sorted(k for k, status in measured.items() if status == "incomplete")
-    covered = sorted(k for k, status in measured.items() if status == "evidence_recorded")
+    covered = sorted(
+        k for k, status in measured.items() if status == "evidence_recorded"
+    )
     if any(r["id"] == "jurisdiction.adoption" for r in requests):
         unknowns.append("jurisdiction.adoption")
     actual = observation(
@@ -397,7 +399,10 @@ async def test_gaming_pack_scope_and_exports(environment, case):
         [*refs, first[native_key], report_ref],
         provenance={
             "pack": (
-                {k: native["frameworkPack"][k] for k in ("id", "edition", "revision", "sha256")}
+                {
+                    k: native["frameworkPack"][k]
+                    for k in ("id", "edition", "revision", "sha256")
+                }
                 if unified
                 else native["pack"]
             ),

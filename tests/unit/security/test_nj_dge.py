@@ -221,9 +221,10 @@ def test_source_snapshot_modules_and_external_claims_are_explicit():
     assert {"13:69O-1.2", "13:69D-2.4", "13:69O-3.1"} <= set(modules)
     assert all(m["edition"] for m in modules.values())
     # An unverified rule source stays marked Unverified with its reason.
-    assert {
-        key for key, m in modules.items() if m["sourceStatus"] == "Unverified"
-    } == {"dge-rule-index", "dge-tsb-guidance"}
+    assert {key for key, m in modules.items() if m["sourceStatus"] == "Unverified"} == {
+        "dge-rule-index",
+        "dge-tsb-guidance",
+    }
     assert all(m["statusReason"] for m in modules.values())
     claims = report["externalClaims"]
     assert claims["source-completeness"]["status"] == "Unverified"

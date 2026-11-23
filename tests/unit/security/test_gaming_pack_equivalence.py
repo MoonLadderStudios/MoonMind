@@ -16,13 +16,19 @@ from moonmind.security.pack_readiness import evaluate_readiness, parse_evidence
 
 GOLDEN = json.loads(
     (
-        Path(__file__).resolve().parents[2] / "fixtures/security/gaming_equivalence.json"
+        Path(__file__).resolve().parents[2]
+        / "fixtures/security/gaming_equivalence.json"
     ).read_text()
 )
 PACKS = {"gli": "gli-19-readiness", "nj": "nj-dge-readiness"}
 LEGACY_CLAIMS = {
     "gli": {"organizational", "laboratory", "regulator"},
-    "nj": {"source-completeness", "gli-adoption", "professional-assessment", "regulator"},
+    "nj": {
+        "source-completeness",
+        "gli-adoption",
+        "professional-assessment",
+        "regulator",
+    },
 }
 
 
@@ -75,9 +81,11 @@ def project(scenario, result):
         "reasons": [[reason, ids] for reason, ids in reasons.items()],
         "overrides": overrides,
         "evidenceRequests": [
-            r["id"]
-            if r.get("requirementId") in (None, r["id"])
-            else [r["id"], r["requirementId"]]
+            (
+                r["id"]
+                if r.get("requirementId") in (None, r["id"])
+                else [r["id"], r["requirementId"]]
+            )
             for r in context["evidenceRequests"]
         ],
     }
@@ -108,7 +116,9 @@ def test_requirement_conclusions_and_requests_match_legacy(scenario):
 def test_external_claim_boundaries_stay_unverified_with_next_checks(scenario):
     claims = unified(scenario).context["externalClaims"]
     family = scenario["family"]
-    assert LEGACY_CLAIMS[family] | {"laboratory", "regulator", "customer"} <= set(claims)
+    assert LEGACY_CLAIMS[family] | {"laboratory", "regulator", "customer"} <= set(
+        claims
+    )
     assert all(
         claim["status"] == "Unverified" and claim["verifiableBy"] and claim["nextStep"]
         for claim in claims.values()

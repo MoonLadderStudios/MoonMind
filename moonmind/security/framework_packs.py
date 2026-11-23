@@ -126,7 +126,9 @@ class ProfileField(FrameworkContract):
     """
 
     name: ProfileName
-    type: Literal["text", "boolean", "choice", "choices", "text_list", "jurisdiction_basis"]
+    type: Literal[
+        "text", "boolean", "choice", "choices", "text_list", "jurisdiction_basis"
+    ]
     title: AssessmentText | None = Field(default=None, exclude_if=_absent)
     choices: Annotated[list[RequirementIdentifier], Field(max_length=64)] = Field(
         default_factory=list, exclude_if=_absent
@@ -245,7 +247,11 @@ class PackRequirement(FrameworkRequirement):
     # Any listed condition set applies. Each set maps profile fields to an
     # expected value or values; a missing input leaves applicability Unverified.
     applicable_when: Annotated[
-        list[Annotated[dict[ProfileName, ConditionValue], Field(min_length=1, max_length=8)]],
+        list[
+            Annotated[
+                dict[ProfileName, ConditionValue], Field(min_length=1, max_length=8)
+            ]
+        ],
         Field(max_length=8),
     ] = Field(default_factory=list, exclude_if=_absent)
     required_evidence_methods: Annotated[
@@ -436,9 +442,13 @@ class VersionedFrameworkPack(FrameworkContract):
                     if field.type == "boolean" and any(
                         not isinstance(v, bool) for v in values
                     ):
-                        raise ValueError("boolean applicability condition needs true or false")
+                        raise ValueError(
+                            "boolean applicability condition needs true or false"
+                        )
                     if field.type == "choice" and set(values) - set(field.choices):
-                        raise ValueError("applicability condition names an unknown choice")
+                        raise ValueError(
+                            "applicability condition names an unknown choice"
+                        )
         if (
             any(row.applicable_when for row in self.requirements) or selection
         ) and self.applicability_text is None:

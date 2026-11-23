@@ -157,7 +157,10 @@ def _annual_gaps(row: AnnualAssessment, selected, period):
 def _qualified(record: PackEvidence, requirement_id: str) -> bool:
     # Technical assessments and certificates are context, and generic external
     # audits do not inherit NJ approval.
-    if record.kind != "control_evidence" or record.method not in {"evidence", "observation"}:
+    if record.kind != "control_evidence" or record.method not in {
+        "evidence",
+        "observation",
+    }:
         return False
     if requirement_id in _APPROVAL and not record.division_approval_ref:
         return False
@@ -165,7 +168,10 @@ def _qualified(record: PackEvidence, requirement_id: str) -> bool:
         return False
     if requirement_id in _INCIDENTS and (
         not record.incident_disposition
-        or (record.incident_disposition == "events_reported" and not record.notification_ref)
+        or (
+            record.incident_disposition == "events_reported"
+            and not record.notification_ref
+        )
     ):
         return False
     return True
@@ -175,11 +181,18 @@ def _nj_evidence(pack, requirement, selected, period, records, audit):
     gaps = []
     if not selected:
         gaps.append(
-            ("scope." + requirement.id, "Identify at least one admitted system for this requirement.")
+            (
+                "scope." + requirement.id,
+                "Identify at least one admitted system for this requirement.",
+            )
         )
     if requirement.id in _annual_rules(pack):
-        annual = {row.requirement_id: row for row in (audit.assessments if audit else [])}
-        row = annual.get(requirement.id, AnnualAssessment(requirement_id=requirement.id))
+        annual = {
+            row.requirement_id: row for row in (audit.assessments if audit else [])
+        }
+        row = annual.get(
+            requirement.id, AnnualAssessment(requirement_id=requirement.id)
+        )
         gaps.extend(_annual_gaps(row, selected, period))
         return ([row.report_ref] if row.report_ref else []), gaps
     matched = [
@@ -204,7 +217,9 @@ def _nj_evidence(pack, requirement, selected, period, records, audit):
 def _nj_context(pack, rows, audit):
     applicable = [
         key
-        for key in sorted(_annual_rules(pack), key=[r.id for r in pack.requirements].index)
+        for key in sorted(
+            _annual_rules(pack), key=[r.id for r in pack.requirements].index
+        )
         if rows[key]["applicabilityStatus"] == "applicable"
     ]
     return {

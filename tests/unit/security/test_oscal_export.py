@@ -491,13 +491,13 @@ def unified_gaming_report(pack_id, comparison):
     pack = installed_pack(pack_id)[1]
     if pack_id == "gli-19-readiness":
         data = test_gli_readiness.fixture()
-        result = test_gli_readiness.evaluate(
-            data, evidence=[data["technicalEvidence"]]
-        )
+        result = test_gli_readiness.evaluate(data, evidence=[data["technicalEvidence"]])
     else:
         data = test_nj_dge.fixture()
         data["framework"]["requirementChoices"] = {
-            "nj.partner.player-accounts": {"notApplicableReason": "Partner owns accounts"}
+            "nj.partner.player-accounts": {
+                "notApplicableReason": "Partner owns accounts"
+            }
         }
         from moonmind.security.framework_registry import pack_behavior
         from moonmind.security.pack_readiness import evaluate_readiness, parse_evidence
@@ -581,7 +581,12 @@ def test_unified_gaming_exports_validate_with_unchanged_control_identities(pack_
     for key, status in statuses.items():
         assert (control_id(key) in selected) == (
             status
-            not in {"not_applicable", "not_selected", "excluded", "exclusion_for_review"}
+            not in {
+                "not_applicable",
+                "not_selected",
+                "excluded",
+                "exclusion_for_review",
+            }
         )
     if family == "gli":
         # Same pack ID and edition, so the exchange identities are unchanged too.

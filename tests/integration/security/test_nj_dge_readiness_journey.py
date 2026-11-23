@@ -82,7 +82,9 @@ async def test_entity_applicability_through_native_export(
     data = fixture()
     data["framework"]["systemInputs"] = data["profiles"][profile]
     result = await invoke(environment.service, request_payload(data))
-    readiness = (await control(environment.service, result))["frameworkPack"]["readiness"]
+    readiness = (await control(environment.service, result))["frameworkPack"][
+        "readiness"
+    ]
     assert set(readiness["reportingConditions"]["applicableAnnualRules"]) == expected
     assert readiness["reportingConditions"]["annualReportToDivision"] == bool(expected)
     assert result["publicationOutcome"] == "published"
@@ -116,7 +118,9 @@ async def test_synthetic_export_preset_and_direct_share_scoped_requirements(
     readiness = report["frameworkPack"]["readiness"]
     assert direct["frameworkPack"]["readiness"]["evidenceRequests"] == []
     assert readiness["evidenceRequests"] == []
-    assert all(c["status"] == "Unverified" for c in readiness["externalClaims"].values())
+    assert all(
+        c["status"] == "Unverified" for c in readiness["externalClaims"].values()
+    )
     assert readiness["reportingConditions"]["submissionPerformed"] is False
     bundle = first["reportBundle"]
     assert bundle["structured_ref"]["artifact_id"] == first["controlAssessmentRef"]
@@ -155,7 +159,9 @@ async def test_incomplete_annual_and_partner_evidence_survives_clean_scan(enviro
     ]
     assert (
         requests
-        == (await control(service, first))["frameworkPack"]["readiness"]["evidenceRequests"]
+        == (await control(service, first))["frameworkPack"]["readiness"][
+            "evidenceRequests"
+        ]
     )
     assert scanned["frameworkPack"]["readiness"] == "incomplete"
     ids = {r["id"] for r in requests}
@@ -197,7 +203,9 @@ async def test_missing_approval_incident_operator_evidence_exported_with_sources
             r.get("requirementId") == id and r["source"]
             for r in readiness["evidenceRequests"]
         )
-    assert any(r.get("artifactRef") == certificate for r in readiness["evidenceRequests"])
+    assert any(
+        r.get("artifactRef") == certificate for r in readiness["evidenceRequests"]
+    )
     assert readiness["externalClaims"]["regulator"]["status"] == "Unverified"
     assert all(row["conclusion"] != "satisfied" for row in by_id.values())
 
@@ -295,7 +303,10 @@ async def test_comparison_accepts_retained_nj_rule_source_metadata(environment):
     payload["framework"]["previousAssessmentRef"] = original["controlAssessmentRef"]
     current = await invoke(service, payload, key="comparison")
     report = await control(service, current)
-    assert report["frameworkPack"]["previousAssessmentRef"] == original["controlAssessmentRef"]
+    assert (
+        report["frameworkPack"]["previousAssessmentRef"]
+        == original["controlAssessmentRef"]
+    )
     assert report["frameworkPack"]["previousAssessmentStatus"] == "available"
     assert report["intelligenceChanges"] == []
 
@@ -319,5 +330,7 @@ async def test_retained_nj_report_serves_as_previous_assessment(environment):
     assert any("edition changed" in row for row in changes)
     # Same synthetic evidence, so the matching requirement IDs did not change.
     assert not any("Requirement readiness changed" in row for row in changes)
-    text = await read(service, result["reportBundle"]["primary_report_ref"]["artifact_id"])
+    text = await read(
+        service, result["reportBundle"]["primary_report_ref"]["artifact_id"]
+    )
     assert b"Previous framework-audit-preparation/v1 report" in text

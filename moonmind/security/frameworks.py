@@ -248,8 +248,8 @@ class FrameworkPackSelection(FrameworkPackIdentity):
     artifact_ref: (
         Annotated[str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")] | None
     ) = Field(default=None, exclude_if=_absent)
-    sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None = (
-        Field(default=None, exclude_if=_absent)
+    sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None = Field(
+        default=None, exclude_if=_absent
     )
     period: EvidencePeriod
     requirement_choices: Annotated[

@@ -77,7 +77,11 @@ def test_installed_pack_is_declared_data_with_modules_rights_and_profile():
     ]
     assert {r.module for r in current.requirements} == {m.id for m in current.modules}
     assert all(
-        r.summary and r.sources and r.evidence_types and r.responsibilities and r.subject_types
+        r.summary
+        and r.sources
+        and r.evidence_types
+        and r.responsibilities
+        and r.subject_types
         for r in current.requirements
     )
     assert {f.role for f in current.profile.fields} >= {
@@ -91,9 +95,21 @@ def test_installed_pack_is_declared_data_with_modules_rights_and_profile():
 @pytest.mark.parametrize(
     "entity,product,modules",
     [
-        ("operator", "interactive_gaming", {"GLI-19", "GLI-GSF-1", "GLI-GSF-2", "GLI-GSF-5"}),
-        ("rgs", "interactive_gaming", {"GLI-19", "GLI-GSF-1", "GLI-GSF-2", "GLI-GSF-5"}),
-        ("ancillary_provider", "ancillary_service", {"GLI-GSF-1", "GLI-GSF-2", "GLI-GSF-3"}),
+        (
+            "operator",
+            "interactive_gaming",
+            {"GLI-19", "GLI-GSF-1", "GLI-GSF-2", "GLI-GSF-5"},
+        ),
+        (
+            "rgs",
+            "interactive_gaming",
+            {"GLI-19", "GLI-GSF-1", "GLI-GSF-2", "GLI-GSF-5"},
+        ),
+        (
+            "ancillary_provider",
+            "ancillary_service",
+            {"GLI-GSF-1", "GLI-GSF-2", "GLI-GSF-3"},
+        ),
     ],
 )
 def test_profile_inputs_select_modules_with_reasons(entity, product, modules):
@@ -111,12 +127,16 @@ def test_profile_inputs_select_modules_with_reasons(entity, product, modules):
 
 def test_gsf3_is_never_assigned_automatically_to_an_rgs():
     data = fixture()
-    data["framework"]["systemInputs"].update(entityType="rgs", directlyAffectsGaming=False)
+    data["framework"]["systemInputs"].update(
+        entityType="rgs", directlyAffectsGaming=False
+    )
     result = evaluate(data)
     gsf3 = next(m for m in result.context["modules"] if m["module"] == "GLI-GSF-3")
     assert gsf3["status"] == "not_applicable"
     assert {
-        row["status"] for key, row in result.rows.items() if key.startswith("GLI-GSF-3:")
+        row["status"]
+        for key, row in result.rows.items()
+        if key.startswith("GLI-GSF-3:")
     } == {"not_applicable"}
 
 
@@ -147,7 +167,9 @@ def test_unknown_scope_partner_ownership_and_explicit_exclusion_survive():
     }
     rows = evaluate(data).rows
     assert rows["GLI-19:3.2"]["status"] == "partner_owned"
-    assert rows["GLI-19:3.2"]["responsibilityReason"] == "KYC owned by contracted operator"
+    assert (
+        rows["GLI-19:3.2"]["responsibilityReason"] == "KYC owned by contracted operator"
+    )
     assert rows["GLI-19:6.10"]["status"] == "excluded"
     assert rows["GLI-GSF-2:B"]["period"].end.isoformat() == "2026-11-06"
     del data["framework"]["systemInputs"]["entityType"]
@@ -186,7 +208,10 @@ def test_only_matching_scoped_evidence_can_support_readiness():
         {"provenance": dict(evidence["provenance"], standard="GLI-GSF-2 v0.0")},
     ):
         changed = dict(copy.deepcopy(evidence), **change)
-        assert evaluate(evidence=[changed]).rows["GLI-GSF-2:B"]["status"] != "evidence_recorded"
+        assert (
+            evaluate(evidence=[changed]).rows["GLI-GSF-2:B"]["status"]
+            != "evidence_recorded"
+        )
 
 
 def test_clean_scan_leaves_game_operational_and_laboratory_gaps_open():
@@ -208,7 +233,9 @@ def test_publication_is_not_jurisdiction_adoption_or_approval():
 
 
 def test_laboratory_regulator_and_customer_qualification_stay_unverified():
-    claims = evaluate(evidence=[fixture()["technicalEvidence"]]).context["externalClaims"]
+    claims = evaluate(evidence=[fixture()["technicalEvidence"]]).context[
+        "externalClaims"
+    ]
     for name in ("laboratory", "regulator", "customer"):
         assert claims[name]["status"] == "Unverified"
         assert claims[name]["verifiableBy"] and claims[name]["nextStep"]

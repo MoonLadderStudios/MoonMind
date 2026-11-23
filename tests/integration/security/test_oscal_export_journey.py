@@ -303,3 +303,41 @@ async def test_updated_exchange_context_reuses_confirmed_native_work(environment
         revised["oscalExport"]["artifacts"]["poam"]
         != first["oscalExport"]["artifacts"]["poam"]
     )
+
+
+@pytest.mark.parametrize("family", ["gli", "nj"])
+async def test_unified_gaming_pack_exports_keep_control_identities(environment, family):
+    """GLI-19 and NJ DGE export from the unified control report (#5435)."""
+    from moonmind.security.framework_registry import installed_pack
+    from moonmind.security.oscal_export import control_id
+    from tests.unit.security import test_gli_readiness, test_nj_dge
+
+    service = environment.service
+    source = test_gli_readiness if family == "gli" else test_nj_dge
+    request = source.request_payload()
+    request["oscalExport"] = {"models": ["catalog", "profile"]}
+    result = await invoke(service, request)
+    assert result["oscalExport"]["status"] == "exported", result["oscalExport"]
+    exports = result["oscalExport"]["artifacts"]
+    catalog = await read(service, exports["catalog"])
+    validate_document("catalog", catalog)
+    validate_document("profile", await read(service, exports["profile"]))
+    golden = json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "fixtures/security/gaming_equivalence.json"
+        ).read_text()
+    )
+    legacy_ids = {
+        key
+        for scenario in golden["scenarios"]
+        if scenario["family"] == family
+        for keys in scenario["expected"]["statuses"].values()
+        for key in keys
+    }
+    controls = [row["id"] for row in catalog["catalog"]["controls"]]
+    assert set(controls) == {control_id(key) for key in legacy_ids}
+    pack = installed_pack(source.PACK_ID)[1]
+    assert controls == [control_id(row.id) for row in pack.requirements]
+    # The export cites the sealed unified report it was mapped from.
+    assert result["controlAssessmentRef"] in await required(service, exports["catalog"])

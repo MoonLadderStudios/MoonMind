@@ -1736,6 +1736,14 @@ async def test_product_api_security_schedule_lifecycle(
 
         await select_pack(service, request)
         pack_attachment = [{"artifactId": request["frameworkPack"]["artifactRef"]}]
+    saved_framework = not bounded and authored_runtime is not None
+    if saved_framework:
+        # A schedule saved before GLI-19 moved onto the declared pack contract
+        # keeps its framework.packId inputs and needs no edit (#5435).
+        from tests.unit.security.test_gli_readiness import fixture as gli_fixture
+
+        request["framework"] = gli_fixture()["framework"]
+        request["framework"]["systemInputs"]["systems"] = ["app"]
     await record_finished(environment, "assessment")
     async def artifact_client(_self):
         return client
@@ -1962,6 +1970,10 @@ async def test_product_api_security_schedule_lifecycle(
             assert result["publicationOutcome"] == "published"
             if pack_attachment:
                 assert result["controlAssessmentCounts"]["not_satisfied"] == 1
+            if saved_framework:
+                assert node["inputs"]["framework"]["packId"] == "gli-19-readiness"
+                assert result["frameworkPack"]["id"] == "gli-19-readiness"
+                assert result["frameworkPack"]["readiness"] == "incomplete"
             # The occurrence admits the attached baseline through its seal.
             assert result["baselineStatus"] == "available"
             assert {request["baselineRef"], request["inventoryRef"]} <= await required(

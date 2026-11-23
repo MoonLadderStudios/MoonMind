@@ -2,10 +2,12 @@
 
 `security.assess` accepts an operator-supplied framework pack through the same
 artifact admission, Skill invocation and report path as native security evidence.
-There is no remote registry, scheduler or source download. Bundled preparation
-packs use `framework`. Declared packs use `frameworkPacks` and the existing
-requirement evaluator. [SOC 2 readiness](SOC2Readiness.md) uses the shared preset
-catalog, documentary evidence owner and private reports.
+There is no remote registry, scheduler or source download. ISO/IEC 27001, SOC 2
+and UKGC RTS preparation packs still use `framework` and their own modules.
+GLI-19/GSF and New Jersey DGE ship as installed declared packs, so they and
+operator packs use `frameworkPacks` and the shared requirement evaluator, and
+can be combined in one plan. [SOC 2 readiness](SOC2Readiness.md) uses the shared
+preset catalog, documentary evidence owner and private reports.
 
 ## Selecting packs
 
@@ -15,8 +17,9 @@ in saved environments. Each entry describes its edition, rights, supported
 subjects, evidence, conclusion limits and input schema. Unavailable entries
 include a reason. A missing effective date is unknown. Publication of a
 readiness pack does not establish that a jurisdiction adopted the standard.
-In Create, readiness presets show typed system inputs. Open the advanced JSON
-editor to paste or edit a complete saved system record.
+In Create, readiness presets show typed system inputs. The GLI and New Jersey
+presets generate them from the pack's declared profile; the other presets also
+offer an advanced JSON editor for a complete saved system record.
 
 Settings can register a declared pack using its exact artifact reference, ID,
 edition, revision and SHA-256. Catalog reads use the caller’s artifact access
@@ -27,8 +30,15 @@ Assessment admission checks the selected bytes, rights and period again.
 
 Supply up to 16 selections in `frameworkPacks`. Each names its `artifactRef`,
 `packId`, `edition`, `revision`, `sha256` and assessment `period` (`start`,
-`end`). Use each pack ID and edition pair once. The singular `frameworkPack`
-form in saved requests and schedules selects one pack through the same evaluator.
+`end`). An installed pack omits `artifactRef` and `sha256`: the assessment
+retains the installed bytes as an artifact and cites that exact content. Use
+each pack ID and edition pair once. The singular `frameworkPack` form in saved
+requests and schedules selects one pack through the same evaluator. A saved
+request, preset, rerun or schedule that passes `framework.packId` for an
+installed pack is normalized once at the request boundary to the currently
+installed edition and revision: `systemInputs` becomes `profile`, and
+`requirementChoices`, `evidenceRefs`, `auditRef` and `previousAssessmentRef`
+carry over unchanged.
 Key each selection’s optional `requirementChoices` by requirement ID. A choice
 can narrow `systems` and `period`, and records `applicability` plus `applicabilityReason`. Omitted
 applicability remains undetermined. Explicit applicable/not-applicable choices
@@ -38,7 +48,9 @@ admitted assets or drop exclusions and repository exceptions.
 A request-level `previousAssessmentRef` compares all selections against one
 retained control report. A selection can supply its own previous report. All
 selections compile into one plan and are mutually exclusive with
-`controlAssessment`. Native evidence tools or an explicit review are still required. A pack and its crosswalks are not evidence that checks ran.
+`controlAssessment`. Selected packs need no native tool; without one, declared
+objective checks stay incomplete. A pack and its crosswalks are not evidence
+that checks ran.
 
 The artifact owner verifies access and stored bytes before any native collection.
 The declared ID, edition and revision must match the selected values, and the
@@ -68,18 +80,72 @@ Use `schemaVersion: declared-framework-pack/v1` with:
 - `license` and `distribution`: `redistributable`, `restricted` or `prohibited`.
   The operator must have the relevant rights. Declaring a license or writing an
   original summary does not establish permission to redistribute source text.
-- One to 512 `requirements`, each with `id`, `title`, original `summary`,
+- One to 512 `requirements`, each with `id` (published section names may
+  contain spaces), `title`, original `summary`,
   `category`, `applicability`, `evidencePrompt`, `objectiveBasis`, and explicit
   `objectives`. Objectives use `id`, `description`, `source`, `tool` and `ruleIds`.
   `objectivesComplete` defaults to false. `requiredEvidenceMethods` can name
   `deterministic_check`, `enquiry`, `evidence` or `observation`; optional
   `evidenceTypes` further describes needed material. Requirements can also retain
-  their own `sources` and responsibility descriptions.
+  their own `sources`, `module`, `subjectTypes` and responsibility descriptions.
+
+A pack may also declare readiness content, each part omitted when unused so
+existing packs keep their digests:
+
+- `profile`: typed inputs the operator supplies (`text`, `boolean`, `choice`,
+  `choices`, `text_list` or `jurisdiction_basis`). A `role` gives a field shared
+  meaning: `entity_type`, `product_type`, `systems` (bounds requirement scope),
+  `jurisdiction_basis` (adoption with source, record version and dates),
+  `applicability_basis` and `selection` (selectable requirements). A `required`
+  field names the `requestId` and `prompt` raised when it is missing.
+- `modules`: separately edited sources with `edition`, `source` and
+  `sourceStatus` (`reviewed` or `Unverified` with its reason).
+- `applicableWhen` on a requirement: condition sets over boolean and choice
+  profile fields, any of which applies; a missing input leaves applicability
+  Unverified with that field's `unknownReason`. `applicabilityText` supplies the
+  applicable, not-applicable and not-selected reasons.
+- `behavior`: a registered judgement that cannot be data, such as GLI module
+  applicability by entity and product, or New Jersey annual-assessment record
+  checks with approval, operator and incident qualifiers. Unknown behaviors are
+  refused.
+- `externalClaims`: assurances only an outside party can give, each with `gap`,
+  `verifiableBy` and `nextStep`. They are always reported Unverified.
+- `exclusionReview`, `evidenceGuidance`, `limitations`, `sector`,
+  `jurisdiction` and `conclusions` for catalog and report presentation.
 
 Only completed deterministic checks currently establish objective satisfaction.
 Enquiry, document evidence, observations or unknown evidence types withhold
 completeness and produce a diagnostic, even if all scanner checks pass. Rights
 and independent assessor review remain Unverified when not independently evidenced.
+
+## Readiness evidence for profile packs
+
+A selection for a pack with a `profile` adds `profile` inputs, scoped
+`evidenceRefs` and, when its behavior reads one, an `auditRef` record. Profile
+`systems` must fit the admitted assets. Applicability comes from the profile:
+incomplete inputs give incomplete or Unverified applicability and an evidence
+request, never a guess. `notApplicableReason` records an exclusion (reviewed
+when the pack sets `exclusionReview`); `responsibleEntity: partner` keeps the
+requirement visible as `partner_owned` until its evidence is supplied.
+
+Each evidence record uses the scoped record fields (`kind`, `requirementIds`,
+`systems`, `period`, `method`, `description`, `provenance`) plus optional
+`evidenceType` (`technical`, `organizational`, `game_math`, `rng`,
+`laboratory`, `regulator` or `external_audit`), `outcome`, `edition` and
+`jurisdiction`, and the qualifiers a behavior reads. A typed record supports a
+requirement only when it passed, names the pack edition and the module standard
+(`GLI-GSF-2 v1.0`), uses a kind allowed for its type, covers the systems and
+period, and, for regulator evidence, the recorded jurisdiction. External audits
+also need reliance covering the period. Records are read once per assessment;
+a record may name requirements of several selected packs, and each pack judges
+only its own, so no conclusion transfers.
+
+Requirement readiness is one of `evidence_recorded`, `incomplete`,
+`partner_owned`, `excluded`, `exclusion_for_review`, `not_applicable`,
+`not_selected`, `applicability_missing` or `Unverified`. Recorded evidence is
+not an executed check: such requirements conclude `inconclusive` (or
+`not_assessed` when not applicable), never `satisfied`. Certification and
+jurisdiction approval are `not_performed`.
 
 ## Directional mappings
 
@@ -104,7 +170,10 @@ owner's existing access boundary; portable reports omit their titles, summaries,
 source sections, rationales and objective descriptions, with an explicit omission
 diagnostic. Source documents stay required dependencies of the report that cited
 them. Prohibited packs are refused. Retention does not grant sharing rights
-or permission to export the underlying licensed artifact.
+or permission to export the underlying licensed artifact. A profile pack's
+metadata also keeps its `readiness` record: profile, applicability, modules,
+evidence, requests, unresolved requirements and external claims. Its evidence,
+provenance, adoption and audit artifacts are required dependencies of the report.
 
 The combined plan admits 1,024 requirements, 16,384 asset-by-rule cells
 and 64 distinct supporting and organisational evidence references, including
@@ -121,8 +190,16 @@ of budgeted detail and links omitted details to the structured record.
 selections cite it. New packs start with an initial comparison. Packs found
 only in the previous report are marked Unverified. Missing or unreadable
 history leaves comparison Unverified. A change in revision,
-objectives or rights is reported as an intelligence change. Both export tools
-return an explicit unsupported result for a multi-pack run.
+objectives, rights or profile inputs is reported as an intelligence change.
+Both export tools return an explicit unsupported result for a multi-pack run.
+
+A retained `gli-readiness/v1` or New Jersey `framework-audit-preparation/v1`
+report, written before these packs moved to this contract, still serves as
+`previousAssessmentRef`. A temporary reader compares matching requirement IDs,
+marks pack revision, digests and missing requirements Unverified, summarises the
+previous report in the new one, and lets evidence export include it. Remove the
+reader when no such report remains in retention, or when the legacy
+`framework-pack/v1` contract is retired and its retained reports are migrated.
 
 ## Packs from your own policy
 

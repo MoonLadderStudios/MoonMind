@@ -35,7 +35,11 @@ def _models(selected):
 async def _selected_framework(execution, request, framework, controls):
     """The exported pack, its native rows and the sealed report that holds them."""
     if framework is not None:
-        return load_framework_pack(request.framework.pack_id), framework[1], framework[0]
+        return (
+            load_framework_pack(request.framework.pack_id),
+            framework[1],
+            framework[0],
+        )
     packs = controls[1].pack_metadata if controls else []
     if len(packs) != 1 or "readiness" not in packs[0]:
         raise UnsupportedExport(

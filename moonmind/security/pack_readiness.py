@@ -39,7 +39,12 @@ READINESS_STATUSES = (
     "applicability_missing",
     "Unverified",
 )
-APPLICABLE = {"evidence_recorded", "incomplete", "partner_owned", "exclusion_for_review"}
+APPLICABLE = {
+    "evidence_recorded",
+    "incomplete",
+    "partner_owned",
+    "exclusion_for_review",
+}
 UNDETERMINED = {"applicability_missing", "Unverified"}
 UNRESOLVED = {"incomplete", "partner_owned", "applicability_missing"}
 # Evidence kinds that may carry each declared evidence type.
@@ -261,7 +266,10 @@ def accepts_typed(record, requirement, systems, period, pack, jurisdiction) -> b
     return (
         record.outcome == "passed"
         and record.edition == pack.edition
-        and (module is None or record.provenance.standard == f"{module.id} v{module.edition}")
+        and (
+            module is None
+            or record.provenance.standard == f"{module.id} v{module.edition}"
+        )
         and record.kind in EVIDENCE_KINDS[kind]
         and kind in requirement.evidence_types
         and (kind in {"organizational", "organisational"} or record.method != "enquiry")
@@ -272,7 +280,9 @@ def accepts_typed(record, requirement, systems, period, pack, jurisdiction) -> b
         and (kind != "regulator" or record.jurisdiction == jurisdiction)
         and (
             kind != "external_audit"
-            or (record.reliance is not None and record.reliance.valid_for.covers(period))
+            or (
+                record.reliance is not None and record.reliance.valid_for.covers(period)
+            )
         )
     )
 
@@ -330,11 +340,19 @@ def evaluate_readiness(
             requests.append({"id": field.request_id, "prompt": field.prompt, **source})
 
     jurisdiction_field = pack.profile.field("jurisdiction_basis")
-    basis = getattr(inputs, to_snake(jurisdiction_field.name)) if jurisdiction_field else None
+    basis = (
+        getattr(inputs, to_snake(jurisdiction_field.name))
+        if jurisdiction_field
+        else None
+    )
     adoption_known = basis is None or basis.adopted(pack.edition, period.start)
     if not adoption_known:
         requests.append(
-            {"id": "jurisdiction.adoption", "prompt": jurisdiction_field.prompt, **source}
+            {
+                "id": "jurisdiction.adoption",
+                "prompt": jurisdiction_field.prompt,
+                **source,
+            }
         )
 
     modules = []
@@ -350,13 +368,17 @@ def evaluate_readiness(
             status, reason = behavior.module_applicability(module, values)
             row.update(status=status, reason=reason)
             if status == "incomplete":
-                requests.append({"id": "module." + module.id, "prompt": reason, **source})
+                requests.append(
+                    {"id": "module." + module.id, "prompt": reason, **source}
+                )
         modules.append(row)
     by_module = {row["module"]: row for row in modules}
 
     rows = {}
     for requirement in pack.requirements:
-        choice = DeclaredRequirementChoice.model_validate(choices.get(requirement.id, {}))
+        choice = DeclaredRequirementChoice.model_validate(
+            choices.get(requirement.id, {})
+        )
         if choice.applicability != "undetermined" or choice.applicability_reason:
             raise ValueError(
                 "This pack derives applicability from profile inputs; record exclusions with notApplicableReason"
@@ -390,7 +412,9 @@ def evaluate_readiness(
             [
                 r.artifact_ref
                 for r in records
-                if accepts_typed(r, requirement, selected, selected_period, pack, jurisdiction)
+                if accepts_typed(
+                    r, requirement, selected, selected_period, pack, jurisdiction
+                )
             ]
             if typed
             else []
@@ -398,7 +422,12 @@ def evaluate_readiness(
         status = applicability
         if applicability == "Unverified":
             requests.append(
-                {"id": "applicability." + requirement.id, "prompt": reason, **cite, **scoped}
+                {
+                    "id": "applicability." + requirement.id,
+                    "prompt": reason,
+                    **cite,
+                    **scoped,
+                }
             )
         elif applicability == "applicable" and choice.not_applicable_reason:
             if pack.exclusion_review:
@@ -421,11 +450,16 @@ def evaluate_readiness(
                     pack, requirement, selected, selected_period, records, audit
                 )
                 requests.extend(
-                    {"id": key, "prompt": prompt, **cite, **scoped} for key, prompt in gaps
+                    {"id": key, "prompt": prompt, **cite, **scoped}
+                    for key, prompt in gaps
                 )
                 gap = bool(gaps)
             status = (
-                ("partner_owned" if choice.responsible_entity == "partner" else "incomplete")
+                (
+                    "partner_owned"
+                    if choice.responsible_entity == "partner"
+                    else "incomplete"
+                )
                 if gap
                 else "evidence_recorded"
             )
@@ -467,7 +501,9 @@ def evaluate_readiness(
                 "prompt": INVALID_EVIDENCE_PROMPT + (pack.evidence_guidance or ""),
             }
         )
-    incomplete_modules = [m["reason"] for m in modules if m.get("status") == "incomplete"]
+    incomplete_modules = [
+        m["reason"] for m in modules if m.get("status") == "incomplete"
+    ]
     undetermined = any(row["status"] in UNDETERMINED for row in rows.values())
     context = {
         "readiness": "incomplete" if requests else "prepared",
@@ -476,7 +512,10 @@ def evaluate_readiness(
         "applicability": {
             "status": (
                 "incomplete"
-                if missing_profile or not adoption_known or incomplete_modules or undetermined
+                if missing_profile
+                or not adoption_known
+                or incomplete_modules
+                or undetermined
                 else "scoped"
             ),
             "reason": "; ".join(dict.fromkeys(incomplete_modules)) or SCOPED_REASON,

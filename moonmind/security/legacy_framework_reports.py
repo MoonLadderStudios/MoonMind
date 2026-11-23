@@ -8,8 +8,9 @@ everything else Unverified, and it summarises the retained report for the new
 assessment's Markdown export.
 
 Consumers: ``AssessmentExecution.previous_framework_metadata`` (comparison),
-``compare_pack_metadata`` (intelligence changes) and
-``render_control_assessment`` (previous-report summary).
+``compare_pack_metadata`` (intelligence changes), ``compare_selected_frameworks``
+(the previous-report summary rendered in the new report) and the evidence
+export's schema check (``evidence_exports._validate_json``).
 
 Removal condition: delete this module when no retained report under either
 schema is still inside assessment retention, or when the issue that retires the
@@ -30,7 +31,8 @@ def legacy_gaming_report(document) -> bool:
     return (
         isinstance(document, dict)
         and isinstance(document.get("pack"), dict)
-        and (document.get("schemaVersion"), document["pack"].get("id")) in LEGACY_SCHEMAS
+        and (document.get("schemaVersion"), document["pack"].get("id"))
+        in LEGACY_SCHEMAS
     )
 
 
@@ -63,7 +65,12 @@ def legacy_pack_metadata(document) -> list[dict]:
                     row["id"]
                     for row in rows
                     if row["status"]
-                    in {"incomplete", "partner_owned", "applicability_missing", "Unverified"}
+                    in {
+                        "incomplete",
+                        "partner_owned",
+                        "applicability_missing",
+                        "Unverified",
+                    }
                 ],
             },
         }
@@ -87,11 +94,15 @@ def compare_legacy_report(current: dict, previous: dict) -> list[str]:
         )
     statuses = now.get("requirementStatuses") or {}
     prior = before.get("requirementStatuses") or {}
-    changed = sorted(key for key in statuses.keys() & prior.keys() if statuses[key] != prior[key])
+    changed = sorted(
+        key for key in statuses.keys() & prior.keys() if statuses[key] != prior[key]
+    )
     if changed:
         changes.append(
             "Requirement readiness changed: "
-            + ", ".join(f"{key} {prior[key]} -> {statuses[key]}" for key in changed[:16])
+            + ", ".join(
+                f"{key} {prior[key]} -> {statuses[key]}" for key in changed[:16]
+            )
             + (f" and {len(changed) - 16} more" if len(changed) > 16 else "")
             + "."
         )
