@@ -1,8 +1,9 @@
 """PCI DSS v4.0.1 readiness through security.assess and retained artifacts.
 
-Controlled observations stand in for native scanners; the installed pack, the
-shared evaluator, report retention and history comparison are the real owners
-(MoonLadderStudios/MoonMind#5438).
+Trivy evidence arrives as retained image and repository scanner summaries; a
+controlled observation stands in for TLS. The installed pack, the producers,
+the shared evaluator, report retention and history comparison are the real
+owners (MoonLadderStudios/MoonMind#5438).
 """
 
 import hashlib
@@ -13,7 +14,10 @@ import pytest
 
 from moonmind.security.framework_registry import installed_pack
 from tests.integration.security import test_recurring_assessments as recurring
-from tests.unit.security.test_pci_dss_readiness import SERVICE_PROVIDER
+from tests.unit.security.test_pci_dss_readiness import (
+    SERVICE_PROVIDER,
+    native_trivy_summaries,
+)
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 environment = recurring.environment
@@ -44,7 +48,7 @@ async def observation(service):
             "scope": SCOPE,
             "observedAt": now.isoformat(),
             "expiresAt": (now + timedelta(days=1)).isoformat(),
-            "coverage": [coverage("image", "trivy"), tls],
+            "coverage": [tls],
             "findings": [
                 {
                     "source": "tls",
@@ -72,11 +76,20 @@ def selection(**overrides):
     }
 
 
+async def trivy_reports(service):
+    """Retained native reports and the summaries the scanner jobs publish."""
+    native = [await recurring.put(service, {"Results": []}) for _ in range(2)]
+    return [
+        await recurring.put(service, summary.model_dump(mode="json", by_alias=True))
+        for summary in native_trivy_summaries(*native)
+    ]
+
+
 async def request(service, **overrides):
     return {
         "scope": SCOPE,
         "tools": ["retained-report"],
-        "reportRefs": [await observation(service)],
+        "reportRefs": [await observation(service), *await trivy_reports(service)],
         "credentialRefs": [],
         "networkRefs": [],
         "budget": {"baseSeconds": 60, "maxSeconds": 120, "progressStallSeconds": 60},
@@ -101,8 +114,11 @@ async def test_installed_pci_pack_concludes_only_named_sub_requirements(environm
     rows = by_id(report)
     assert len(rows) == len(installed_pack("pci-dss-readiness")[1].requirements)
     assert not any(row["conclusion"] == "satisfied" for row in rows.values())
-    image = rows["6.3.3"]["objectives"][0]
-    assert (image["id"], image["outcome"]) == ("image-vulnerabilities", "passed")
+    outcomes = {o["id"]: o["outcome"] for o in rows["6.3.3"]["objectives"]}
+    assert outcomes == {
+        "image-vulnerabilities": "passed",
+        "dependency-vulnerabilities": "passed",
+    }
     assert rows["6.3.3"]["conclusion"] == "inconclusive"
     assert rows["4.2.1"]["conclusion"] == "not_satisfied"
     for key in ("4", "6", "4.2.1.1", "11.3.2"):

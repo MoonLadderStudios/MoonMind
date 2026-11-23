@@ -201,9 +201,10 @@ Scope preserves admitted assets, exclusions and repository exceptions. Optional
 Satisfaction requires every selected asset/rule check to have complete, current,
 explicitly deterministic evidence covering the declared objectives. Coverage
 rows record `evidenceMethod`; an unclassified legacy record or interpretation
-cannot become an executed check. Inventory/feed, passive-source and RNG statistical checks identify their methods;
-RNG implementation review remains interpretation. Unclassified adapters remain
-inconclusive until their producer identifies the method.
+cannot become an executed check. Inventory/feed, passive-source and RNG statistical checks identify their methods,
+as do complete admitted `repository-scanner/v1` and `image-assessment/v1` runs;
+partial or unadmitted scans and RNG implementation review do not. Unclassified
+adapters remain inconclusive until their producer identifies the method.
 `allRules` does not prove an arbitrary mapped rule was installed. Conflicting,
 failed or incomplete matching observations remain visible. Observed native defects
 produce `not_satisfied`; accepted risk stays separate triage with its existing

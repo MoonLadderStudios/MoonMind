@@ -167,6 +167,18 @@ def test_missing_profile_inputs_leave_applicability_unverified_with_requests():
     assert result.context["applicability"]["status"] == "incomplete"
 
 
+def test_empty_required_payment_channels_stay_unverified_like_omitted_ones():
+    omitted = {k: v for k, v in MERCHANT.items() if k != "paymentChannels"}
+    _, absent = readiness(omitted)
+    _, empty = readiness(dict(MERCHANT, paymentChannels=[]))
+    for key in ("6.4.3", "9.5.1", "11.6.1"):
+        assert absent.rows[key]["status"] == "Unverified"
+        assert empty.rows[key]["status"] == "Unverified"
+        assert empty.rows[key]["reason"] == absent.rows[key]["reason"]
+    ids = {row["id"] for row in empty.context["evidenceRequests"]}
+    assert {"profile.payment_channels", "applicability.6.4.3"} <= ids
+
+
 def test_provider_owned_requirement_stays_visible_with_the_partner_recorded():
     reason = "Example Payments hosts the payment page and its scripts."
     choices = {
@@ -399,6 +411,131 @@ def test_findings_affect_only_their_named_sub_requirement():
     for key in ("6", "4", "1", "11.3.1", "6.3.1"):
         assert rows[key].conclusion == "inconclusive"
         assert not any(o.finding_ids for o in rows[key].objectives)
+
+
+def native_trivy_summaries(image_ref, repository_ref, *, complete=True, finding=False):
+    """Admitted image and repository Trivy summaries as the scanner jobs retain them."""
+    from moonmind.schemas.repository_scanner_models import (
+        ImageAssessment,
+        RepositoryScan,
+    )
+    from moonmind.security.image_assessments import (
+        ImageAssessmentSummary,
+        ImageExecution,
+        ImageSubject,
+    )
+    from moonmind.security.repository_scanners import (
+        NativeResult,
+        ScannerExecution,
+        ScannerSummary,
+    )
+
+    coverage = "complete" if complete else "partial"
+    findings = (
+        [finding_model("image", "trivy", "CVE-2026-0001", evidence=image_ref)]
+        if finding
+        else []
+    )
+    image = ImageAssessmentSummary(
+        admission=ImageAssessment(
+            operation="assess",
+            target="archive",
+            inputArtifactRef="art_imagearchive",
+            databaseCacheRef="scanner-db",
+            databaseDigest="d" * 64,
+        ),
+        execution=ImageExecution(
+            operation="assess",
+            target="archive",
+            version="0.58.0",
+            exitCode=0,
+            state="succeeded",
+        ),
+        subject=ImageSubject(kind="archive", asset="app", inputDigest="a" * 64),
+        result=NativeResult(
+            execution="succeeded",
+            coverage=coverage,
+            examinedAssets=["app"],
+            findings=findings,
+        ),
+        nativeRef=image_ref,
+        coverage=coverage,
+        limitations=[],
+    )
+    repository = ScannerSummary(
+        scanner="trivy",
+        admission=RepositoryScan(
+            scanner="trivy", outputDirectory="artifacts/scan", trivyScanners=["vuln"]
+        ),
+        execution=ScannerExecution(
+            inputDigest="a" * 64,
+            assets=["app"],
+            version="0.58.0",
+            exits={"scan": 0},
+            states={"scan": "succeeded"},
+        ),
+        results={
+            "scan": NativeResult(
+                execution="succeeded", coverage=coverage, examinedAssets=["app"]
+            )
+        },
+        nativeRefs={"scan": repository_ref},
+        coverage=coverage,
+        limitations=[],
+    )
+    return image, repository
+
+
+def finding_model(source, tool, rule, *, evidence):
+    from moonmind.security.assessments import Finding
+
+    return Finding.model_validate(
+        dict(finding(source, tool, rule), evidenceRefs=[evidence])
+    )
+
+
+@pytest.mark.parametrize(
+    "complete, found, expected",
+    [(True, False, "passed"), (True, True, "failed"), (False, False, "inconclusive")],
+)
+def test_native_trivy_summaries_reach_the_vulnerability_objectives(
+    complete, found, expected
+):
+    from types import SimpleNamespace
+
+    from moonmind.workflows.skills.security_assessment import (
+        _image_observation,
+        _scanner_observation,
+    )
+
+    image, repository = native_trivy_summaries(
+        "art_image", "art_repository", complete=complete, finding=found
+    )
+    request = SimpleNamespace(scope=AssessmentScope(assets=["app"]))
+    observed = [
+        _image_observation(request, image, "art_image_summary", NOW),
+        _scanner_observation(request, repository, "art_repository_summary", NOW),
+    ]
+    rows, _ = assess(
+        observation(
+            coverage=[
+                row.model_dump(mode="json", by_alias=True)
+                for obs in observed
+                for row in obs.coverage
+            ],
+            findings=[
+                row.model_dump(mode="json", by_alias=True)
+                for obs in observed
+                for row in obs.findings
+            ],
+        )
+    )
+    outcomes = {o.id: o.outcome for o in rows["6.3.3"].objectives}
+    assert outcomes["image-vulnerabilities"] == expected
+    assert outcomes["dependency-vulnerabilities"] == (
+        "passed" if complete else "inconclusive"
+    )
+    assert rows["6.3.3"].conclusion == ("not_satisfied" if found else "inconclusive")
 
 
 @pytest.mark.parametrize("state", ["stale", "partial", "rules-unknown"])

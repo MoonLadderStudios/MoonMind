@@ -110,10 +110,11 @@ existing packs keep their digests:
   `sourceStatus` (`reviewed` or `Unverified` with its reason).
 - `applicableWhen` on a requirement: condition sets over boolean, choice and
   multi-choice profile fields, any of which applies; a multi-choice input matches
-  when any recorded choice is expected, and a missing input leaves applicability
-  Unverified with that field's `unknownReason`. `applicabilityText` supplies the
-  applicable, not-applicable and not-selected reasons; `citeRule` appends each
-  requirement's own applicability statement to its not-applicable reason.
+  when any recorded choice is expected, and a missing input (including an empty
+  required one) leaves applicability Unverified with that field's
+  `unknownReason`. `applicabilityText` supplies the applicable, not-applicable
+  and not-selected reasons; `citeRule` appends each requirement's own
+  applicability statement to its not-applicable reason.
 - `behavior`: a registered judgement that cannot be data, such as GLI module
   applicability by entity and product, or New Jersey annual-assessment record
   checks with approval, operator and incident qualifiers. Unknown behaviors are
