@@ -127,8 +127,8 @@ return an explicit unsupported result for a multi-pack run.
 ## Packs from your own policy
 
 The `security-policy-pack` preset turns an organisation's own policy or ISMS
-documents into a declared pack. Upload the documents as text or Markdown through
-the existing artifact upload, attach them to the drafting step, and state the
+documents into a declared pack. Upload the documents as text or Markdown, which
+the default attachment policy admits, attach them to the drafting step, and state the
 policy name, owner, and version or approval date. Select the saved environment so
 its evidence-processing limits apply: when model delivery is disabled, local-only
 or limited to other Provider Profiles, the run is refused before an agent starts
@@ -145,8 +145,9 @@ when its locator names a supplied document (by artifact or SHA-256), a section,
 clause or page in it, and a quoted sentence found there that uses shall, must or
 required. Missing locators, quotes not at the cited place, guidance offered as a
 requirement and text addressed to a model or workflow are flagged and left out.
-Unsupported or unreadable files are listed by name. Normative sentences the
-response did not classify become open questions. A suggested objective survives
+Unsupported or unreadable files are listed by name. A normative sentence becomes
+an open question unless the quotes of kept rows at its document and section cover
+most of it, so a bare "must" or a refused row never hides one. A suggested objective survives
 only when the inventory shows that exact source, tool and rule ran as a
 deterministic check; otherwise it is flagged as invented or unverifiable. Mapping
 proposals must name requirements of the selected standard.
@@ -164,14 +165,18 @@ model step. Name the draft (`draftArtifactRef`, `draftSha256`) and a
 `removeRequirementIds`, `requirementEdits`, `adoptObjectiveSuggestions` and
 `acceptMappingProposals`. Source documents are rechecked first. The result is a
 new published pack artifact registered in that saved environment in place of the
-same pack's earlier registration, so the catalog lists it. Adopted rule suggestions
+same pack's earlier registration, so the catalog lists it. The revision is pinned
+with its source documents sealed as required dependencies, so it stays readable
+past ordinary expiry; unpin a revision you no longer register. Adopted rule suggestions
 never complete a requirement's objectives. Accepted mappings become `evaluated`
 with the reviewer's attribution. To edit an accepted pack, pass its identity as
 `pack` instead of a draft; that creates the next revision.
 
 To handle a policy revision, draft again from the new document with the operative
 pack as `previousPack`. The draft proposes the next revision and lists added,
-removed, reworded and unchanged requirements, and source documents that changed.
+removed, reworded and unchanged requirements, those whose applicability, evidence
+or objectives changed (a redraft carries no adopted objectives), and source
+documents that changed.
 An unchanged sentence keeps its earlier requirement ID. Earlier revisions and the
 assessments that used them are never rewritten. Drafting quality depends on the
 model and the document, so the accept step stays the operator's review.

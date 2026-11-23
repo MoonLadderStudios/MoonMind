@@ -652,3 +652,77 @@ def test_section_titles_match_with_or_without_their_clause_number():
             Locator(artifactRef=DOC, section=section, quote="All production access")
         )
         assert [s.title for s in found] == ["4.1 Access control"], section
+
+
+def open_statements(result):
+    return [
+        (q.locator.label(), normalize(q.locator.quote))
+        for q in result.open_questions
+        if q.origin == "validation"
+    ]
+
+
+def test_only_validated_quotes_at_their_location_classify_statements():
+    retained = normalize("Security logs must be retained for at least 365 days.")
+    critical = normalize("Critical vulnerabilities must be remediated within 14 days.")
+    value = response().model_dump(mode="json", by_alias=True)
+    rows = value["requirements"]
+    # A bare normative word passes the locator check but classifies nothing else.
+    rows[2]["locator"]["quote"] = "must"
+    # A row that fails validation never suppresses an omitted statement.
+    rows.append(
+        requirement(
+            "ACME-5.3-1",
+            "4.1",
+            "Critical vulnerabilities must be remediated within 14 days.",
+        )
+    )
+    result = draft(DraftResponse.model_validate(value))
+    assert "quote_not_found" in kinds(result)
+    assert open_statements(result) == [
+        ("4.2 Logging", retained),
+        ("5.3 Vulnerability management", critical),
+    ]
+
+    # The same sentence in another section is a separate statement.
+    repeated = POLICY.replace(
+        "Critical vulnerabilities must be remediated within 14 days.",
+        "Critical vulnerabilities must be remediated within 14 days.\n"
+        "Security logs must be retained for at least 365 days.",
+    )
+    value = response().model_dump(mode="json", by_alias=True)
+    # A quote without its closing period still covers its statement.
+    value["requirements"][1]["locator"][
+        "quote"
+    ] = "Access reviews shall be performed every quarter"
+    result = draft(DraftResponse.model_validate(value), doc=document(repeated))
+    assert open_statements(result) == [
+        ("5.3 Vulnerability management", critical),
+        ("5.3 Vulnerability management", retained),
+    ]
+
+
+def test_revision_diff_reports_assessment_changes_separately():
+    first = draft()
+    operative = accept_pack(
+        first.pack, review(adoptObjectiveSuggestions=["S1"]), draft=first
+    )
+    reference = PackReference(
+        artifact_ref="art_operative",
+        pack_id=operative.id,
+        edition=operative.edition,
+        revision=operative.revision,
+        sha256="a" * 64,
+    )
+    value = response().model_dump(mode="json", by_alias=True)
+    value["requirements"][2]["applicability"] = "Every logging pipeline"
+    second = draft(DraftResponse.model_validate(value), previous=(reference, operative))
+    changes = second.changes
+    # The redraft drops the adopted objectives and changes an applicability.
+    assert changes.assessment_changed == ["ACME-4.1-1", "ACME-4.2-1"]
+    assert changes.reworded == []
+    assert changes.unchanged == ["ACME-4.1-2"]
+    assert (
+        "Assessment changed (applicability, evidence or objectives): "
+        "ACME-4.1-1, ACME-4.2-1"
+    ) in render_review_sheet(second)

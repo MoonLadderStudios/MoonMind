@@ -1417,6 +1417,59 @@ async def test_publish_report_bundle_rejects_missing_and_duplicate_final_marker(
                     ],
                 )
 
+
+@pytest.mark.parametrize(
+    ("content_type", "payload", "error"),
+    [
+        ("text/markdown", "# Policy\n\nAccess must use MFA.\n".encode(), None),
+        ("text/plain", "Contrôle d'accès.\n".encode(), None),
+        ("text/plain", b"\xff\xfe\x00binary", "UTF-8"),
+        ("text/markdown", b"# Policy\x00\n", "UTF-8"),
+    ],
+)
+async def test_default_policy_admits_utf8_text_attachments_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    content_type: str,
+    payload: bytes,
+    error: str | None,
+) -> None:
+    """Text documents are default attachments; their bytes must be text."""
+
+    field = type(artifact_module.settings.workflow).model_fields[
+        "agent_job_attachment_allowed_content_types"
+    ]
+    monkeypatch.setattr(
+        artifact_module.settings.workflow,
+        "agent_job_attachment_allowed_content_types",
+        field.default,
+    )
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            artifact, _upload = await service.create(
+                principal="user-1",
+                content_type=content_type,
+                metadata_json={"source": "workflow-start-step-attachment"},
+            )
+            write = service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal="user-1",
+                payload=payload,
+                content_type=content_type,
+            )
+            if error is None:
+                completed = await write
+                assert completed.status is TemporalArtifactStatus.COMPLETE
+            else:
+                with pytest.raises(TemporalArtifactValidationError, match=error):
+                    await write
+
+
 async def test_write_complete_rejects_invalid_task_image_signature(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

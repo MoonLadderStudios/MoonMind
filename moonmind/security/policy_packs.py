@@ -72,6 +72,22 @@ DRAFT_OBJECTIVE_BASIS = (
     "Drafted from the operator's policy. No tool rule is adopted before review; "
     "this requirement needs organisational evidence or agent review."
 )
+# Share of a normative statement that validated quotes at its location must
+# cover before it counts as classified; a bare "must" never suppresses one.
+STATEMENT_COVERAGE = 0.8
+# Requirement fields that change how it is assessed rather than how it reads.
+ASSESSMENT_FIELDS = frozenset(
+    {
+        "applicability",
+        "evidence_prompt",
+        "required_evidence_methods",
+        "evidence_types",
+        "responsibilities",
+        "objectives",
+        "objectives_complete",
+        "procedures",
+    }
+)
 
 
 def normalize(text: str) -> str:
@@ -346,6 +362,7 @@ class RevisionChanges(FrameworkContract):
     added: list[str] = Field(default_factory=list)
     removed: list[str] = Field(default_factory=list)
     reworded: list[str] = Field(default_factory=list)
+    assessment_changed: list[str] = Field(default_factory=list)
     unchanged: list[str] = Field(default_factory=list)
     documents_added: list[str] = Field(default_factory=list)
     documents_removed: list[str] = Field(default_factory=list)
@@ -387,6 +404,20 @@ def next_revision(revision: str) -> str:
 
 def _flag(flags, kind, subject, reason):
     flags.append(Flag(kind=kind, subject=subject[:1024], reason=reason))
+
+
+def _covered(sentence: str, quotes) -> bool:
+    """Whether validated quotes at the statement's location cover most of it."""
+    text = normalize(sentence).rstrip(".;!? ")
+    marked = [False] * len(text)
+    for quote in quotes:
+        quote = quote.rstrip(".;!? ")
+        if quote and text in quote:
+            return True
+        start = text.find(quote) if quote else -1
+        if start >= 0:
+            marked[start : start + len(quote)] = [True] * len(quote)
+    return sum(marked) >= STATEMENT_COVERAGE * len(text)
 
 
 def _check_locator(locator, documents, *, normative):
@@ -482,6 +513,8 @@ def build_draft(
     }
     claimed = {row.id for row in response.requirements}
     seen_ids, seen_quotes = set(), {}
+    # Validated quotes by (document, section); only these classify statements.
+    classified: dict[tuple[str, Section], list[str]] = {}
     requirements, suggestions, proposals = [], [], []
     for index, row in enumerate(response.requirements):
         subject = f"requirements[{index}] {row.id}"
@@ -542,6 +575,9 @@ def build_draft(
             continue
         seen_ids.add(requirement_id)
         seen_quotes[digest] = requirement_id
+        classified.setdefault((document.artifact_ref, section), []).append(
+            normalize(row.locator.quote)
+        )
         requirements.append(
             PackRequirement(
                 id=requirement_id,
@@ -641,6 +677,9 @@ def build_draft(
             if cited is None:
                 _flag(flags, kind, subject, reason)
                 continue
+            classified.setdefault((cited[1].artifact_ref, cited[0]), []).append(
+                normalize(item.locator.quote)
+            )
             if field == "context" and NORMATIVE.search(item.locator.quote):
                 _flag(
                     flags,
@@ -653,14 +692,10 @@ def build_draft(
             )
             notes[field].append(Note(locator=located, text=item.text))
 
-    cited = [
-        normalize(note.locator.quote) for group in notes.values() for note in group
-    ] + [normalize(row.locator.quote) for row in response.requirements if row.locator]
     for doc in documents:
         for section, sentence in doc.statements:
-            text = normalize(sentence)
-            if INSTRUCTION.search(sentence) or any(
-                text in quote or quote in text for quote in cited if quote
+            if INSTRUCTION.search(sentence) or _covered(
+                sentence, classified.get((doc.artifact_ref, section), ())
             ):
                 continue
             notes["open_questions"].append(
@@ -732,14 +767,23 @@ def revision_changes(
     )
     for key in after.keys() & before.keys():
         old, new = before[key], after[key]
-        same = (old.title, old.summary, _excerpts(old)) == (
+        reworded = (old.title, old.summary, _excerpts(old)) != (
             new.title,
             new.summary,
             _excerpts(new),
         )
-        (changes.unchanged if same else changes.reworded).append(key)
-    changes.reworded.sort()
-    changes.unchanged.sort()
+        # A redraft carries no adopted objectives; that is a change to review.
+        assessed = old.model_dump(include=ASSESSMENT_FIELDS) != new.model_dump(
+            include=ASSESSMENT_FIELDS
+        )
+        if reworded:
+            changes.reworded.append(key)
+        if assessed:
+            changes.assessment_changed.append(key)
+        if not (reworded or assessed):
+            changes.unchanged.append(key)
+    for keys in (changes.reworded, changes.assessment_changed, changes.unchanged):
+        keys.sort()
     old_docs, new_docs = previous.source_documents(), current.source_documents()
     changes.documents_added = sorted(
         f"{ref} ({sha})" for ref, sha in new_docs.items() if old_docs.get(ref) != sha
@@ -824,6 +868,8 @@ def render_review_sheet(draft: PolicyPackDraft) -> str:
             f"- Added: {', '.join(c.added) or 'none'}",
             f"- Removed: {', '.join(c.removed) or 'none'}",
             f"- Reworded: {', '.join(c.reworded) or 'none'}",
+            "- Assessment changed (applicability, evidence or objectives): "
+            f"{', '.join(c.assessment_changed) or 'none'}",
             f"- Unchanged: {len(c.unchanged)}",
             f"- Source documents added or changed: {', '.join(c.documents_added) or 'none'}",
             f"- Source documents no longer cited: {', '.join(c.documents_removed) or 'none'}",

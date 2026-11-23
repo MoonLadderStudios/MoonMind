@@ -444,6 +444,28 @@ async def test_changed_policy_rerun_proposes_a_revision_without_touching_history
     )
 
 
+async def test_accepted_pack_and_its_source_documents_outlive_their_own_expiry(
+    environment, monkeypatch
+):
+    env = environment
+    await save_environment(env.session)
+    result, doc_ref, _ = await drafted(env)
+    accepted = await accept(env, result)
+    await recurring.age_everything(env)
+    await env.service.sweep_lifecycle(principal="service:sweeper")
+    # The unaccepted draft expires; the registered revision and its policy stay.
+    assert await recurring.status(env, result["draftArtifactRef"]) == "deleted"
+    for ref in (accepted["artifactRef"], doc_ref):
+        assert await recurring.status(env, ref) == "complete"
+    monkeypatch.setattr(
+        "api_service.services.framework_catalog.TemporalArtifactService",
+        lambda _repo: env.service,
+    )
+    catalog = await framework_catalog(env.session, OPERATOR)
+    (entry,) = [i for i in catalog["items"] if i["source"] == "declared"]
+    assert entry["available"] and entry["artifactRef"] == accepted["artifactRef"]
+
+
 async def test_accept_refuses_an_unknown_environment_before_publishing(
     environment, monkeypatch
 ):

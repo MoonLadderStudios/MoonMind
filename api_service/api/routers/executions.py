@@ -157,7 +157,7 @@ from api_service.services.remediation_capabilities import (
     project_remediation_action_inputs,
     remediation_link_capabilities,
 )
-from moonmind.config.settings import settings
+from moonmind.config.settings import DEFAULT_ATTACHMENT_CONTENT_TYPES, settings
 from moonmind.omnigent.bridge_store import (
     BridgeChatBindingAmbiguousError,
     BridgeProjectionAmbiguousError,
@@ -8607,7 +8607,7 @@ def _allowed_attachment_content_types() -> set[str]:
     }
     configured.discard("")
     configured.difference_update(_FORBIDDEN_ATTACHMENT_CONTENT_TYPES)
-    return configured or {"image/png", "image/jpeg", "image/webp"}
+    return configured or set(DEFAULT_ATTACHMENT_CONTENT_TYPES)
 
 
 def _normalize_attachment_ref(raw: Any, *, field_name: str) -> dict[str, Any]:

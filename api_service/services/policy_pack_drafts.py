@@ -46,6 +46,7 @@ from moonmind.security.policy_packs import (
     render_review_sheet,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactDependency,
     TemporalArtifactError,
     TemporalArtifactRepository,
     TemporalArtifactService,
@@ -416,6 +417,24 @@ async def accept_policy_pack(
     )
     ref, sha = await _write(
         artifacts, access, payload, "application/json", "framework_pack"
+    )
+    # A registered revision must outlive its own expiry: pin it, and seal its
+    # source documents as required dependencies so the pin keeps them readable.
+    await artifacts.record_verified_dependencies(
+        root_artifact_id=ref,
+        dependencies=[
+            ArtifactDependency(doc_ref, doc_sha, True, "framework_pack.source")
+            for doc_ref, doc_sha in sorted(published.source_documents().items())
+        ],
+        access=access,
+    )
+    await artifacts.pin(
+        artifact_id=ref,
+        principal=access.principal,
+        reason=(
+            f"Framework pack {published.id} revision {published.revision} "
+            f"registered in {request.project_id}/{request.environment_id}"
+        ),
     )
     identity = FrameworkPackIdentity(
         artifact_ref=ref,
