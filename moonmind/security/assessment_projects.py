@@ -286,6 +286,9 @@ def resolve_assessment_project(
 
 
 ASSESSMENT_PROJECT_INPUT_KEYS = ("assessmentProject", "assessment_project")
+# Tools that read the admitted snapshot. Only ``security.assess`` takes its
+# scope, budget and reference defaults; ``security.plan`` holds no scope.
+ASSESSMENT_PROJECT_TOOLS = ("security.assess", "security.plan")
 
 
 def assessment_input_selectors(
@@ -316,10 +319,11 @@ def assessment_input_selectors(
             aliases = {
                 str(candidate.get(key) or "").strip() for key in ("id", "name")
             } - {""}
-            if "security.assess" in aliases and len(aliases) > 1:
-                raise ValueError(
-                    "Use matching id and name values for a security.assess selector."
-                )
+            for name in ASSESSMENT_PROJECT_TOOLS:
+                if name in aliases and len(aliases) > 1:
+                    raise ValueError(
+                        f"Use matching id and name values for a {name} selector."
+                    )
         if is_root:
             selected = tool or skill
             keys = ("name", "id")
@@ -333,8 +337,12 @@ def assessment_input_selectors(
         if selected is None:
             continue
         identity = str(selected.get(keys[0]) or selected.get(keys[1]) or "").strip()
-        if identity == "security.assess":
+        if identity in ASSESSMENT_PROJECT_TOOLS:
             yield node, selected
+
+
+def _selector_identity(selector: Mapping[str, Any]) -> str:
+    return str(selector.get("id") or selector.get("name") or "").strip()
 
 
 def _canonical_reference_inputs(values: dict[str, Any]) -> dict[str, Any]:
@@ -389,6 +397,11 @@ def apply_assessment_defaults(
         tool["inputs"] = inputs
         if isinstance(step.get("inputs"), dict):
             step["inputs"] = inputs
+        if _selector_identity(tool) == "security.plan":
+            inputs["assessmentProject"] = copy.deepcopy(
+                snapshot.model_dump(mode="json", by_alias=True)
+            )
+            continue
         inputs.setdefault(
             "scope",
             {"assets": list(config.assets), "exclusions": list(config.exclusions)},

@@ -46,9 +46,12 @@ def _jira_project_key(goal: str) -> str:
     return match.group(1).upper() if match else "MM"
 
 
-def _issue_key(goal: str) -> str | None:
-    match = _JIRA_ISSUE_KEY_PATTERN.search(goal)
-    return match.group(1).upper() if match else None
+def _issue_key(goal: str, *, ignore: frozenset[str] = frozenset()) -> str | None:
+    for match in _JIRA_ISSUE_KEY_PATTERN.finditer(goal):
+        key = match.group(1).upper()
+        if key not in ignore:
+            return key
+    return None
 
 
 def _github_issue_ref(goal: str) -> tuple[str, int] | None:
@@ -59,6 +62,49 @@ def _github_issue_ref(goal: str) -> tuple[str, int] | None:
     if ref_match:
         return ref_match.group(1), int(ref_match.group(2))
     return None
+
+
+_SECURITY_PLAN_PATTERN = re.compile(
+    r"^\W*(?:please\W+)?(?:(?:create|draft|make|prepare|plan|start|write|run)\s+)?"
+    r"(?:an?\s+|the\s+|my\s+)?security\s+(?:plan|assessment)\b"
+    r"|\bsecurity\s+(?:plan|assessment)\s+(?:for|of|against|covering)\b"
+)
+# Catalog standards a goal can name, by installed pack ID. Text that names
+# none leaves standards for the operator to choose; nothing is guessed.
+_STANDARD_NAMES = (
+    ("iso-27001-readiness", ("iso 27001", "iso/iec 27001", "iso27001")),
+    ("soc2-readiness", ("soc 2", "soc2")),
+    ("pci-dss-readiness", ("pci dss", "pci-dss")),
+    ("gli-19-readiness", ("gli-19", "gli 19")),
+    ("nj-dge-readiness", ("nj dge", "new jersey dge", "new jersey division of gaming")),
+    ("ukgc-rts-security", ("ukgc", "remote technical standards")),
+    ("owasp-asvs-l1", ("asvs", "owasp", "general best practices", "best practices")),
+)
+# Standard names shaped like Jira keys (GLI-19) name a standard, not an issue,
+# in a goal that asks for a security plan.
+_ISSUE_SHAPED_STANDARD_NAMES = frozenset(
+    name.upper()
+    for _, names in _STANDARD_NAMES
+    for name in names
+    if _JIRA_ISSUE_KEY_PATTERN.fullmatch(name)
+)
+
+
+def _security_plan_inputs(lowered: str) -> dict[str, Any]:
+    from moonmind.security.framework_registry import installed_pack
+
+    inputs: dict[str, Any] = {}
+    if _contains_any(lowered, ("application", "app", "web app", "web application")):
+        inputs["subject_type"] = "application"
+    standards = []
+    for pack_id, names in _STANDARD_NAMES:
+        if any(name in lowered for name in names):
+            standards.append(
+                {"id": pack_id, "edition": installed_pack(pack_id)[1].edition}
+            )
+    if standards:
+        inputs["standards"] = standards
+    return inputs
 
 
 def goal_from_payloads(
@@ -101,8 +147,10 @@ def schedule_preset_from_goal(goal: str) -> GoalPresetSchedule | None:
     """Select a seeded task preset from a plain goal.
 
     The selector is intentionally deterministic and conservative: it uses
-    stable Jira-key and task-shape signals, then falls back to MoonSpec
-    orchestration for a general implementation goal.
+    stable Jira-key and task-shape signals, routes a goal that names a security
+    plan or assessment (without implementation, breakdown or orchestration
+    wording) to the security plan, then falls back to MoonSpec orchestration
+    for a general implementation goal.
     """
 
     normalized_goal = _text(goal)
@@ -110,7 +158,11 @@ def schedule_preset_from_goal(goal: str) -> GoalPresetSchedule | None:
         return None
 
     lowered = normalized_goal.lower()
-    issue_key = _issue_key(normalized_goal)
+    names_security_plan = _SECURITY_PLAN_PATTERN.search(lowered) is not None
+    issue_key = _issue_key(
+        normalized_goal,
+        ignore=_ISSUE_SHAPED_STANDARD_NAMES if names_security_plan else frozenset(),
+    )
     github_issue = _github_issue_ref(normalized_goal)
     wants_breakdown = _contains_any(
         lowered,
@@ -154,6 +206,19 @@ def schedule_preset_from_goal(goal: str) -> GoalPresetSchedule | None:
                 "constraints": "",
             },
             reason="github_issue_goal",
+        )
+
+    if (
+        names_security_plan
+        and not wants_breakdown
+        and not wants_implementation
+        and not wants_orchestration
+    ):
+        return GoalPresetSchedule(
+            goal=normalized_goal,
+            slug="security-plan",
+            inputs=_security_plan_inputs(lowered),
+            reason="security_plan_goal",
         )
 
     if wants_breakdown:

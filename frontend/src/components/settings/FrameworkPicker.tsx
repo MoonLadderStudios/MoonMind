@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchFrameworkPacks, type CatalogFramework, type DeclaredFramework, type SavedFramework } from '../../lib/assessmentProjects';
+import { fetchFrameworkPacks, frameworkLabel as label, frameworkSelection as selection, type DeclaredFramework, type SavedFramework } from '../../lib/assessmentProjects';
 import { Button } from '../Button';
 
 const blankRegistration: DeclaredFramework = { packId: '', edition: '', revision: '', artifactRef: '', sha256: '' };
@@ -8,21 +8,6 @@ const identifier = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/;
 const labels: Record<keyof DeclaredFramework, string> = {
   packId: 'Pack ID', edition: 'Edition', revision: 'Revision', artifactRef: 'Artifact reference', sha256: 'SHA-256',
 };
-
-function selection(pack: CatalogFramework): SavedFramework | undefined {
-  if (!pack.edition) return;
-  if (pack.source !== 'declared') return { id: pack.id, edition: pack.edition };
-  if (pack.artifactRef && pack.revision && pack.sha256) {
-    return { packId: pack.id, edition: pack.edition, artifactRef: pack.artifactRef, revision: pack.revision, sha256: pack.sha256 };
-  }
-}
-
-const choiceLabels: Record<string, string> = { 'general-best-practices': 'General best practices for applications' };
-
-function label(pack: CatalogFramework): string {
-  const choice = pack.choice && choiceLabels[pack.choice];
-  return choice ? `${choice}: ${pack.title}` : pack.title;
-}
 
 function identity(value: SavedFramework): string {
   return JSON.stringify('id' in value ? [value.id, value.edition] : [value.packId, value.edition, value.artifactRef, value.revision, value.sha256]);

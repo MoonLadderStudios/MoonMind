@@ -1,7 +1,15 @@
 import { isValidElement, useEffect, useId, useRef, useState, type ReactElement } from 'react';
 import { Button } from './Button';
 import { InfoTooltip } from './InfoTooltip';
+import { useQuery } from '@tanstack/react-query';
 import { resolveSchemaProperty } from '../lib/assessmentProjects';
+import {
+  loadSchemaOptions,
+  schemaOptionKey,
+  schemaOptionLabel,
+  schemaOptionSourceName,
+  unavailableSchemaOption,
+} from '../lib/schemaOptionSources';
 
 export interface SchemaCapabilityDetail {
   inputSchema?: Record<string, unknown>;
@@ -413,6 +421,68 @@ function CapabilityStringList({ value, onChange, ...props }: {
   }} />;
 }
 
+/** A multi-select whose options come from a server catalog the schema names. */
+function SourcedMultiSelect({ source, value, onChange, ...props }: {
+  source: string;
+  value: unknown;
+  onChange: (value: unknown[]) => void;
+  id: string;
+  disabled: boolean;
+  "aria-label": string;
+  "aria-invalid": boolean;
+  "aria-describedby"?: string | undefined;
+}): ReactElement {
+  const options = useQuery({ queryKey: ["schema-options", source], queryFn: () => loadSchemaOptions(source) });
+  const selected = Array.isArray(value) ? value : [];
+  const previous = new Map(selected.map((item) => [schemaOptionKey(item), item]));
+  const stale = options.isSuccess
+    ? selected.flatMap((item) => {
+        const problem = unavailableSchemaOption(source, item);
+        return problem ? [`${schemaOptionLabel(source, item)} ${problem.replace(/\.$/, "")}`] : [];
+      })
+    : [];
+  const catalog = options.data || [];
+  // A saved choice that is unavailable or gone from the catalog stays listed
+  // and selectable while chosen, so the operator can remove it.
+  const listed = [
+    ...catalog.map((option) => ({ ...option, disabled: option.disabled && !previous.has(option.key) })),
+    ...selected.filter((item) => !catalog.some((option) => option.key === schemaOptionKey(item))).map((item) => ({
+      key: schemaOptionKey(item), value: item, label: schemaOptionLabel(source, item), disabled: false, reason: "no longer in the catalog",
+    })),
+  ];
+  return <>
+    <select {...props} multiple value={[...previous.keys()]} disabled={props.disabled || !options.isSuccess}
+      onChange={(event) => {
+        const chosen = new Set(Array.from(event.currentTarget.selectedOptions).map((option) => option.value));
+        onChange(listed.filter((option) => chosen.has(option.key) && !option.disabled).map((option) => previous.get(option.key) ?? option.value));
+      }}>
+      {listed.map((option) => (
+        <option key={option.key} value={option.key} disabled={option.disabled}>
+          {option.reason ? `${option.label} — unavailable: ${option.reason}` : option.label}
+        </option>
+      ))}
+    </select>
+    {options.isPending ? <span role="status" className="small">Loading options…</span> : null}
+    {options.isError ? <span role="alert" className="notice small">Options could not be loaded. <Button type="button" variant="ghost" onClick={() => void options.refetch()}>Retry</Button></span> : null}
+    {stale.map((problem) => <span key={problem} role="alert" className="notice small">{problem}. Remove it before starting.</span>)}
+  </>;
+}
+
+/** Submission errors for catalog-fed fields: too few choices or unavailable ones. */
+export function sourcedOptionErrors(name: string, schema: Record<string, unknown>, value: unknown): string | null {
+  const source = schemaOptionSourceName(schema);
+  if (!source || !Array.isArray(value)) return null;
+  const minimum = typeof schema.minItems === "number" ? schema.minItems : 0;
+  if (value.length < minimum) {
+    return `Choose at least ${minimum} ${capabilityFieldLabel(name, schema).toLowerCase()}.`;
+  }
+  for (const item of value) {
+    const problem = unavailableSchemaOption(source, item);
+    if (problem) return `${schemaOptionLabel(source, item)} ${problem.replace(/\.$/, "")}.`;
+  }
+  return null;
+}
+
 export function SchemaCapabilityFields({
   fields,
   detail,
@@ -598,6 +668,26 @@ export function SchemaCapabilityFields({
               {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
               {omitControl}
             </div>
+          );
+        }
+        const optionSource = schemaOptionSourceName(fieldSchema);
+        if (fieldSchema.type === "array" && optionSource) {
+          return (
+            <div key={name}><label htmlFor={inputId}>
+              {label}
+              <SourcedMultiSelect
+                source={optionSource}
+                id={inputId}
+                aria-label={label}
+                value={value}
+                disabled={disabled}
+                aria-invalid={Boolean(error)}
+                aria-describedby={describedBy}
+                onChange={(selected) => onChange(name, selected)}
+              />
+              {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
+              {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
+            </label>{omitControl}</div>
           );
         }
         const itemSchema = recordValue(fieldSchema.items);

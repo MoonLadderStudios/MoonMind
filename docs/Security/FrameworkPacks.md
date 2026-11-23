@@ -22,7 +22,9 @@ Each readiness preset in Create is a thin selection of one catalog entry: it
 names the installed pack by `framework.packId` and shows typed fields generated
 from the pack's declared profile, with no free-form JSON editor. None is
 retired, because each keeps prompts specific to its standard; all of them run
-the same `security.assess` path as a direct request.
+the same `security.assess` path as a direct request. The
+[security plan](SecurityPlans.md#planning-from-create) selects several catalog
+entries at once.
 
 Settings can register a declared pack using its exact artifact reference, ID,
 edition, revision and SHA-256. Catalog reads use the caller’s artifact access

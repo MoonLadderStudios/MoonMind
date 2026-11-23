@@ -15,6 +15,10 @@ references, exclusions and remaining budget from the admitted request. Selecting
 this Skill grants no additional authority. Keep these constraints in subsequent
 steps and stop on cancellation; do not launch another provider or reset a budget.
 
+For a planning request (`mode: plan`), follow [the planning procedure](references/plan.md):
+draft a `security-plan/v1` from the repository and the trusted planning context,
+reusing the threat model below, and run no job.
+
 For selected web/API objectives, retain the edition-specific
 [procedure plan and coverage](references/report.md) before executing tests.
 Use the delivered [procedure pack](references/web-api.json), existing admitted

@@ -27,6 +27,19 @@ export interface CatalogFramework {
   choice?: 'general-best-practices' | null;
   companionChecks?: { id: string; title: string; presets: string[] }[];
 }
+/** The saved selection a catalog entry stands for, when it is selectable. */
+export function frameworkSelection(pack: CatalogFramework): SavedFramework | undefined {
+  if (!pack.edition) return;
+  if (pack.source !== 'declared') return { id: pack.id, edition: pack.edition };
+  if (pack.artifactRef && pack.revision && pack.sha256) {
+    return { packId: pack.id, edition: pack.edition, artifactRef: pack.artifactRef, revision: pack.revision, sha256: pack.sha256 };
+  }
+}
+const frameworkChoiceLabels: Record<string, string> = { 'general-best-practices': 'General best practices for applications' };
+export function frameworkLabel(pack: CatalogFramework): string {
+  const choice = pack.choice && frameworkChoiceLabels[pack.choice];
+  return choice ? `${choice}: ${pack.title}` : pack.title;
+}
 export async function fetchFrameworkPacks(): Promise<CatalogFramework[]> {
   const response = await fetch('/api/v1/settings/framework-packs', { headers: { Accept: 'application/json' } });
   if (!response.ok) throw await responseError(response, 'Could not load assessment standards');

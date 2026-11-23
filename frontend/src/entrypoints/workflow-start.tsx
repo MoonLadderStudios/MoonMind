@@ -1,5 +1,5 @@
 import { InfoTooltip } from "../components/InfoTooltip";
-import { schemaProperties, schemaRequired, schemaAlternativeRequiredGroups, schemaGuidedInputNames, capabilityFieldLabel, capabilityFieldUiSchema, capabilityFieldVisible, capabilityWidgetName, safeCapabilityDefault, dependentCapabilityDefault, recordValue, OWNER_REPO_PATTERN, SchemaCapabilityFields } from "../components/SchemaCapabilityFields";
+import { schemaProperties, schemaRequired, schemaAlternativeRequiredGroups, schemaGuidedInputNames, capabilityFieldLabel, capabilityFieldUiSchema, capabilityFieldVisible, capabilityWidgetName, safeCapabilityDefault, dependentCapabilityDefault, recordValue, OWNER_REPO_PATTERN, SchemaCapabilityFields, sourcedOptionErrors } from "../components/SchemaCapabilityFields";
 export { SchemaCapabilityFields } from "../components/SchemaCapabilityFields";
 import { OrganisationalEvidenceEditor } from '../components/OrganisationalEvidenceEditor';
 import { securitySelectionIdentity, securitySelectionArtifact } from '../lib/remediationCreateDraft';
@@ -3791,6 +3791,11 @@ export function validateSchemaCapabilityValues(
         errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must be a JSON array.`;
         continue;
       }
+      const sourced = sourcedOptionErrors(name, fieldSchema, value);
+      if (sourced) {
+        errors[name] = sourced;
+        continue;
+      }
       const itemSchema = recordValue(fieldSchema.items);
       if (itemSchema.type === "object") {
         value.forEach((item, index) => {
@@ -6762,6 +6767,20 @@ function WorkflowStartPageContent({
   });
 
   const templateItems = templateOptionsQuery.data || [];
+  // `?preset=<slug>` (for example the Security workspace's start action)
+  // selects that preset in an untouched first step once the catalog loads.
+  const requestedPresetAppliedRef = useRef(false);
+  useEffect(() => {
+    if (pageMode.mode !== "create" || requestedPresetAppliedRef.current) return;
+    const slug = String(new URLSearchParams(window.location.search).get("preset") || "").trim();
+    if (!slug || !templateItems.some((item) => item.key === slug)) return;
+    requestedPresetAppliedRef.current = true;
+    const [first, ...rest] = stepsRef.current;
+    if (!first || rest.length || first.instructions.trim() || first.presetKey) return;
+    handleStepTypeChange(first.localId, "preset");
+    void handleStepPresetSelectionChange(first.localId, slug);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageMode.mode, templateItems]);
   const hasAssessmentStep = steps.some((step) => {
     if (step.stepType === "tool") {
       return step.toolId.trim() === "security.assess" || supportsAssessmentDefaults(

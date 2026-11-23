@@ -376,11 +376,11 @@ The deterministic story-output tool consumes only eligible reconciled stories. D
 
 ## Submit-Time Auto-Expansion and Goal Selection
 
-Start Workflow validates non-preset fields, resolves and validates preset inputs/context, expands all unexpanded presets, checks the final policy/plan, and submits through normal admission. Errors identify the relevant workflow control or task input and preserve the draft.
+Start Workflow validates fields and preset inputs/context, expands unexpanded presets, checks the final policy/plan, and submits through normal admission. Errors name the workflow control or task input and preserve the draft.
 
-A goal-only request without authored steps, plan, tool/Skill, or explicit preset may be mapped conservatively to a seeded preset. Jira-key goals select the relevant Jira implementation/orchestration shape, breakdown goals select breakdown orchestration, and general implementation goals select MoonSpec Orchestrate under the existing goal selector. This does not authorize a model to choose a more permissive publication mode.
+A goal-only request without authored steps, plan, tool/Skill, or explicit preset maps conservatively to a seeded preset: Jira keys to Jira implementation/orchestration, issue references to GitHub implementation, breakdown goals to breakdown orchestration, a named security plan or assessment without implementation wording to `security-plan` (prefilling only the subject type and standards the text names; there a key-shaped standard name such as GLI-19 is a standard, not a Jira key), and other implementation goals to MoonSpec Orchestrate. Goal selection never widens the publication mode.
 
-`presetSchedule` records goal source, selected instance slug, content digest, and reason. The ordinary compiler then resolves inputs, context, and publishing. Explicit execution shape takes precedence over goal inference.
+`presetSchedule` records goal source, selected slug, content digest, and reason; the ordinary compiler resolves the rest. Explicit execution shape overrides goal inference.
 
 ## Apply and Reapply
 

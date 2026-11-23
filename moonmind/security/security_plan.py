@@ -1403,6 +1403,11 @@ def render_security_plan(plan: SecurityPlan, *, plan_ref: str | None = None) -> 
             f"{_safe(standard.revision)} (sha256 {standard.sha256}); period "
             f"{standard.period.start} to {standard.period.end}"
             + (f"; {_safe(standard.title)}" if standard.title else "")
+            + (
+                f"; proposed inputs to review: {_safe(', '.join(sorted(standard.profile)))}"
+                if standard.profile
+                else ""
+            )
         )
     counts = {
         state: sum(row.applicability == state for row in plan.requirements)

@@ -858,3 +858,9 @@ async def test_assessment_context_defaults_are_discoverable_without_direct_execu
         assert (
             called.json()["detail"]["code"] == "execution_tool_requires_task_submission"
         )
+        # A security plan step reads the admitted snapshot but holds no scope,
+        # credential or egress reference.
+        plan = tools["security.plan"]["inputSchema"]
+        assert plan["x-assessment-project-defaults"] is True
+        assert plan["properties"]["assessmentProject"]["readOnly"] is True
+        assert not {"scope", "credentialRefs", "networkRefs"} & set(plan["properties"])

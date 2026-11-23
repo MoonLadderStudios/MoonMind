@@ -1271,6 +1271,44 @@ async def test_goal_preset_submission_expands_before_planner(
 
 
 @pytest.mark.asyncio
+async def test_security_plan_goal_expands_the_plan_preset_with_stated_inputs(
+    tmp_path,
+) -> None:
+    """#5431: a goal naming a security plan reaches the plan, not implementation."""
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/security_plan_goal.db"
+    engine = create_async_engine(db_url, future=True)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            task_payload = {
+                "goal": "Security plan for the shop application against ISO 27001.",
+            }
+            await _expand_goal_preset_for_workflow_submission(
+                task_payload=task_payload,
+                request_payload={
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex_cli",
+                },
+                session=session,
+                user=SimpleNamespace(id="system", is_superuser=False),
+            )
+    finally:
+        await engine.dispose()
+
+    assert task_payload["presetSchedule"]["presetSlug"] == "security-plan"
+    assert task_payload["inputs"] == {
+        "subject_type": "application",
+        "standards": [{"id": "iso-27001-readiness", "edition": "2022+Amd1:2024"}],
+    }
+    tools = [step.get("tool", {}).get("id") for step in task_payload["steps"]]
+    assert tools == ["security.plan", None, "security.plan"]
+    assert task_payload["steps"][1]["skill"]["id"] == "security-review"
+    assert task_payload["publish"] == {"mode": "none"}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("owner_id", ["system", uuid4()])
 async def test_explicit_github_issue_template_expands_before_planner(
     tmp_path, owner_id
@@ -23422,6 +23460,63 @@ def test_assessment_project_create_freezes_context_before_tool_validation(
         assert inputs["tools"] == []
         assert inputs["credentialRefs"] == inputs["networkRefs"] == []
         assert inputs["budget"]["maxSeconds"] == 120
+
+
+def test_security_plan_admission_gives_plan_steps_the_snapshot_without_authority(
+    client, monkeypatch,
+):
+    """#5431: a security plan reads the saved environment and holds no grant."""
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    snapshot = _assessment_project_snapshot()
+    standards = [{"id": "owasp-asvs-l1", "edition": "5.0.0"}]
+    plan_inputs = {"subjectType": "application", "standards": standards}
+    runtime = {"mode": "codex"}
+    workflow = {
+        "instructions": "Security plan for the shop application.",
+        "runtime": runtime,
+        "publish": {"mode": "none"},
+        "steps": [
+            {"id": "context", "type": "tool", "tool": {"id": "security.plan",
+                "inputs": {"phase": "context", **plan_inputs}}},
+            {"id": "plan", "type": "skill", "repositoryOperation": "read",
+                "skill": {"id": "security-review", "args": {"mode": "plan",
+                    "securityPlanDraftPath": "artifacts/security-plan/draft.json"}}},
+            {"id": "retain", "type": "tool", "tool": {"id": "security.plan",
+                "inputs": {"phase": "retain", **plan_inputs}}},
+        ],
+    }
+    parameters = {
+        "assessmentProject": snapshot,
+        "workflow": workflow,
+        "repository": "MoonLadderStudios/shop",
+    }
+
+    async def validate_inputs(*, initial_parameters, **_kwargs):
+        return SimpleNamespace(valid=True, parameters=initial_parameters)
+
+    monkeypatch.setattr(executions_module, "validate_skill_step_inputs", validate_inputs)
+    response = test_client.post(
+        "/api/executions", json={"type": "workflow", "payload": parameters}
+    )
+    assert response.status_code == 201, response.text
+    admitted = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert admitted["assessmentProject"] == snapshot
+    assert "assessmentScope" not in admitted
+    task = admitted["workflow"]
+    for index, phase in ((0, "context"), (2, "retain")):
+        inputs = task["steps"][index]["tool"]["inputs"]
+        assert inputs == {"phase": phase, **plan_inputs, "assessmentProject": snapshot}
+    planning = task["steps"][1]
+    assert "assessmentProject" not in json.dumps(planning)
+    # Admission canonicalizes Skill args as inputs; the declared draft survives.
+    assert planning["skill"]["inputs"]["securityPlanDraftPath"] == (
+        "artifacts/security-plan/draft.json"
+    )
+    # Explicit choices survive admission unchanged.
+    assert task["runtime"]["mode"] == "codex_cli"  # canonical alias of the choice
+    assert task["publish"]["mode"] == "none"
+    assert admitted["repository"] == "MoonLadderStudios/shop"
 
 
 def test_assessment_project_original_snapshot_round_trip_and_clear():
