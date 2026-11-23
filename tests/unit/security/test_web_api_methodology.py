@@ -96,6 +96,110 @@ def plan_payload(pack_ref="art_pack"):
     }
 
 
+def plan_project(scope):
+    """A saved project environment whose candidates are the plan's assets."""
+    from moonmind.security.assessment_projects import resolve_assessment_project
+
+    return resolve_assessment_project(
+        {
+            "projects": [
+                {
+                    "id": "fixture",
+                    "name": "Controlled fixture",
+                    "purpose": "Controlled web/API methodology fixture",
+                    "boundaries": "Controlled fixture targets only",
+                    "environments": [
+                        {
+                            "id": "controlled",
+                            "name": "Controlled",
+                            "assets": list(scope["assets"]),
+                            "exclusions": list(scope.get("exclusions", [])),
+                        }
+                    ],
+                }
+            ]
+        },
+        project_id="fixture",
+        environment_id="controlled",
+        version=1,
+    )
+
+
+def security_plan_payload(payload=None):
+    """The ``security-plan/v1`` form of a web/API working plan.
+
+    Proposals are copied; derived content comes from trusted derivation. The
+    plan drops the v1 authority and credential references: the launch names
+    the rules of engagement and binds credentials.
+    """
+    from moonmind.security.framework_packs import load_declared_pack
+    from moonmind.security.security_plan import derive_security_plan
+    from moonmind.security.web_api_methodology import procedure_evidence
+
+    payload = copy.deepcopy(payload or plan_payload())
+    pack = load_declared_pack(
+        PACK_PATH.read_bytes(),
+        pack_id=payload["pack"]["packId"],
+        edition=payload["pack"]["edition"],
+        revision=payload["pack"]["revision"],
+    )
+    methods = {
+        p.id: procedure_evidence(p.method)[0]
+        for r in pack.requirements
+        for p in r.procedures
+    }
+    project = plan_project(payload["scope"])
+    cited = [{"kind": "operator_input", "ref": "Controlled fixture plan"}]
+    plan = {
+        "schemaVersion": "security-plan/v1",
+        "subject": {
+            "type": "application",
+            "project": {
+                "projectId": project.project_id,
+                "environmentId": project.environment_id,
+                "sourceVersion": project.source_version,
+                "digest": project.digest,
+            },
+            "candidateRef": payload["candidateRef"],
+            "systemBoundary": payload["systemBoundary"],
+            "scope": payload["scope"],
+            "sources": cited,
+        },
+        "standards": [payload["pack"]],
+        "requirements": [
+            {
+                "packId": pack.id,
+                "edition": pack.edition,
+                "id": objective["id"],
+                "applicability": objective["applicability"],
+                "reason": objective.get("reason")
+                or "Selected for the controlled fixture.",
+                "sources": cited,
+                "methods": list(
+                    dict.fromkeys(methods[p["id"]] for p in objective["procedures"])
+                ),
+                "procedures": objective["procedures"],
+            }
+            for objective in payload["objectives"]
+        ],
+        "methodology": {
+            "packId": pack.id,
+            "edition": pack.edition,
+            "threatModel": payload["threatModel"],
+            "interfaces": payload["interfaces"],
+            "identities": [
+                {"id": i["id"], "available": i["available"]}
+                for i in payload["identities"]
+            ],
+            "sourceRefs": payload["sourceRefs"],
+            "apiContextRefs": payload["apiContextRefs"],
+            "allowedMethods": payload["allowedMethods"],
+        },
+    }
+    derived = derive_security_plan(plan, packs={(pack.id, pack.edition): pack})
+    return derived.model_dump(mode="json", by_alias=True), project
+
+
 def prepared(payload=None):
     from moonmind.security.assessments import WebAPITestPlan
     from moonmind.security.framework_packs import load_declared_pack

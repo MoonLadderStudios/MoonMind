@@ -117,6 +117,12 @@ class ThreatModel(Contract):
 
 
 class WebAPITestPlan(Contract):
+    """Retained ``web-api-test-plan/v1``, superseded by ``security-plan/v1``.
+
+    Read only by ``security_plan.read_methodology_plan`` so retained v1 plans,
+    their procedure results and coverage reports stay readable and comparable.
+    """
+
     schema_version: Literal["web-api-test-plan/v1"] = "web-api-test-plan/v1"
     pack: FrameworkPackSelection
     scope: AssessmentScope
@@ -132,6 +138,10 @@ class WebAPITestPlan(Contract):
     objectives: Annotated[
         list[PlannedObjective], Field(min_length=1, max_length=MAX_PACK_REQUIREMENTS)
     ]
+
+    def with_context(self, **refs) -> WebAPITestPlan:
+        """The plan with only the readable methodology context refs."""
+        return self.model_copy(update=refs)
 
 
 class SecurityInterpretation(Contract):
@@ -980,6 +990,19 @@ class AssessmentReportContext(Contract):
         return self
 
 
+class SecurityPlanInput(Contract):
+    """A drafted ``security-plan/v1`` to validate, render and retain.
+
+    ``readinessRef`` names existing readiness results keyed by planned job ID.
+    Neither grants authority; the plan resolves no credential or network.
+    """
+
+    plan_ref: Annotated[str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")]
+    readiness_ref: (
+        Annotated[str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")] | None
+    ) = Field(default=None, exclude_if=lambda value: value is None)
+
+
 class AssessmentRequest(Contract):
     model_config = {
         **Contract.model_config,
@@ -1011,6 +1034,9 @@ class AssessmentRequest(Contract):
     decisions_ref: Text | None = None
     review_ref: Text | None = None
     methodology: MethodologyInput | None = None
+    security_plan: SecurityPlanInput | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     github_alerts: GitHubAlertImport | None = None
     github_change_control: GitHubChangeControl | None = None
     identity_lifecycle: IdentityLifecycleInput | None = None
@@ -1067,6 +1093,7 @@ class AssessmentRequest(Contract):
             and not self.review_ref
             and not packs
             and not self.methodology
+            and not self.security_plan
         ):
             raise ValueError(
                 "assessment requires native evidence or an explicit reviewRef"

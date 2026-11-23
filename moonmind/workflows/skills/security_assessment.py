@@ -34,7 +34,6 @@ from moonmind.security.assessments import (
     ProductBaseline,
     SecurityReview,
     TriageDecision,
-    WebAPITestPlan,
     compare_observations,
     content_key,
 )
@@ -2019,32 +2018,160 @@ class AssessmentExecution:
         await self.seal(root, dependencies)
         return root, report
 
+    async def project_snapshot_ref(self, project) -> str:
+        """The saved project snapshot, retained once per execution by digest."""
+        saved = await self.saved(kind="security.assessment-project", key=project.digest)
+        if saved:
+            return saved[0]
+        return await self.write(
+            _json(project.model_dump(mode="json", by_alias=True)),
+            kind="security.assessment-project",
+            key=project.digest,
+        )
+
+    async def load_security_plan(self, request, raw, readiness_ref=None):
+        """Validate a ``security-plan/v1`` against its packs and saved snapshot.
+
+        Reads only the selected pack artifacts and readiness results. No target
+        authority, credential or network reference is resolved.
+        """
+        from moonmind.security.security_plan import (
+            SecurityPlanError,
+            parse_security_plan,
+            validate_security_plan,
+        )
+
+        plan = parse_security_plan(raw) if isinstance(raw, bytes) else raw
+        if request.assessment_project is None:
+            raise SecurityPlanError(
+                [
+                    "subject.project: launch from the saved assessment project it was drafted from"
+                ]
+            )
+        if not request.scope.equivalent(plan.scope):
+            raise SecurityPlanError(["subject.scope: differs from the admitted scope"])
+        packs, pack_refs = {}, []
+        for index, standard in enumerate(plan.standards):
+            try:
+                ref, digest, pack = await self.retained_pack(standard)
+            except Exception:
+                raise SecurityPlanError(
+                    [f"standards[{index}]: selected pack is unavailable"]
+                ) from None
+            if digest != standard.sha256:
+                raise SecurityPlanError(
+                    [f"standards[{index}].sha256: differs from the selected pack"]
+                )
+            packs[(standard.pack_id, standard.edition)] = pack
+            pack_refs.append(ref)
+        readiness = None
+        if readiness_ref is not None:
+            _, body = await self.read(readiness_ref)
+            readiness = json.loads(body)
+            if not isinstance(readiness, dict) or not all(
+                isinstance(v, dict) for v in readiness.values()
+            ):
+                raise SecurityPlanError(
+                    ["readinessRef: must map planned job IDs to readiness results"]
+                )
+        plan = validate_security_plan(
+            plan,
+            packs=packs,
+            snapshot=request.assessment_project,
+            now=datetime.now(UTC),
+            readiness=readiness,
+        )
+        return plan, packs, pack_refs
+
+    async def prepare_security_plan(self, request):
+        """Validate, retain and seal a plan; an unchanged retry reuses it."""
+        selection = request.security_plan
+        if selection is None:
+            return None
+        from moonmind.security.security_plan import SecurityPlanError, plan_identity
+
+        try:
+            _, raw = await self.read(selection.plan_ref)
+            plan, _, pack_refs = await self.load_security_plan(
+                request, raw, selection.readiness_ref
+            )
+        except SecurityPlanError as exc:
+            raise ToolFailure("INVALID_INPUT", f"securityPlan: {exc}", False) from None
+        identity = plan_identity(plan)
+        saved = await self.saved(kind="security.plan", key=identity)
+        root = (
+            saved[0]
+            if saved
+            else await self.write(
+                _json(plan.model_dump(mode="json", by_alias=True)),
+                kind="security.plan",
+                key=identity,
+            )
+        )
+        project_ref = await self.project_snapshot_ref(request.assessment_project)
+        required = [
+            *pack_refs,
+            project_ref,
+            selection.plan_ref,
+            *([selection.readiness_ref] if selection.readiness_ref else []),
+        ]
+
+        async def dependencies():
+            return [
+                ArtifactDependency(
+                    ref, await self.digest(ref), True, "security.plan-dependency"
+                )
+                for ref in dict.fromkeys(required)
+            ]
+
+        await self.seal(root, dependencies)
+        return root, identity, plan
+
     async def prepare_methodology_plan(self, request):
         if request.methodology is None:
             return None
         from moonmind.security.framework_packs import load_declared_pack
+        from moonmind.security.security_plan import SecurityPlan, read_methodology_plan
         from moonmind.security.web_api_methodology import validate_plan
 
         _, raw = await self.read(request.methodology.plan_ref)
-        plan = WebAPITestPlan.model_validate_json(raw)
-        if not request.scope.equivalent(plan.scope):
-            raise ValueError("methodology plan differs from admitted scope")
-        _, raw = await self.read(plan.pack.artifact_ref)
-        if hashlib.sha256(raw).hexdigest() != plan.pack.sha256:
-            raise ValueError("methodology pack content differs from selected digest")
-        pack = load_declared_pack(
-            raw,
-            pack_id=plan.pack.pack_id,
-            edition=plan.pack.edition,
-            revision=plan.pack.revision,
-        )
-        if pack.distribution != "redistributable":
-            raise ValueError("portable methodology requires redistributable procedures")
-        validate_plan(plan, pack, now=datetime.now(UTC))
+        plan = read_methodology_plan(raw)
+        if isinstance(plan, SecurityPlan):
+            # The generalized plan carries no authority; the launch names the
+            # rules of engagement the operator reviewed.
+            if plan.methodology is None:
+                raise ValueError("security plan selects no web/API methodology")
+            authority_ref = request.methodology.authority_ref
+            if authority_ref is None:
+                raise ValueError("methodology.authorityRef is required")
+            plan, packs, pack_refs = await self.load_security_plan(request, plan)
+            pack = packs[(plan.pack.pack_id, plan.pack.edition)]
+            pack_ref = pack_refs[plan.standards.index(plan.pack)]
+        else:
+            authority_ref = plan.authority_ref
+            if not request.scope.equivalent(plan.scope):
+                raise ValueError("methodology plan differs from admitted scope")
+            pack_ref = plan.pack.artifact_ref
+            _, raw = await self.read(pack_ref)
+            if hashlib.sha256(raw).hexdigest() != plan.pack.sha256:
+                raise ValueError(
+                    "methodology pack content differs from selected digest"
+                )
+            pack = load_declared_pack(
+                raw,
+                pack_id=plan.pack.pack_id,
+                edition=plan.pack.edition,
+                revision=plan.pack.revision,
+            )
+            if pack.distribution != "redistributable":
+                raise ValueError(
+                    "portable methodology requires redistributable procedures"
+                )
+            validate_plan(plan, pack, now=datetime.now(UTC))
         # The rules of engagement are retained context, never a new execution
         # grant. Actual methods go through the existing job admission owners.
-        await self.read(plan.authority_ref)
-        return plan, pack
+        await self.read(authority_ref)
+        return plan, pack, pack_ref, authority_ref
 
     async def prepare_methodology(self, request, prepared, summaries):
         from moonmind.security.web_api_methodology import (
@@ -2055,9 +2182,9 @@ class AssessmentExecution:
             evidence_refs,
         )
 
-        plan, pack = prepared
+        plan, pack, pack_ref, authority_ref = prepared
         selection = request.methodology
-        required = [selection.plan_ref, plan.pack.artifact_ref, plan.authority_ref]
+        required = [selection.plan_ref, pack_ref, authority_ref]
         unavailable = []
         checked, total_bytes = set(), 0
 
@@ -2087,8 +2214,8 @@ class AssessmentExecution:
             required.extend(readable)
             # Every declared source is a prerequisite for its review. One
             # readable file cannot silently replace an inaccessible second file.
-            plan = plan.model_copy(
-                update={
+            plan = plan.with_context(
+                **{
                     field: (
                         readable if len(readable) == len(getattr(plan, field)) else []
                     )
@@ -2178,7 +2305,9 @@ class AssessmentExecution:
                 report["limitations"].append(
                     f"Retest baseline unavailable ({type(exc).__name__})"
                 )
-        required += evidence_refs(plan, results)
+        required += evidence_refs(
+            plan, results, pack_ref=pack_ref, authority_ref=authority_ref
+        )
         key = content_key(report)
         saved = await self.saved(kind="security.web-api-coverage", key=key)
         root = (
@@ -2211,6 +2340,7 @@ class AssessmentExecution:
         return root, report
 
     async def execute(self, request: AssessmentRequest) -> ToolResult:
+        security_plan = await self.prepare_security_plan(request)
         methodology_plan = await self.prepare_methodology_plan(request)
         request, framework_pack_context = await self.prepare_framework_pack(request)
         change_control = None
@@ -3459,6 +3589,16 @@ class AssessmentExecution:
                 change_control["reviewEvidenceRef"],
             ]
         summary_ref = None
+        if security_plan is not None:
+            from moonmind.security.security_plan import gap_list
+
+            plan_ref, plan_identity, plan = security_plan
+            evidence.append(plan_ref)
+            outputs.update(
+                securityPlanRef=plan_ref,
+                securityPlanIdentity=plan_identity,
+                securityPlanGaps=len(gap_list(plan)),
+            )
         methodology = None
         if methodology_plan is not None:
             try:
@@ -3490,18 +3630,7 @@ class AssessmentExecution:
             if request.assessment_project is not None:
                 project = request.assessment_project
                 project_digest = project.digest
-                saved_project = await self.saved(
-                    kind="security.assessment-project", key=project_digest
-                )
-                project_ref = (
-                    saved_project[0]
-                    if saved_project
-                    else await self.write(
-                        _json(project.model_dump(mode="json", by_alias=True)),
-                        kind="security.assessment-project",
-                        key=project_digest,
-                    )
-                )
+                project_ref = await self.project_snapshot_ref(project)
                 evidence.append(project_ref)
                 outputs["assessmentProjectRef"] = project_ref
                 # Retained configuration is context, not a claim that every
@@ -3556,6 +3685,10 @@ class AssessmentExecution:
                 + _github_summary(github)
                 + _review_summary(review, review_status)
             ).encode()
+            if security_plan is not None:
+                from moonmind.security.security_plan import render_security_plan
+
+                summary += render_security_plan(plan, plan_ref=plan_ref).encode()
             if methodology:
                 from moonmind.security.web_api_methodology import render_methodology
 
@@ -3618,6 +3751,7 @@ class AssessmentExecution:
                     else []
                 )
                 + ([project_digest] if project_digest else [])
+                + ([security_plan[1]] if security_plan else [])
                 + (
                     [control_ref]
                     if controls

@@ -23,7 +23,9 @@ from tests.unit.security import test_application_access_target as http_fixture
 from tests.unit.security.test_web_api_methodology import (
     PACK_PATH,
     plan_payload,
+    plan_project,
     request_payload,
+    security_plan_payload,
 )
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
@@ -32,7 +34,36 @@ access_target = http_fixture.target
 web_target = web.target
 
 
-async def retain_plan(service, *, asset="app", payload=None):
+# Rules of engagement the launch names for each retained security-plan/v1.
+AUTHORITY = {}
+
+
+async def put_plan(service, payload, *, legacy=False):
+    """Retain the working plan as security-plan/v1, or as a retained v1 plan."""
+    if legacy:
+        return await recurring.put(service, payload)
+    plan, _ = security_plan_payload(payload)
+    ref = await recurring.put(service, plan)
+    AUTHORITY[ref] = payload["authorityRef"]
+    return ref
+
+
+async def select_methodology(service, request, plan_ref):
+    plan = await recurring.read(service, plan_ref)
+    request["methodology"] = {"planRef": plan_ref}
+    if plan["schemaVersion"] == "security-plan/v1":
+        request["scope"] = plan["subject"]["scope"]
+        # The launch, not the plan, names its project and rules of engagement.
+        request["assessmentProject"] = plan_project(request["scope"]).model_dump(
+            mode="json", by_alias=True
+        )
+        request["methodology"]["authorityRef"] = AUTHORITY[plan_ref]
+    else:
+        request["scope"] = plan["scope"]
+    return request
+
+
+async def retain_plan(service, *, asset="app", payload=None, legacy=False):
     payload = payload or plan_payload()
     payload["scope"]["assets"] = [asset]
     payload["interfaces"][0].update(asset=asset, protocol="http", locator="/record")
@@ -63,7 +94,7 @@ async def retain_plan(service, *, asset="app", payload=None):
     payload["apiContextRefs"] = [
         await recurring.put(service, {"GET /record": "owner may read; other may not"})
     ]
-    ref = await recurring.put(service, payload)
+    ref = await put_plan(service, payload, legacy=legacy)
     return ref, payload
 
 
@@ -77,10 +108,7 @@ async def coverage(
     key="methodology",
     reviewer_notes=(),
 ):
-    request = request_payload()
-    plan = await recurring.read(service, plan_ref)
-    request["scope"] = plan["scope"]
-    request["methodology"] = {"planRef": plan_ref}
+    request = await select_methodology(service, request_payload(), plan_ref)
     if native_ref:
         request.update(
             tools=["retained-report"],
@@ -144,16 +172,20 @@ def access_runs(plan, native_ref, source_ref):
     ]
 
 
+@pytest.mark.parametrize("legacy_baseline", [False, True])
 async def test_real_authorization_finding_retest_and_retention(
-    environment, tmp_path, monkeypatch, access_target
+    environment, tmp_path, monkeypatch, access_target, legacy_baseline
 ):
+    """A retained web-api-test-plan/v1 report stays a comparable baseline."""
     service = environment.service
     virtual_origin = "http://fixture.test"
     monkeypatch.setattr(access_jobs, "ORIGIN", virtual_origin)
     monkeypatch.setattr(
         access_jobs, "target_scope", lambda: http_fixture.scope(access_target["origin"])
     )
-    plan_ref, plan = await retain_plan(service, asset=virtual_origin)
+    plan_ref, plan = await retain_plan(
+        service, asset=virtual_origin, legacy=legacy_baseline
+    )
     before_outputs, before = await coverage(
         service, plan_ref, key="plan-before-execution"
     )
@@ -179,7 +211,7 @@ async def test_real_authorization_finding_retest_and_retention(
         if not vulnerable:
             plan = copy.deepcopy(plan)
             plan["candidateRef"] = "fixture:repaired"
-            plan_ref = await recurring.put(service, plan)
+            plan_ref = await put_plan(service, plan)
         policy = http_fixture.selected("other")
         raw_spec = policy.model_dump_json(by_alias=True).encode()
         await job.launch(
@@ -312,7 +344,7 @@ async def test_unexecuted_selections_stay_incomplete_in_retained_reports(
                 reason="This controlled scenario selects only the authorization objective.",
                 procedures=[],
             )
-    control_ref = await recurring.put(service, plan)
+    control_ref = await put_plan(service, plan)
     missing_asset = "http://unassessed.test" if gap == "asset" else asset
     missing_path = "/unexecuted" if gap == "endpoint" else "/record"
     plan = copy.deepcopy(plan)
@@ -387,7 +419,7 @@ async def test_unexecuted_selections_stay_incomplete_in_retained_reports(
                 )
         else:
             plan["candidateRef"] = "fixture:repaired"
-        plan_ref = await recurring.put(service, plan)
+        plan_ref = await put_plan(service, plan)
         outputs, report = await coverage(
             service,
             plan_ref,
@@ -453,7 +485,7 @@ async def test_primary_report_preserves_objective_states_and_redacts_credentials
                 reason="Excluded from this controlled review.",
                 procedures=[],
             )
-    plan_ref = await recurring.put(service, plan)
+    plan_ref = await put_plan(service, plan)
     runs = (
         [
             {
@@ -539,7 +571,7 @@ async def test_web_and_api_jobs_feed_actual_methods_without_completing_logic(
             if objective["id"] in {"configuration", "input-output"}:
                 for procedure in objective["procedures"]:
                     procedure["identityIds"] = []
-    plan_ref = await recurring.put(environment.service, plan)
+    plan_ref = await put_plan(environment.service, plan)
     native, _, _, accepted, _ = await harness.run(web.assessment(app, **options), mode)
     native_ref = web.artifact_names(harness, accepted)["summary"]["artifactRef"]
     assert "GET " + path in native["coverage"]["testedRoutes"]
@@ -597,7 +629,7 @@ async def test_web_and_api_jobs_feed_actual_methods_without_completing_logic(
                 procedure["interfaceIds"].append("unexecuted")
                 if gap == "asset":
                     procedure["assets"].append(missing_asset)
-        uncovered_ref = await recurring.put(environment.service, uncovered)
+        uncovered_ref = await put_plan(environment.service, uncovered)
         uncovered_outputs, partial = await coverage(
             environment.service,
             uncovered_ref,
@@ -659,7 +691,7 @@ async def test_multiple_web_targets_complete_only_with_all_retained_native_repor
                     reason="This scenario selects configuration coverage only.",
                     procedures=[],
                 )
-        plan_ref = await recurring.put(service, plan)
+        plan_ref = await put_plan(service, plan)
         native_refs = []
         routes = [{"path": "/fixed/search", "methods": ["GET"]}]
         admitted = web.scope(targets[0][0]).model_dump(mode="json", by_alias=True)
@@ -732,7 +764,7 @@ async def test_reporting_retry_preserves_completed_native_work_and_reuses_covera
     service = environment.service
     plan_ref, plan = await retain_plan(service)
     request, _, _ = await recurring.inputs(service)
-    request["methodology"] = {"planRef": plan_ref}
+    request = await select_methodology(service, request, plan_ref)
     original = AssessmentExecution.prepare_methodology
 
     async def unavailable(*args):
@@ -783,7 +815,7 @@ async def test_one_readable_file_does_not_replace_missing_source_context(environ
     plan_ref, plan = await retain_plan(service)
     source = plan["sourceRefs"][0]
     plan["sourceRefs"].append("art_missing_source")
-    plan_ref = await recurring.put(service, plan)
+    plan_ref = await put_plan(service, plan)
     runs = [
         {
             "objectiveId": "authorization",
@@ -809,7 +841,7 @@ async def test_report_retry_refreshes_presentation_without_repeating_completed_w
     service = environment.service
     plan_ref, _ = await retain_plan(service)
     request, _, _ = await recurring.inputs(service)
-    request["methodology"] = {"planRef": plan_ref}
+    request = await select_methodology(service, request, plan_ref)
     original = await recurring.invoke(service, request)
     render = web_api_methodology.render_methodology
 

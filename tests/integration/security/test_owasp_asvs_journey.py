@@ -17,7 +17,11 @@ from moonmind.security.passive_repo_scan import run_passive_scan
 from tests.integration.security import test_recurring_assessments as recurring
 from tests.integration.security.quality import MANIFEST
 from tests.integration.security.quality import OUTPUT as QUALITY_OUTPUT
-from tests.integration.security.test_web_api_methodology_journey import retain_plan
+from tests.integration.security.test_web_api_methodology_journey import (
+    put_plan,
+    retain_plan,
+    select_methodology,
+)
 from tests.unit.security.test_owasp_asvs_pack import (
     opengrep_summary,
     trivy_dependency_summary,
@@ -178,7 +182,7 @@ async def test_methodology_coverage_states_survive_beside_asvs_conclusions(envir
     """The six web/API procedures keep their own coverage states and report."""
     service = environment.service
     _, plan = await retain_plan(service)
-    plan_ref = await recurring.put(service, plan)
+    plan_ref = await put_plan(service, plan)
     runs = [
         {
             "objectiveId": "authorization",
@@ -218,14 +222,14 @@ async def test_methodology_coverage_states_survive_beside_asvs_conclusions(envir
     selection = general_best_practices(assets=["app"])
     selection["requirementChoices"]["V1.3.2"].pop("systems")
     request = {
-        "scope": plan["scope"],
         "tools": [],
         "credentialRefs": [],
         "networkRefs": [],
         "budget": BUDGET,
-        "methodology": {"planRef": plan_ref, "resultsRef": results_ref},
         "frameworkPacks": [selection],
     }
+    request = await select_methodology(service, request, plan_ref)
+    request["methodology"]["resultsRef"] = results_ref
     outputs = await recurring.invoke(service, request, key="asvs-methodology")
     methodology = await recurring.read(service, outputs["methodologyRef"])
     states = {row["id"]: row["status"] for row in methodology["objectives"]}
