@@ -6,6 +6,31 @@ export interface EvidenceProcessingPolicy {
   modelDelivery: 'allowed' | 'disabled' | 'local_only';
   allowedProfileRefs: string[];
 }
+export interface DeclaredFramework {
+  packId: string;
+  edition: string;
+  revision: string;
+  artifactRef: string;
+  sha256: string;
+}
+export type SavedFramework = { id: string; edition: string } | DeclaredFramework;
+export interface CatalogFramework {
+  source: 'builtin' | 'skill' | 'declared';
+  id: string;
+  title: string;
+  edition: string | null;
+  revision?: string;
+  artifactRef?: string;
+  sha256?: string;
+  available: boolean;
+  reason: string | null;
+}
+export async function fetchFrameworkPacks(): Promise<CatalogFramework[]> {
+  const response = await fetch('/api/v1/settings/framework-packs', { headers: { Accept: 'application/json' } });
+  if (!response.ok) throw await responseError(response, 'Could not load assessment standards');
+  return (await response.json()).items;
+}
+
 export interface AssessmentEnvironment {
   id: string;
   name: string;
@@ -19,7 +44,7 @@ export interface AssessmentEnvironment {
   credentialRefs: string[];
   dataClassification: 'public' | 'internal' | 'confidential' | 'restricted';
   evidenceProcessing?: EvidenceProcessingPolicy | null;
-  frameworks: Array<{ id: string; edition: string }>;
+  frameworks: SavedFramework[];
   jurisdictions: string[];
   period: { start: string; end: string } | null;
   budget: { baseSeconds: number; maxSeconds: number; progressStallSeconds: number };

@@ -1,0 +1,64 @@
+{
+  "gli-19-readiness": {
+    "entityType": {
+      "enum": [
+        "operator",
+        "rgs",
+        "ancillary_provider"
+      ],
+      "type": "string",
+      "title": "Entity Type"
+    }
+  },
+  "nj-dge-readiness": {
+    "entityType": {
+      "enum": [
+        "casino_licensee",
+        "rgs_content_provider",
+        "unrelated_supplier"
+      ],
+      "type": "string",
+      "title": "Entity Type"
+    },
+    "annualRules": {
+      "items": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string",
+        "enum": [
+          "nj.internet.annual",
+          "nj.network.annual",
+          "nj.rgs.annual"
+        ]
+      },
+      "maxItems": 256,
+      "type": "array",
+      "title": "Annual Rules"
+    }
+  },
+  "ukgc-rts-security": {
+    "licenceClass": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": "string",
+      "title": "Licence Class",
+      "enum": [
+        "remote_betting_host_real",
+        "remote_betting_host_virtual",
+        "remote_betting_intermediary",
+        "remote_bingo",
+        "remote_casino",
+        "remote_external_lottery_manager",
+        "remote_game_host_bingo",
+        "remote_game_host_casino",
+        "remote_general_betting",
+        "remote_lottery",
+        "remote_pool_betting",
+        "remote_society_lottery",
+        "software_supplier",
+        "telephone_only",
+        "trading_room"
+      ]
+    }
+  }
+}

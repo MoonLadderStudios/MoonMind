@@ -1411,175 +1411,13 @@ class AssessmentExecution:
     ) -> tuple[str, dict] | None:
         if request.framework is None:
             return None
-        from moonmind.security.frameworks import (
-            FrameworkEvidence,
-            FrameworkPack,
-            load_framework_pack,
+        from moonmind.security.framework_registry import readiness_pack
+
+        entry = readiness_pack(request.framework.pack_id)
+        system = entry.input_model.model_validate(request.framework.system_inputs)
+        return await entry.prepare(
+            self, request, system=system, collected_evidence_refs=collected_evidence_refs
         )
-
-        selection = request.framework
-        if selection.pack_id in {"iso-27001-readiness", "soc2-readiness"}:
-            from importlib import import_module
-
-            from moonmind.security.builtin_frameworks import prepare_builtin_framework
-
-            module = import_module(
-                "moonmind.security."
-                + {
-                    "iso-27001-readiness": "iso_27001",
-                    "soc2-readiness": "soc2_readiness",
-                }[selection.pack_id]
-            )
-            return await prepare_builtin_framework(
-                self,
-                request,
-                module=module,
-                collected_evidence_refs=collected_evidence_refs,
-            )
-        pack = load_framework_pack(selection.pack_id)
-        if pack.id == "gli-19-readiness":
-            from moonmind.security.gli_readiness import (
-                GLIEvidence,
-                GLISystemInputs,
-                prepare_assessment,
-            )
-
-            system = GLISystemInputs.model_validate(selection.system_inputs)
-            systems = set(system.systems)
-            evidence_type, prepare = GLIEvidence, prepare_assessment
-            if selection.audit_ref:
-                raise ValueError("GLI evidence belongs in evidenceRefs")
-        elif pack.id == "nj-dge-readiness":
-            from moonmind.security.nj_dge import (
-                AnnualAssessmentRecords,
-                NJEvidence,
-                NJSystemInputs,
-                prepare_assessment,
-            )
-
-            systems = set(
-                NJSystemInputs.model_validate(selection.system_inputs).systems
-            )
-            audit_type, evidence_type = AnnualAssessmentRecords, NJEvidence
-            prepare = prepare_assessment
-        else:
-            from moonmind.security.ukgc_rts import (
-                AuditRecord,
-                UKGCSystemInputs,
-                prepare_audit,
-            )
-
-            system = UKGCSystemInputs.model_validate(selection.system_inputs)
-            systems = {
-                s
-                for row in system.critical_systems
-                if row.in_scope
-                for s in row.systems
-            }
-            audit_type, evidence_type = AuditRecord, FrameworkEvidence
-            prepare = prepare_audit
-        if not systems <= set(request.scope.assets):
-            raise ValueError("Framework systems exceed admitted assessment scope")
-        audit = None
-        evidence_refs = list(
-            dict.fromkeys([*selection.evidence_refs, *collected_evidence_refs])
-        )
-        refs = list(evidence_refs)
-        previous = None
-        if selection.previous_assessment_ref:
-            _, body = await self.read(selection.previous_assessment_ref)
-            previous = json.loads(body)
-            previous_pack = FrameworkPack.model_validate(
-                previous.get("pack") if isinstance(previous, dict) else None
-            )
-            if previous_pack.id != pack.id:
-                raise ValueError(
-                    "Previous assessment must be a report for the selected framework"
-                )
-            refs.append(selection.previous_assessment_ref)
-        if pack.id == "gli-19-readiness":
-            source_ref = system.jurisdiction_basis.source_ref
-            if source_ref and ARTIFACT_ID_PATTERN.fullmatch(source_ref):
-                refs.append(source_ref)
-        if selection.audit_ref:
-            _, body = await self.read(selection.audit_ref)
-            audit = audit_type.model_validate_json(body)
-            refs.append(selection.audit_ref)
-            if pack.id == "nj-dge-readiness":
-                refs.extend(audit.supporting_refs())
-            elif audit.auditor.independence_ref:
-                refs.append(audit.auditor.independence_ref)
-        records, invalid = [], []
-        for ref in evidence_refs:
-            _, body = await self.read(ref)
-            try:
-                # The artifact owner supplies this identity, not authored JSON.
-                payload = json.loads(body)
-                evidence = evidence_type.model_validate({**payload, "artifactRef": ref})
-            except (ValueError, TypeError):
-                invalid.append(ref)
-                continue
-            records.append(evidence.model_dump(mode="json", by_alias=True))
-            if pack.id == "nj-dge-readiness":
-                refs.extend(evidence.supporting_refs())
-            if ARTIFACT_ID_PATTERN.fullmatch(evidence.provenance.source_ref):
-                refs.append(evidence.provenance.source_ref)
-            if evidence.reliance:
-                refs.append(evidence.reliance.review_ref)
-        for ref in dict.fromkeys(refs):
-            await self.digest(ref)
-        report = prepare(
-            selection,
-            evidence=records,
-            audit=audit.model_dump(mode="json", by_alias=True) if audit else None,
-        )
-        if previous is not None:
-            if previous.get("schemaVersion") != report["schemaVersion"]:
-                raise ValueError(
-                    "Previous assessment must use the selected report schema"
-                )
-            report["reassessment"] = {
-                "previousRef": selection.previous_assessment_ref,
-                "previousEdition": previous["pack"]["edition"],
-                "packChanged": previous["pack"] != report["pack"],
-                "jurisdictionBasisChanged": previous.get("jurisdictionBasis")
-                != report.get("jurisdictionBasis"),
-            }
-        for ref in invalid:
-            prompt = "Supply a scoped evidence record with provenance, period, systems, control IDs and enquiry/evidence/observation method; an uploaded document alone cannot establish control coverage."
-            if pack.id == "gli-19-readiness":
-                prompt += " Include evidenceType, outcome, edition and provenance.standard (module and edition); regulator evidence also needs jurisdiction."
-            report["evidenceRequests"].append(
-                {
-                    "id": "evidence." + ref,
-                    "artifactRef": ref,
-                    "prompt": prompt,
-                }
-            )
-            report["readiness"] = "incomplete"
-        key = content_key(
-            {
-                "request": selection.model_dump(mode="json", by_alias=True),
-                "pack": pack.model_dump(mode="json", by_alias=True),
-                "evidence": {ref: self.digests[ref] for ref in sorted(set(refs))},
-            }
-        )
-        saved = await self.saved(kind="security.framework", key=key)
-        if saved:
-            root, report = saved
-        else:
-            root = await self.write(_json(report), kind="security.framework", key=key)
-
-        async def dependencies():
-            return [
-                ArtifactDependency(
-                    ref, await self.digest(ref), True, "security.framework-input"
-                )
-                for ref in dict.fromkeys(refs)
-            ]
-
-        await self.seal(root, dependencies)
-        return root, report
 
     async def read_declared_pack(self, selection, index, scope, now):
         from moonmind.security.evidence_exports import validation_summary
@@ -3305,15 +3143,10 @@ class AssessmentExecution:
                 frameworkEdition=framework_report["pack"]["edition"],
                 evidenceRequests=framework_report["evidenceRequests"],
             )
-            if framework_report["pack"]["id"] == "gli-19-readiness":
-                outputs.update(
-                    frameworkJurisdictionBasis=framework_report["jurisdictionBasis"],
-                    frameworkScope=framework_report["systemInputs"],
-                    frameworkUnresolvedRequirements=framework_report[
-                        "unresolvedRequirements"
-                    ],
-                    externalVerification=framework_report["externalVerification"],
-                )
+            from moonmind.security.framework_registry import readiness_pack
+
+            fields = readiness_pack(framework_report["pack"]["id"]).output_fields
+            outputs.update({name: framework_report[field] for name, field in fields})
         summary_ref = None
         methodology = None
         if methodology_plan is not None:

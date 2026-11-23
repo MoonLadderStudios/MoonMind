@@ -1,4 +1,6 @@
+import json
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -22,6 +24,7 @@ from api_service.db.models import (
     SettingsOverride,
 )
 from api_service.main import app
+from api_service.services.single_user_conversion import run_guarded_upgrade
 from moonmind.security.operator_admission import OperatorAdmission
 from api_service.services.settings_catalog import (
     _CATALOG_MIGRATION_RULES,
@@ -1425,3 +1428,181 @@ async def test_catalog_reset_preview_matches_delete_and_reloaded_value(settings_
         restored = next(d for d in refreshed.json()["categories"]["Workflow"] if d["key"] == key)
         assert restored["effective_value"] == descriptor["reset_value"]
         assert restored["source"] == ("instance_override" if legacy else "environment")
+
+
+@pytest.mark.asyncio
+async def test_framework_catalog_lists_installed_readiness_and_skill(settings_api_db):
+
+    async with settings_api_db() as session:
+        await run_guarded_upgrade(session, operator_authorized=True)
+    async with AsyncClient(
+        transport=ASGITransport(app=app, client=("127.0.0.1", 1234)),
+        base_url="http://localhost",
+    ) as client:
+        response = await client.get("/api/v1/settings/framework-packs")
+    assert response.status_code == 200, response.text
+    packs = {item["id"]: item for item in response.json()["items"]}
+    assert set(packs) == {
+        "iso-27001-readiness",
+        "soc2-readiness",
+        "gli-19-readiness",
+        "nj-dge-readiness",
+        "ukgc-rts-security",
+        "web-api-methodology",
+    }
+    assert packs["web-api-methodology"]["requirementCount"] == 6
+
+    fixture_path = Path(__file__).resolve().parents[4] / "fixtures/security/readiness_form_fields.json"
+    form_fields = json.loads(fixture_path.read_text())
+    for pack_id, fields in form_fields.items():
+        schema = packs[pack_id]["inputSchema"]
+        assert schema["type"] == "object"
+        assert schema["additionalProperties"] is False
+        assert {name: schema["properties"][name] for name in fields} == fields
+
+    for item in packs.values():
+        assert item["inputSchema"]["properties"]
+        assert item["requirementCount"] > 0
+        assert item["subjects"]["network"]["reason"]
+        assert not item["subjects"]["network"]["available"]
+        assert "requirements" not in item
+
+
+@pytest.mark.asyncio
+async def test_catalog_checks_saved_pack_identity_access_and_effectivity(
+    settings_api_db, monkeypatch
+):
+    import hashlib
+
+    from moonmind.workflows.temporal.artifacts import (
+        TemporalArtifactStateError,
+        TemporalArtifactNotFoundError,
+    )
+    from tests.unit.security.test_assessment_projects import project_document
+    from tests.unit.security.test_framework_packs import payload
+
+    async with settings_api_db() as session:
+        await run_guarded_upgrade(session, operator_authorized=True)
+
+    doc = project_document()
+    saved = doc["projects"][0]["environments"][0]["frameworks"] = [
+        {"id": "old", "edition": "legacy"}
+    ]
+    content = {}
+    for kind, change in {
+        "private": {"distribution": "restricted"},
+        "missing": {},
+        "denied": {},
+        "mismatch": {},
+        "wrongid": {},
+        "draft": {"publicationStatus": "draft"},
+        "superseded": {"publicationStatus": "superseded"},
+        "expired": {"effectiveUntil": "2026-02-01"},
+        "future": {"effectiveFrom": "2099-01-01"},
+        "prohibited": {"distribution": "prohibited"},
+    }.items():
+        raw = json.dumps(
+            {
+                **payload(),
+                "title": "private-title",
+                "license": "private-license",
+                **change,
+            }
+        ).encode()
+        ref = "art_" + kind
+        content[ref] = raw
+        saved.append(
+            {
+                "packId": "different" if kind == "wrongid" else "example",
+                "edition": "2026",
+                "revision": "1",
+                "artifactRef": ref,
+                "sha256": (
+                    "0" * 64 if kind == "mismatch" else hashlib.sha256(raw).hexdigest()
+                ),
+            }
+        )
+
+    async def metadata(*, artifact_id, access):
+        assert access.is_operator
+        if artifact_id == "art_missing":
+            raise TemporalArtifactNotFoundError(artifact_id)
+        return (
+            SimpleNamespace(size_bytes=len(content[artifact_id])),
+            [],
+            False,
+            SimpleNamespace(raw_access_allowed=artifact_id != "art_denied"),
+        )
+
+    async def read(*, artifact_id, access):
+        assert access.is_operator and artifact_id not in {"art_denied", "art_missing"}
+        return None, content[artifact_id]
+
+    def reader(_repo):
+        return SimpleNamespace(get_metadata=metadata, read=read)
+
+    monkeypatch.setattr(
+        "api_service.services.framework_catalog.TemporalArtifactService", reader
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app, client=("127.0.0.1", 1234)),
+        base_url="http://localhost",
+    ) as client:
+        key = "security.assessment_projects"
+        effective = await client.get(f"/api/v1/settings/effective/{key}")
+        assert effective.status_code == 200
+        response = await client.patch(
+            "/api/v1/settings",
+            json={
+                "changes": {key: doc},
+                "expected_versions": {key: effective.json()["value_version"]},
+                "reason": "Register standards",
+            },
+        )
+        assert response.status_code == 200, response.text
+        response = await client.get("/api/v1/settings/framework-packs")
+
+        def unavailable(_repo):
+            raise TemporalArtifactStateError("private-storage-diagnostic")
+
+        monkeypatch.setattr(
+            "api_service.services.framework_catalog.TemporalArtifactService",
+            unavailable,
+        )
+        offline = await client.get("/api/v1/settings/framework-packs")
+        assert offline.status_code == 200, offline.text
+        offline_items = [
+            p for p in offline.json()["items"] if p["source"] == "declared"
+        ]
+        assert len(offline_items) == len(content)
+        assert all(not p["available"] and p["reason"] for p in offline_items)
+        assert "private-storage-diagnostic" not in offline.text
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    assert {"builtin", "skill", "declared"} == {item["source"] for item in items}
+    declared = {
+        item["artifactRef"]: item for item in items if item["source"] == "declared"
+    }
+    assert set(declared) == set(content)
+    for registration in saved[1:]:
+        item = declared[registration["artifactRef"]]
+        assert item["id"] == registration["packId"]
+        assert all(
+            item[key] == registration[key] for key in ("revision", "edition", "sha256")
+        )
+        assert item["available"] == (item["artifactRef"] == "art_private")
+        if not item["available"]:
+            assert item["reason"]
+        if item["artifactRef"] in {
+            "art_private",
+            "art_missing",
+            "art_denied",
+            "art_mismatch",
+            "art_prohibited",
+            "art_wrongid",
+        }:
+            assert "private-title" not in json.dumps(item)
+            assert "private-license" not in json.dumps(item)
+    assert declared["art_private"]["requirementCount"] == 1
+    assert "deterministic_check" in declared["art_private"]["evidenceKinds"]
+    assert "Secret description" not in response.text

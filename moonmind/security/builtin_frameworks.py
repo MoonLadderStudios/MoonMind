@@ -15,7 +15,7 @@ def review_requirement(
     requests,
     required_purposes,
     now,
-    evidence_availability
+    evidence_availability,
 ):
     requirement = ControlRequirement(
         id=requirement_id,
@@ -50,7 +50,7 @@ def review_requirement(
 
 
 async def prepare_builtin_framework(
-    execution, request, *, module, collected_evidence_refs=()
+    execution, request, *, module, system, collected_evidence_refs=()
 ):
     """Resolve current documentary evidence through the existing artifact owner.
 
@@ -80,7 +80,6 @@ async def prepare_builtin_framework(
 
     selection = request.framework
     pack = load_framework_pack(selection.pack_id)
-    system = module.SystemInputs.model_validate(selection.system_inputs)
     if not set(system.systems) <= set(request.scope.assets):
         raise ValueError("Framework systems exceed admitted assessment scope")
     if selection.audit_ref:
@@ -182,6 +181,135 @@ async def prepare_builtin_framework(
                 ref, await execution.digest(ref), True, "security.framework-input"
             )
             for ref in dict.fromkeys(readable)
+        ]
+
+    await execution.seal(root, dependencies)
+    return root, report
+
+
+async def prepare_scoped_framework(
+    execution,
+    request,
+    *,
+    system,
+    collected_evidence_refs,
+    prepare,
+    evidence_type,
+    audit_type=None,
+    scoped_systems=lambda system: system.systems,
+    system_refs=lambda system: (),
+    evidence_refs_for=lambda evidence: (),
+    audit_refs=lambda audit: (),
+    evidence_guidance="",
+):
+    """Resolve evidence and retain the scoped report using the registered contracts."""
+    import json
+    from moonmind.security.assessments import content_key
+    from moonmind.security.frameworks import load_framework_pack
+    from moonmind.workflows.temporal.artifacts import (
+        ARTIFACT_ID_PATTERN,
+        ArtifactDependency,
+    )
+
+    selection = request.framework
+    pack = load_framework_pack(selection.pack_id)
+    if selection.audit_ref and audit_type is None:
+        raise ValueError("This framework accepts evidenceRefs only for audit evidence")
+    systems = set(scoped_systems(system))
+    if not systems <= set(request.scope.assets):
+        raise ValueError("Framework systems exceed admitted assessment scope")
+    audit = None
+    evidence_refs = list(
+        dict.fromkeys([*selection.evidence_refs, *collected_evidence_refs])
+    )
+    refs = list(evidence_refs)
+    previous = None
+    if selection.previous_assessment_ref:
+        _, body = await execution.read(selection.previous_assessment_ref)
+        previous = json.loads(body)
+        previous_pack = type(pack).model_validate(
+            previous.get("pack") if isinstance(previous, dict) else None
+        )
+        if previous_pack.id != pack.id:
+            raise ValueError(
+                "Previous assessment must be a report for the selected framework"
+            )
+        refs.append(selection.previous_assessment_ref)
+    refs.extend(
+        ref for ref in system_refs(system) if ref and ARTIFACT_ID_PATTERN.fullmatch(ref)
+    )
+    if selection.audit_ref:
+        _, body = await execution.read(selection.audit_ref)
+        audit = audit_type.model_validate_json(body)
+        refs.append(selection.audit_ref)
+        refs.extend(audit_refs(audit))
+    records, invalid = [], []
+    for ref in evidence_refs:
+        _, body = await execution.read(ref)
+        try:
+            # The artifact owner supplies this identity, not authored JSON.
+            payload = json.loads(body)
+            evidence = evidence_type.model_validate({**payload, "artifactRef": ref})
+        except (ValueError, TypeError):
+            invalid.append(ref)
+            continue
+        records.append(evidence.model_dump(mode="json", by_alias=True))
+        refs.extend(evidence_refs_for(evidence))
+        if ARTIFACT_ID_PATTERN.fullmatch(evidence.provenance.source_ref):
+            refs.append(evidence.provenance.source_ref)
+        if evidence.reliance:
+            refs.append(evidence.reliance.review_ref)
+    for ref in dict.fromkeys(refs):
+        await execution.digest(ref)
+    report = prepare(
+        selection,
+        evidence=records,
+        audit=audit.model_dump(mode="json", by_alias=True) if audit else None,
+    )
+    if previous is not None:
+        if previous.get("schemaVersion") != report["schemaVersion"]:
+            raise ValueError("Previous assessment must use the selected report schema")
+        report["reassessment"] = {
+            "previousRef": selection.previous_assessment_ref,
+            "previousEdition": previous["pack"]["edition"],
+            "packChanged": previous["pack"] != report["pack"],
+            "jurisdictionBasisChanged": previous.get("jurisdictionBasis")
+            != report.get("jurisdictionBasis"),
+        }
+    for ref in invalid:
+        prompt = "Supply a scoped evidence record with provenance, period, systems, control IDs and enquiry/evidence/observation method; an uploaded document alone cannot establish control coverage."
+        prompt += evidence_guidance
+        report["evidenceRequests"].append(
+            {
+                "id": "evidence." + ref,
+                "artifactRef": ref,
+                "prompt": prompt,
+            }
+        )
+        report["readiness"] = "incomplete"
+    key = content_key(
+        {
+            "request": selection.model_dump(mode="json", by_alias=True),
+            "pack": pack.model_dump(mode="json", by_alias=True),
+            "evidence": {ref: execution.digests[ref] for ref in sorted(set(refs))},
+        }
+    )
+    saved = await execution.saved(kind="security.framework", key=key)
+    if saved:
+        root, report = saved
+    else:
+        root = await execution.write(
+            json.dumps(report, sort_keys=True, separators=(",", ":")).encode(),
+            kind="security.framework",
+            key=key,
+        )
+
+    async def dependencies():
+        return [
+            ArtifactDependency(
+                ref, await execution.digest(ref), True, "security.framework-input"
+            )
+            for ref in dict.fromkeys(refs)
         ]
 
     await execution.seal(root, dependencies)

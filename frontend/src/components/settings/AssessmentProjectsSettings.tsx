@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { FrameworkPicker } from './FrameworkPicker';
 import { Button } from '../Button';
 import { responseError } from '../../lib/api/client';
 import { ASSESSMENT_PROJECTS_KEY, createAssessmentEnvironment, createAssessmentProject, readAssessmentProjects, type AssessmentEnvironment, type AssessmentProject, type AssessmentProjects } from '../../lib/assessmentProjects';
@@ -57,14 +58,7 @@ export function AssessmentEnvironmentFields({ environment: env, onChange, disabl
       </div>)}
       <Button variant="ghost" onClick={() => update({ cloudAccountCandidates: [...env.cloudAccountCandidates, { provider: 'aws', account: '', regions: [] }] })}>Add AWS account</Button>
     </fieldset>
-    <fieldset className="space-y-2"><legend className="font-medium">Frameworks</legend>
-      {env.frameworks.map((framework, i) => <div key={i} className="grid gap-2 sm:grid-cols-3">
-        <Field label="Framework ID" value={framework.id} onChange={id => update({ frameworks: env.frameworks.map((item, index) => index === i ? { ...item, id } : item) })} />
-        <Field label="Framework edition" value={framework.edition} onChange={edition => update({ frameworks: env.frameworks.map((item, index) => index === i ? { ...item, edition } : item) })} />
-        <Button variant="ghost" onClick={() => update({ frameworks: env.frameworks.filter((_, index) => index !== i) })}>Remove framework</Button>
-      </div>)}
-      <Button variant="ghost" onClick={() => update({ frameworks: [...env.frameworks, { id: '', edition: '' }] })}>Add framework</Button>
-    </fieldset>
+    <FrameworkPicker frameworks={env.frameworks} onChange={frameworks => update({ frameworks })} allowRegistration={allowIdentityEdit} />
     <div className="grid gap-3 sm:grid-cols-2">
       <Field label="Evidence period start (YYYY-MM-DD)" type="date" value={env.period?.start ?? ''} onChange={start => update({ period: { start, end: env.period?.end ?? '' } })} />
       <Field label="Evidence period end (YYYY-MM-DD)" type="date" value={env.period?.end ?? ''} onChange={end => update({ period: { start: env.period?.start ?? '', end } })} />
@@ -104,7 +98,7 @@ export function AssessmentProjectsSettings() {
     try {
       const response = await fetch('/api/v1/settings', { method: 'PATCH', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify({ changes: { [ASSESSMENT_PROJECTS_KEY]: draft.value }, expected_versions: { [ASSESSMENT_PROJECTS_KEY]: draft.version }, reason: 'Updated reusable assessment context from Settings.' }) });
       if (!response.ok) throw await responseError(response, `Assessment context save failed (${response.status}).`);
-      await client.invalidateQueries({ queryKey: ['settings-catalog'] });
+      await Promise.all([client.invalidateQueries({ queryKey: ['settings-catalog'] }), client.invalidateQueries({ queryKey: ['framework-packs'] })]);
       await client.invalidateQueries({ queryKey: ['settings-audit', ASSESSMENT_PROJECTS_KEY] });
       setDraft(null); setNotice('Assessment context saved.');
     } catch (cause) { setError(`${cause instanceof Error ? cause.message : 'Save failed.'} Your draft is retained. For a concurrent change, review the saved context before retrying.`); }

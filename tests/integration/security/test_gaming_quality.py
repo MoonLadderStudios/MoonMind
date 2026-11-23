@@ -7,6 +7,8 @@ assessment and report owners run. No money or external targets are involved.
 import copy
 import json
 import re
+from dataclasses import replace
+from functools import partial
 
 import pytest
 
@@ -443,27 +445,29 @@ async def test_gaming_corpus_rejects_false_prepared_headline(
     environment, monkeypatch, tmp_path, boundary
 ):
     from moonmind.security import gli_readiness
+    from moonmind.security.framework_registry import READINESS_PACKS
     from tests.integration.security import quality
 
-    original = gli_readiness.prepare_assessment
-
-    def false_pass(*args, **kwargs):
-        result = original(*args, **kwargs)
-        result["readiness"] = "prepared"
-        return result
-
     monkeypatch.setattr(quality, "OUTPUT", tmp_path / "rejected-headline")
+    pack_id = gli_readiness.GLI_PACK.id
+    pack = READINESS_PACKS[pack_id]
     if boundary == "producer":
-        monkeypatch.setattr(gli_readiness, "prepare_assessment", false_pass)
+
+        def false_pass(*args, **kwargs):
+            result = gli_readiness.prepare_assessment(*args, **kwargs)
+            result["readiness"] = "prepared"
+            return result
+
+        # Inject before the registered producer persists the report.
+        faulty_pack = replace(pack, prepare=partial(pack.prepare, prepare=false_pass))
     else:
-        render = gli_readiness.render_assessment
-        monkeypatch.setattr(
-            gli_readiness,
-            "render_assessment",
-            lambda report: render(report).replace(
+        faulty_pack = replace(
+            pack,
+            render=lambda report: pack.render(report).replace(
                 "Readiness: incomplete", "Readiness: prepared"
             ),
         )
+    monkeypatch.setitem(READINESS_PACKS, pack_id, faulty_pack)
     case = next(c for c in CASES if c["id"] == "gaming-gli-defective")
     expected_failure = (
         "incorrectSatisfiedConclusions"

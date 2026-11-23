@@ -1838,6 +1838,15 @@ def load_seed_template_definitions(seed_dir: Path) -> list[dict[str, Any]]:
         document = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
         if not isinstance(document, dict):
             continue
+        schema = (document.get("annotations") or {}).get("inputSchema", {})
+        system = schema.get("properties", {}).get("system_inputs", {})
+        if pack_id := system.pop("x-framework-inputs", None):
+            from moonmind.security.framework_registry import readiness_pack
+
+            schema["properties"]["system_inputs"] = {
+                **readiness_pack(pack_id).input_schema(),
+                **system,
+            }
         document["seedSource"] = str(yaml_path)
         loaded.append(document)
     return loaded

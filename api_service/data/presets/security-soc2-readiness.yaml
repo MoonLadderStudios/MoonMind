@@ -11,6 +11,8 @@ requiredCapabilities:
 annotations:
   workflowPublish:
     mode: none
+  uiSchema:
+    system_inputs: {showJsonEditor: true}
   inputSchema:
     type: object
     required:
@@ -26,35 +28,9 @@ annotations:
         minItems: 1
         description: Admit the system identifiers examined by this assessment.
       system_inputs:
-        type: object
         title: Saved service and evidence inputs
-        required:
-        - assessmentType
-        properties:
-          assessmentType:
-            type: string
-            enum:
-            - type1
-            - type2
-          categories:
-            type: array
-            items:
-              type: string
-              enum:
-              - security
-              - availability
-              - confidentiality
-              - processing_integrity
-              - privacy
-            minItems: 1
-        description: Record entityName, systems, serviceBoundary, serviceCommitments,
-          categories and assessmentType. Set boundaryReviewed after recording subserviceOrganisations
-          (name, method inclusive/carve_out, services, responsibilities, evidenceRequirementIds)
-          and complementaryResponsibilities, including explicit absence. requirementEvidence
-          maps criteria to organisational evidence requests and immutable revisions;
-          requirementSamples records populationRequestId, populationSize, samplingRationale,
-          selectedRecordIds, exceptions and managementResponse. The current population revision review must include matching samplingContext (requirementId, populationArtifactRef, populationSize, samplingRationale, selectedRecordIds, exceptions). See docs/Security/SOC2Readiness.md
-          and the synthetic fixture for runnable inputs.
+        description: Set boundaryReviewed after recording subservice and complementary responsibilities. Population reviews must cover the same sample as requirementSamples. See docs/Security/SOC2Readiness.md for examples.
+        x-framework-inputs: soc2-readiness
       period:
         type: object
         title: Assessment evidence period

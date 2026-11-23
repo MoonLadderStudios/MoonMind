@@ -10,6 +10,10 @@ const environment = { id: 'prod', name: 'Production', assets: ['example.com'], e
 const value = { projects: [{ id: 'payments', name: 'Payments', purpose: 'Evidence review', boundaries: 'Read only', environments: [environment] }] };
 function mockCatalog(status = 200, readOnly = false) {
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+    if (String(url).endsWith('/framework-packs')) return new Response(JSON.stringify({ items: [
+      { source: 'declared', id: 'registered', edition: '2026', title: 'Registered standard', available: true, artifactRef: 'art_pack', revision: '1', sha256: 'a'.repeat(64) },
+      { source: 'declared', id: 'expired', edition: '2025', title: 'Expired standard', available: false, reason: 'No longer effective' },
+    ] }));
     if (init?.method === 'PATCH') return new Response(JSON.stringify({ detail: 'Concurrent update' }), { status });
     if (String(url).includes('/audit?')) return new Response(JSON.stringify({ items: [] }));
     return new Response(JSON.stringify({ section: 'user-workspace', categories: { Security: [{ key, title: 'Assessment projects', type: 'object', ui: 'key_value', category: 'Security', source: 'instance_override', apply_mode: 'next_task', activation_state: 'active', effective_value: value, value_version: 7, read_only: readOnly, read_only_reason: 'Operator locked', audit: { store_old_value: true, store_new_value: true, redact: false }, diagnostics: [], applies_to: [], order: 1 }] } }));
@@ -33,6 +37,38 @@ describe('AssessmentProjectsSettings', () => {
     const body = JSON.parse(String(request.body));
     expect(body.expected_versions).toEqual({ [key]: 7 });
     expect(body.changes[key].projects[0].environments[0]).toEqual({ ...environment, name: 'Staging' });
+  });
+  it('selects an exact catalog identity while preserving legacy rows', async () => {
+    const fetch = mockCatalog();
+    renderWithClient(<AssessmentProjectsSettings />);
+    const option = await screen.findByRole('option', { name: /Registered standard/ }) as HTMLOptionElement;
+    expect((screen.getByRole('option', { name: /No longer effective/ }) as HTMLOptionElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText('Add standard'), { target: { value: option.value } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save assessment context' }));
+    await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true));
+    const patch = fetch.mock.calls.find(([, init]) => init?.method === 'PATCH')![1]!;
+    expect(JSON.parse(String(patch.body)).changes[key].projects[0].environments[0].frameworks).toEqual([
+      ...environment.frameworks,
+      { packId: 'registered', edition: '2026', revision: '1', artifactRef: 'art_pack', sha256: 'a'.repeat(64) },
+    ]);
+  });
+  it('registers a new retained identity without changing saved text entries', async () => {
+    const fetch = mockCatalog();
+    renderWithClient(<AssessmentProjectsSettings />);
+    await screen.findByLabelText('System name');
+    fireEvent.click(screen.getByText('Register a retained pack'));
+    const add = screen.getByRole('button', { name: 'Add registration to environment' });
+    const registration = { packId: 'my-standard', edition: '2025', revision: '2', artifactRef: 'art_new', sha256: 'b'.repeat(64) };
+    expect(add.matches(':disabled')).toBe(true);
+    for (const [label, value] of Object.entries({
+      'Pack ID': registration.packId, Edition: registration.edition, Revision: registration.revision,
+      'Artifact reference': registration.artifactRef, 'SHA-256': registration.sha256,
+    })) fireEvent.change(screen.getByLabelText(label, { exact: true }), { target: { value } });
+    fireEvent.click(add);
+    fireEvent.click(screen.getByRole('button', { name: 'Save assessment context' }));
+    await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true));
+    const patch = fetch.mock.calls.find(([, init]) => init?.method === 'PATCH')![1]!;
+    expect(JSON.parse(String(patch.body)).changes[key].projects[0].environments[0].frameworks).toEqual([...environment.frameworks, registration]);
   });
   it('retains the draft and original version after a save conflict and catalog refresh', async () => {
     const fetch = mockCatalog(409);

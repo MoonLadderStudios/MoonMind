@@ -18,6 +18,7 @@ from api_service.services.assessment_projects import (
     AssessmentProjectResolveRequest,
     resolve_saved_assessment_project,
 )
+from api_service.services.framework_catalog import FrameworkCatalog, framework_catalog
 from api_service.services.repository_scanner_readiness import (
     repository_scanner_readiness,
 )
@@ -258,6 +259,18 @@ def _coerce_section(section: str | None) -> SettingSection | JSONResponse | None
             ),
         )
     return section  # type: ignore[return-value]
+
+
+@router.get("/framework-packs", response_model=FrameworkCatalog)
+async def list_framework_packs(
+    user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
+    access: ArtifactAccessContext = Depends(get_artifact_access),
+):
+    try:
+        async with db_base.async_session_maker() as session:
+            return await framework_catalog(session, access)
+    except SQLAlchemyError:
+        return _settings_db_error_response(key="security.assessment_projects")
 
 
 @router.post("/assessment-projects/resolve")

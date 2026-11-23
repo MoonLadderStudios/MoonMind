@@ -222,7 +222,7 @@ class DeclaredRequirementChoice(RequirementChoice):
     responsibility_reason: AssessmentText | None = None
 
 
-class FrameworkPackSelection(FrameworkContract):
+class FrameworkPackIdentity(FrameworkContract):
     """An explicitly selected, retained pack, not a mutable registry alias."""
 
     artifact_ref: Annotated[str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")]
@@ -230,6 +230,9 @@ class FrameworkPackSelection(FrameworkContract):
     edition: PackIdentifier
     revision: PackIdentifier
     sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+
+
+class FrameworkPackSelection(FrameworkPackIdentity):
     period: EvidencePeriod
     requirement_choices: Annotated[
         dict[Text, DeclaredRequirementChoice], Field(max_length=MAX_PACK_REQUIREMENTS)
@@ -309,48 +312,12 @@ class FrameworkEvidence(FrameworkContract):
 
 
 def load_framework_pack(pack_id: str) -> FrameworkPack:
-    if pack_id == "soc2-readiness":
-        from moonmind.security.soc2_readiness import SOC2_PACK
+    from moonmind.security.framework_registry import readiness_pack
 
-        return SOC2_PACK.model_copy(deep=True)
-    if pack_id == "iso-27001-readiness":
-        from moonmind.security.iso_27001 import ISO_PACK
-
-        return ISO_PACK.model_copy(deep=True)
-    if pack_id == "ukgc-rts-security":
-        from moonmind.security.ukgc_rts import UKGC_RTS_PACK
-
-        return UKGC_RTS_PACK.model_copy(deep=True)
-    if pack_id == "gli-19-readiness":
-        from moonmind.security.gli_readiness import GLI_PACK
-
-        return GLI_PACK.model_copy(deep=True)
-    if pack_id == "nj-dge-readiness":
-        from moonmind.security.nj_dge import NJ_DGE_PACK
-
-        return NJ_DGE_PACK.model_copy(deep=True)
-    raise ValueError(f"Unknown framework pack: {pack_id}")
+    return readiness_pack(pack_id).pack.model_copy(deep=True)
 
 
 def render_framework_preparation(report: dict) -> str:
-    if report["pack"]["id"] == "soc2-readiness":
-        from moonmind.security.soc2_readiness import render_assessment
+    from moonmind.security.framework_registry import readiness_pack
 
-        return render_assessment(report)
-    if report["pack"]["id"] == "iso-27001-readiness":
-        from moonmind.security.iso_27001 import render_assessment
-
-        return render_assessment(report)
-    if report["pack"]["id"] == "gli-19-readiness":
-        from moonmind.security.gli_readiness import render_assessment
-
-        return render_assessment(report)
-    if report["pack"]["id"] == "nj-dge-readiness":
-        from moonmind.security.nj_dge import render_assessment
-
-        return render_assessment(report)
-    if report["pack"]["id"] == "ukgc-rts-security":
-        from moonmind.security.ukgc_rts import render_audit_preparation
-
-        return render_audit_preparation(report)
-    raise ValueError("Unknown framework report pack")
+    return readiness_pack(report["pack"]["id"]).render(report)

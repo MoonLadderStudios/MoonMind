@@ -6,6 +6,8 @@ requiredCapabilities: [sandbox]
 annotations:
   workflowPublish:
     mode: none
+  uiSchema:
+    system_inputs: {showJsonEditor: true}
   inputSchema:
     type: object
     required: [assets, system_inputs, period]
@@ -17,16 +19,9 @@ annotations:
         minItems: 1
         description: Admit the system identifiers examined by this assessment.
       system_inputs:
-        type: object
         title: Saved assessed business and system inputs
-        description: Record entityName, entityType (operator, rgs, ancillary_provider), productType (interactive_gaming, ancillary_service, gaming_device, event_wagering), systems and jurisdictionBasis. The jurisdiction record holds jurisdiction, status (unknown, adopted, not_adopted), edition, adoptedOn, effectiveOn, recordVersion, sourceRef and reason. Ancillary providers must record directlyAffectsGaming. Publication never implies adoption. See the GLI section of PassiveRepoScan for examples.
-        properties:
-          entityType:
-            type: string
-            enum: [operator, rgs, ancillary_provider]
-          productType:
-            type: string
-            enum: [interactive_gaming, ancillary_service, gaming_device, event_wagering]
+        description: Record the jurisdiction’s adoption basis. Ancillary providers must state whether they directly affect gaming.
+        x-framework-inputs: gli-19-readiness
       period:
         type: object
         title: Assessment evidence period

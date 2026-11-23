@@ -189,6 +189,10 @@ NJ_DGE_PACK = NJPack(
 )
 
 
+def _annual_rule_choices(schema: dict) -> None:
+    schema["items"]["enum"] = list(ANNUAL_RULES)
+
+
 class NJSystemInputs(FrameworkContract):
     entity_name: Text | None = None
     entity_type: (
@@ -198,7 +202,9 @@ class NJSystemInputs(FrameworkContract):
     provides_content_to_other_operator: bool | None = None
     systems: Strings = Field(default_factory=list)
     applicability_basis: Text | None = None
-    annual_rules: Strings | None = None
+    annual_rules: (
+        Annotated[Strings, Field(json_schema_extra=_annual_rule_choices)] | None
+    ) = None
 
 
 class Assessor(FrameworkContract):

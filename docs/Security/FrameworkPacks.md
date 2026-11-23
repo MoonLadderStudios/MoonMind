@@ -9,6 +9,21 @@ catalog, documentary evidence owner and private reports.
 
 ## Selecting packs
 
+Read `GET /api/v1/settings/framework-packs` for the installed readiness packs,
+the security-review Skill's web/API methodology and declared packs registered
+in saved environments. Each entry describes its edition, rights, supported
+subjects, evidence, conclusion limits and input schema. Unavailable entries
+include a reason. A missing effective date is unknown. Publication of a
+readiness pack does not establish that a jurisdiction adopted the standard.
+In Create, readiness presets show typed system inputs. Open the advanced JSON
+editor to paste or edit a complete saved system record.
+
+Settings can register a declared pack using its exact artifact reference, ID,
+edition, revision and SHA-256. Catalog reads use the caller’s artifact access.
+Restricted registrations expose identity and summary metadata. Their licensed
+text stays behind the artifact boundary. A saved choice supplies context.
+Assessment admission checks the selected bytes, rights and period again.
+
 Supply up to 16 selections in `frameworkPacks`. Each names its `artifactRef`,
 `packId`, `edition`, `revision`, `sha256` and assessment `period` (`start`,
 `end`). Use each pack ID and edition pair once. The singular `frameworkPack`

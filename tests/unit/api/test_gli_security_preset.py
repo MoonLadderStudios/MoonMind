@@ -54,7 +54,7 @@ async def test_gli_catalog_api_and_saved_system_inputs(tmp_path, monkeypatch):
             assert listed.status_code == 200
             assert SLUG in {p["slug"] for p in listed.json()["items"]}
             detail = (await client.get(f"/api/presets/{SLUG}")).json()
-            assert "system_inputs" in detail["inputSchema"]["properties"]
+            assert "jurisdictionBasis" in detail["inputSchema"]["properties"]["system_inputs"]["properties"]
             assert "requirement_choices" in detail["inputSchema"]["properties"]
             values = {
                 "system_inputs": fixture()["framework"]["systemInputs"],

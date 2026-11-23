@@ -743,7 +743,7 @@ export function SchemaCapabilityFields({
                 onChange(name, updated);
               }} />
             {malformedObject ? <p role="alert">Correct the {label} JSON before editing its structured fields. The current text is retained.</p> : null}
-            {fieldSchema.additionalProperties !== false ? <details open={malformedObject ? true : undefined}>
+            {fieldSchema.additionalProperties !== false || uiSchema.showJsonEditor === true ? <details open={malformedObject ? true : undefined}>
               <summary>Advanced {label} JSON</summary>
               <label htmlFor={`${inputId}-json`}>{label} JSON
                 <textarea id={`${inputId}-json`} aria-label={`${label} JSON`} disabled={disabled}
