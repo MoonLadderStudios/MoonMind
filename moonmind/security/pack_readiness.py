@@ -218,13 +218,19 @@ def profile_schema(pack) -> dict:
 
 
 def _three_valued(conditions, profile):
-    """Kleene AND over one condition set: False wins, then unknown, then True."""
+    """Kleene AND over one condition set: False wins, then unknown, then True.
+
+    A multi-choice input meets a condition when any recorded choice is expected.
+    """
     unknown = []
     for name, expected in conditions.items():
         value = profile.get(name)
+        allowed = expected if isinstance(expected, list) else [expected]
         if value is None:
             unknown.append(name)
-        elif value not in (expected if isinstance(expected, list) else [expected]):
+        elif not (
+            set(value) & set(allowed) if isinstance(value, list) else value in allowed
+        ):
             return False, []
     return (None, unknown) if unknown else (True, [])
 
@@ -250,7 +256,11 @@ def _rule_applicability(pack, requirement, profile):
         field = next(f for f in pack.profile.fields if f.name in unknown)
         return "Unverified", field.unknown_reason or f"Record {field.name}."
     if not applies:
-        return "not_applicable", text.not_applicable
+        return "not_applicable", (
+            f"{text.not_applicable} {requirement.applicability}"
+            if text.cite_rule
+            else text.not_applicable
+        )
     basis = pack.profile.field("applicability_basis")
     return "applicable", " ".join(
         (text.applicable, (basis and profile.get(basis.name)) or text.basis_missing)

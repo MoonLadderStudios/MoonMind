@@ -24,6 +24,8 @@ from moonmind.security.frameworks import (
     FrameworkContract,
     FrameworkRequirement,
     FrameworkSource,
+    OrganisationalEvidenceCategory,
+    OrganisationalEvidenceRequest,
 )
 from moonmind.security.frameworks import PackIdentifier as Identifier
 from moonmind.security.frameworks import Text
@@ -103,7 +105,23 @@ class PackObjective(ControlObjective):
     id: Identifier
     source: Identifier
     tool: Identifier
-    rule_ids: Annotated[list[Identifier], Field(min_length=1, max_length=32)]
+    rule_ids: Annotated[
+        list[Identifier | Literal["*"]], Field(min_length=1, max_length=32)
+    ]
+
+
+class PackEvidenceRequest(FrameworkContract):
+    """An organisational evidence request the pack raises for one requirement.
+
+    Compiled into the shared request with the assessment's period. The operator
+    supplies revisions under the same ``id`` in ``requirementChoices``; the
+    category and purpose stay the pack's.
+    """
+
+    id: Identifier
+    category: OrganisationalEvidenceCategory
+    purpose: Literal["design", "adoption", "occurrence"]
+    description: AssessmentText
 
 
 def _absent(value) -> bool:
@@ -217,6 +235,9 @@ class ApplicabilityText(FrameworkContract):
     basis_missing: Text
     not_applicable: Text
     not_selected: Text
+    # Append the requirement's own applicability statement to a not-applicable
+    # reason, so each exclusion names the rule that produced it.
+    cite_rule: bool = Field(default=False, exclude_if=_absent)
 
 
 EVIDENCE_TYPES = frozenset(
@@ -266,13 +287,24 @@ class PackRequirement(FrameworkRequirement):
     procedures: Annotated[list[AssessmentProcedure], Field(max_length=16)] = Field(
         default_factory=list
     )
+    # Names a pack external claim: only that outside party can close this
+    # requirement, so it declares no MoonMind checks.
+    external_claim: Identifier | None = Field(default=None, exclude_if=_absent)
+    organisational_evidence: Annotated[
+        list[PackEvidenceRequest], Field(max_length=8)
+    ] = Field(default_factory=list, exclude_if=_absent)
 
     @model_validator(mode="after")
     def unique_objectives(self):
         _unique([item.id for item in self.objectives], "objective")
         _unique([item.id for item in self.procedures], "procedure")
+        _unique([item.id for item in self.organisational_evidence], "evidence request")
         if self.objectives_complete and not self.objectives:
             raise ValueError("complete objectives require explicit checks")
+        if self.external_claim and (
+            self.objectives or "deterministic_check" in self.required_evidence_methods
+        ):
+            raise ValueError("an external-only requirement declares no MoonMind checks")
         return self
 
 
@@ -423,9 +455,12 @@ class VersionedFrameworkPack(FrameworkContract):
         modules = {row.id for row in self.modules}
         _unique([row.id for row in self.modules], "module")
         _unique([row.id for row in self.external_claims], "external claim")
+        claims = {row.id for row in self.external_claims}
         for row in self.requirements:
             if modules and row.module not in modules:
                 raise ValueError("requirement names an undeclared module")
+            if row.external_claim and row.external_claim not in claims:
+                raise ValueError("requirement names an undeclared external claim")
         fields = {row.name: row for row in self.profile.fields} if self.profile else {}
         selection = self.profile.field("selection") if self.profile else None
         if selection and set(selection.choices) - ids:
@@ -434,7 +469,11 @@ class VersionedFrameworkPack(FrameworkContract):
             for conditions in row.applicable_when:
                 for name, expected in conditions.items():
                     field = fields.get(name)
-                    if field is None or field.type not in {"boolean", "choice"}:
+                    if field is None or field.type not in {
+                        "boolean",
+                        "choice",
+                        "choices",
+                    }:
                         raise ValueError(
                             "applicability condition names no boolean or choice profile field"
                         )
@@ -445,7 +484,7 @@ class VersionedFrameworkPack(FrameworkContract):
                         raise ValueError(
                             "boolean applicability condition needs true or false"
                         )
-                    if field.type == "choice" and set(values) - set(field.choices):
+                    if field.type != "boolean" and set(values) - set(field.choices):
                         raise ValueError(
                             "applicability condition names an unknown choice"
                         )
@@ -523,15 +562,22 @@ def validate_pack_effectivity(
 ):
     if pack.distribution == "prohibited":
         raise ValueError("framework pack distribution prohibited; assessment refused")
+    name = f"{pack.id} {pack.edition} revision {pack.revision}"
     if pack.publication_status != "published":
-        raise ValueError(f"framework pack is {pack.publication_status}, not operative")
+        raise ValueError(
+            f"framework pack {name} is {pack.publication_status}, not operative"
+        )
     today = now.date()
     if pack.published_on > today or pack.effective_from > today:
-        raise ValueError("framework pack publication/effectivity is in the future")
+        raise ValueError(
+            f"framework pack {name} publication/effectivity is in the future: published {pack.published_on}, effective from {pack.effective_from}"
+        )
     if pack.reviewed_on > today or pack.source.reviewed_on > today:
         raise ValueError("framework pack review is in the future")
     if pack.effective_until and today >= pack.effective_until:
-        raise ValueError("framework pack is no longer effective")
+        raise ValueError(
+            f"framework pack {name} is no longer effective since {pack.effective_until}"
+        )
     if period and (
         period.start < pack.effective_from
         or (pack.effective_until and period.end >= pack.effective_until)
@@ -556,7 +602,6 @@ def compile_framework_plan(
     from moonmind.security.assessments import (
         AssessmentScope,
         ControlAssessmentPlan,
-        ControlObjective,
         ControlRequirement,
     )
 
@@ -573,10 +618,16 @@ def compile_framework_plan(
     )
     if readiness is not None:
         return (
-            _compile_readiness(pack, readiness, scope=scope, restricted=restricted),
+            _compile_readiness(
+                pack, readiness, choices, scope=scope, restricted=restricted
+            ),
             diagnostics
             + [
-                "Readiness requirements conclude from profile inputs and recorded evidence; no executable objective checks are declared, so no requirement is concluded satisfied."
+                (
+                    "Readiness requirements conclude from profile inputs, recorded evidence and partial objective checks on named requirements; no requirement is concluded satisfied."
+                    if any(row.objectives for row in pack.requirements)
+                    else "Readiness requirements conclude from profile inputs and recorded evidence; no executable objective checks are declared, so no requirement is concluded satisfied."
+                )
             ],
         )
     rows = []
@@ -634,18 +685,16 @@ def compile_framework_plan(
                     if restricted
                     else requirement.objective_basis
                 ),
-                objectives=[
-                    ControlObjective(
-                        **dict(
-                            item.model_dump(),
-                            description=item.id if restricted else item.description,
-                        )
-                    )
-                    for item in requirement.objectives
-                ],
-                organisational_evidence=choice.organisational_evidence,
+                objectives=_objectives(requirement, restricted),
+                organisational_evidence=_organisational_evidence(
+                    requirement,
+                    choice,
+                    applicable=applicability != "not_applicable",
+                    restricted=restricted,
+                ),
                 owner=choice.responsible_entity,
                 responsibility_reason=choice.responsibility_reason,
+                evidence_plan=evidence_plan(pack, requirement),
             )
         )
     if pack.mappings:
@@ -655,7 +704,67 @@ def compile_framework_plan(
     return ControlAssessmentPlan(requirements=rows), diagnostics
 
 
-def _compile_readiness(pack, readiness, *, scope, restricted):
+def _objectives(requirement, restricted):
+    return [
+        ControlObjective(
+            **dict(
+                item.model_dump(),
+                description=item.id if restricted else item.description,
+            )
+        )
+        for item in requirement.objectives
+    ]
+
+
+def _organisational_evidence(requirement, choice, *, applicable, restricted):
+    """The pack's requests for an applicable requirement, plus the operator's.
+
+    A request the operator supplies under a pack request ID replaces it with its
+    revisions, but keeps the pack's category and purpose.
+    """
+    supplied = {item.id: item for item in choice.organisational_evidence}
+    requests = []
+    for template in requirement.organisational_evidence if applicable else []:
+        item = supplied.pop(template.id, None)
+        if item is None:
+            item = OrganisationalEvidenceRequest(
+                id=template.id,
+                category=template.category,
+                purpose=template.purpose,
+                description=template.id if restricted else template.description,
+                owner=(
+                    "Partner"
+                    if choice.responsible_entity == "partner"
+                    else "Assessed entity"
+                ),
+            )
+        elif (item.category, item.purpose) != (template.category, template.purpose):
+            raise ValueError(
+                f"evidence request {template.id} keeps the pack's category and purpose"
+            )
+        requests.append(item)
+    return requests + list(supplied.values())
+
+
+def evidence_plan(pack, requirement):
+    """The requirement's declared evidence methods and who can close it."""
+    from moonmind.security.assessments import RequirementEvidencePlan
+
+    claim = next(
+        (row for row in pack.external_claims if row.id == requirement.external_claim),
+        None,
+    )
+    return RequirementEvidencePlan(
+        methods=requirement.required_evidence_methods
+        or (["deterministic_check"] if requirement.objectives else []),
+        evidence_types=requirement.evidence_types,
+        checks=len(requirement.objectives),
+        external_claim=claim and claim.id,
+        external_party=claim and claim.verifiable_by,
+    )
+
+
+def _compile_readiness(pack, readiness, choices, *, scope, restricted):
     from moonmind.security.assessments import (
         AssessmentScope,
         ControlAssessmentPlan,
@@ -668,6 +777,9 @@ def _compile_readiness(pack, readiness, *, scope, restricted):
     for requirement in pack.requirements:
         row = readiness.rows[requirement.id]
         status = row["status"]
+        choice = DeclaredRequirementChoice.model_validate(
+            choices.get(requirement.id, {})
+        )
         # Requirement rows need a population; an empty profile system list is
         # already an evidence request, so the admitted scope stands in for it.
         assets = row["systems"] or scope.assets
@@ -696,13 +808,21 @@ def _compile_readiness(pack, readiness, *, scope, restricted):
                     else row["reason"]
                     or "Requirement applicability has not been determined for the admitted scope."
                 ),
+                # Readiness objectives are partial evidence for the named
+                # requirement; they never complete it.
                 objectives_complete=False,
                 objective_basis=(
                     "Restricted pack objective basis omitted."
                     if restricted
                     else requirement.objective_basis
                 ),
-                objectives=[],
+                objectives=_objectives(requirement, restricted),
+                organisational_evidence=_organisational_evidence(
+                    requirement,
+                    choice,
+                    applicable=status in APPLICABLE or status in UNDETERMINED,
+                    restricted=restricted,
+                ),
                 owner=row["responsibleEntity"],
                 responsibility_reason=row["responsibilityReason"],
                 readiness=RequirementReadiness(
@@ -711,6 +831,7 @@ def _compile_readiness(pack, readiness, *, scope, restricted):
                     evidence_refs=row["evidenceRefs"],
                     exclusion_reason=row["exclusionReason"],
                 ),
+                evidence_plan=evidence_plan(pack, requirement),
             )
         )
     return ControlAssessmentPlan(requirements=rows)

@@ -1468,7 +1468,8 @@ class AssessmentExecution:
             raw, pack = installed_pack(selection.pack_id)
             if (pack.edition, pack.revision) != (selection.edition, selection.revision):
                 raise ValueError(
-                    "installed framework pack edition/revision differs from the selection"
+                    "installed framework pack edition/revision differs from the selection;"
+                    f" the installed edition is {pack.edition} revision {pack.revision}"
                 )
             digest = hashlib.sha256(raw).hexdigest()
             # Retries and reruns in this execution cite the same retained bytes.

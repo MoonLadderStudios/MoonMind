@@ -117,5 +117,35 @@
         "trading_room"
       ]
     }
+  },
+  "pci-dss-readiness": {
+    "entityType": {
+      "enum": [
+        "merchant",
+        "service_provider",
+        "multi_tenant_service_provider"
+      ],
+      "type": "string",
+      "title": "Entity Type"
+    },
+    "panStored": {
+      "type": "boolean",
+      "title": "Pan Stored"
+    },
+    "paymentChannels": {
+      "items": {
+        "enum": [
+          "card_present",
+          "ecommerce",
+          "mail_telephone_order"
+        ],
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 256,
+      "type": "array",
+      "title": "Payment Channels"
+    }
   }
 }

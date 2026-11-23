@@ -4,7 +4,7 @@
 artifact admission, Skill invocation and report path as native security evidence.
 There is no remote registry, scheduler or source download. ISO/IEC 27001, SOC 2
 and UKGC RTS preparation packs still use `framework` and their own modules.
-GLI-19/GSF and New Jersey DGE ship as installed declared packs, so they and
+GLI-19/GSF, New Jersey DGE and PCI DSS v4.0.1 ship as installed declared packs, so they and
 operator packs use `frameworkPacks` and the shared requirement evaluator, and
 can be combined in one plan. [SOC 2 readiness](SOC2Readiness.md) uses the shared
 preset catalog, documentary evidence owner and private reports.
@@ -84,10 +84,18 @@ Use `schemaVersion: declared-framework-pack/v1` with:
   contain spaces), `title`, original `summary`,
   `category`, `applicability`, `evidencePrompt`, `objectiveBasis`, and explicit
   `objectives`. Objectives use `id`, `description`, `source`, `tool` and `ruleIds`.
-  `objectivesComplete` defaults to false. `requiredEvidenceMethods` can name
+  `ruleIds: ["*"]` selects every rule of a source whose coverage declares all its
+  configured rules, for scanners whose rule IDs are advisory identifiers;
+  `observation: true` keeps exposure facts for review without passing or failing
+  the requirement. `objectivesComplete` defaults to false. `requiredEvidenceMethods` can name
   `deterministic_check`, `enquiry`, `evidence` or `observation`; optional
   `evidenceTypes` further describes needed material. Requirements can also retain
   their own `sources`, `module`, `subjectTypes` and responsibility descriptions.
+- `externalClaim` on a requirement names a pack external claim: the requirement is
+  external-only, declares no checks, and its plan names who can close it.
+  `organisationalEvidence` lists requests (`id`, `category`, `purpose`,
+  `description`) the pack raises while the requirement applies. Supply revisions
+  under the same `id` in `requirementChoices`; category and purpose stay the pack's.
 
 A pack may also declare readiness content, each part omitted when unused so
 existing packs keep their digests:
@@ -100,10 +108,12 @@ existing packs keep their digests:
   field names the `requestId` and `prompt` raised when it is missing.
 - `modules`: separately edited sources with `edition`, `source` and
   `sourceStatus` (`reviewed` or `Unverified` with its reason).
-- `applicableWhen` on a requirement: condition sets over boolean and choice
-  profile fields, any of which applies; a missing input leaves applicability
+- `applicableWhen` on a requirement: condition sets over boolean, choice and
+  multi-choice profile fields, any of which applies; a multi-choice input matches
+  when any recorded choice is expected, and a missing input leaves applicability
   Unverified with that field's `unknownReason`. `applicabilityText` supplies the
-  applicable, not-applicable and not-selected reasons.
+  applicable, not-applicable and not-selected reasons; `citeRule` appends each
+  requirement's own applicability statement to its not-applicable reason.
 - `behavior`: a registered judgement that cannot be data, such as GLI module
   applicability by entity and product, or New Jersey annual-assessment record
   checks with approval, operator and incident qualifiers. Unknown behaviors are
@@ -144,8 +154,15 @@ Requirement readiness is one of `evidence_recorded`, `incomplete`,
 `partner_owned`, `excluded`, `exclusion_for_review`, `not_applicable`,
 `not_selected`, `applicability_missing` or `Unverified`. Recorded evidence is
 not an executed check: such requirements conclude `inconclusive` (or
-`not_assessed` when not applicable), never `satisfied`. Certification and
-jurisdiction approval are `not_performed`.
+`not_assessed` when not applicable), never `satisfied`. A profile pack's
+objectives are partial checks on the requirement that names them: a current
+finding concludes it `not_satisfied`, and a clean scan leaves it `inconclusive`.
+Certification and jurisdiction approval are `not_performed`.
+
+Every compiled declared-pack requirement carries an `evidencePlan`: its methods
+and evidence types, its number of MoonMind checks and, for an external-only
+requirement, the claim and the party who can close it. The readable report lists
+it beside each conclusion.
 
 ## Directional mappings
 
@@ -308,6 +325,45 @@ role system or approval engine. Sensitivity labels describe evidence; existing
 artifact authorization and model-delivery admission still govern access and use.
 Real organisation evidence and external assessor conclusions remain Unverified
 unless independently obtained; controlled synthetic evidence tests this journey.
+
+## PCI DSS v4.0.1 readiness
+
+Select `pci-dss-readiness` edition `4.0.1` in `frameworkPacks`. It lists the 12
+principal requirements, their defined requirements and Appendices A1 and A2 as
+identifiers with original summaries; consult a licensed copy of the standard for
+its text, testing procedures and guidance. Published 11 June 2024, it is
+effective from 31 March 2025, when the future-dated requirements came into force,
+so 6.4.1 and 10.7.1, superseded on that date by 6.4.2 and 10.7.2, are not listed.
+Appendix A3 applies only to entities a payment brand or acquirer designates and is
+not included. A later edition arrives as a new pack revision, which history
+comparison reports as an intelligence change; superseded, draft, future and
+expired copies are refused with the pack, edition and dates in the reason.
+
+The profile records `entityType` (`merchant`, `service_provider` or
+`multi_tenant_service_provider`; choose a provider type when the entity is also a
+merchant), `systems` (the CDE and connected or security-impacting systems),
+`cardholderDataEnvironment`, `panStored`, `sadBeforeAuthorization`,
+`supportsIssuing`, `paymentChannels`, `posPoiEarlyTls`, `validationRoute` (ROC
+or SAQ type), `serviceProviders` and `scopeBasis`. Service-provider, multi-tenant,
+stored-data, issuer, card-present, e-commerce and early-TLS requirements apply
+only when the profile says so, and each exclusion names its rule. Record a
+provider-owned requirement with `responsibleEntity: partner` and the provider in
+`responsibilityReason`; it stays `partner_owned` until its evidence is supplied.
+
+Principal requirements, ASV scans (11.3.2) and penetration and segmentation
+testing (11.4.2 to 11.4.6, A1.1.4) are external-only: the plan names the QSA or
+ISA (or the acquirer-accepted SAQ), the Approved Scanning Vendor or the
+independent tester. Partial checks support only named sub-requirements: image
+and dependency vulnerabilities, with KEV and EPSS priority, for 6.3.3; secret
+detection for 8.6.2; TLS for 4.2.1; selected Prowler AWS checks for 1.3.1, 8.3.6,
+8.4.1, 8.4.2, 10.2.1 and 10.3.4; and, as review-only observations, ZAP alerts for
+6.2.4, open TCP services for 1.2.5 and DNS names for 12.5.1. Prowler's own PCI
+mappings stay review-required candidates, including for another edition.
+Policies, roles, training, incident response, targeted risk analyses,
+customized-approach documentation and periodic reviews are organisational
+evidence requests. Results are readiness evidence only. PCI SSC distribution
+rights, a check of the identifiers against a licensed copy, and compliance
+validation by a QSA, ISA or acquirer remain Unverified external claims.
 
 ## ISO/IEC 27001 ISMS readiness
 

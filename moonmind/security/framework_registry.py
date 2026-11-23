@@ -126,7 +126,7 @@ def readiness_pack(pack_id: str) -> ReadinessPack:
 
 
 PACK_DIRECTORY = Path(__file__).with_name("packs")
-INSTALLED_PACK_IDS = ("gli-19-readiness", "nj-dge-readiness")
+INSTALLED_PACK_IDS = ("gli-19-readiness", "nj-dge-readiness", "pci-dss-readiness")
 
 
 @cache

@@ -162,23 +162,26 @@ class OrganisationalEvidenceRevision(FrameworkContract):
     review: OrganisationalEvidenceReview | None = None
 
 
+OrganisationalEvidenceCategory = Literal[
+    "risk_register",
+    "risk_treatment",
+    "statement_of_applicability",
+    "policy",
+    "training",
+    "access_review",
+    "incident",
+    "supplier",
+    "internal_audit",
+    "management_review",
+    "corrective_action",
+]
+
+
 class OrganisationalEvidenceRequest(FrameworkContract):
     id: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)
     ]
-    category: Literal[
-        "risk_register",
-        "risk_treatment",
-        "statement_of_applicability",
-        "policy",
-        "training",
-        "access_review",
-        "incident",
-        "supplier",
-        "internal_audit",
-        "management_review",
-        "corrective_action",
-    ]
+    category: OrganisationalEvidenceCategory
     purpose: Literal["design", "adoption", "occurrence"]
     description: AssessmentText
     owner: AssessmentText

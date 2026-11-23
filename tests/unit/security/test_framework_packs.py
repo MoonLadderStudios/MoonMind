@@ -162,6 +162,36 @@ def test_mappings_validate_endpoints_and_never_add_objectives():
         load(data)
 
 
+def test_external_only_requirements_name_a_claim_and_declare_no_checks():
+    claim = {
+        "id": "assessor",
+        "gap": "Only the assessor concludes this.",
+        "verifiableBy": "Independent assessor",
+        "nextStep": "Obtain the assessor's report.",
+    }
+    data = payload()
+    row = data["requirements"][0]
+    row.update(externalClaim="assessor", objectives=[], objectivesComplete=False)
+    with pytest.raises(ValueError, match="undeclared external claim"):
+        load(data)
+    data["externalClaims"] = [claim]
+    plan, _ = compile(load(data))
+    evidence = plan.requirements[0].evidence_plan
+    assert (evidence.external_party, evidence.checks) == ("Independent assessor", 0)
+    row["requiredEvidenceMethods"] = ["deterministic_check"]
+    with pytest.raises(ValueError, match="no MoonMind checks"):
+        load(data)
+
+
+def test_all_rules_selector_stands_alone():
+    data = payload()
+    data["requirements"][0]["objectives"][0]["ruleIds"] = ["*"]
+    assert compile(load(data))[0].requirements[0].objectives[0].rule_ids == ["*"]
+    data["requirements"][0]["objectives"][0]["ruleIds"] = ["*", "rule"]
+    with pytest.raises(ValueError, match="names no other rule"):
+        load(data)
+
+
 def pack_payload():
     """Shared synthetic pack for security.assess integration tests."""
     data = payload()
