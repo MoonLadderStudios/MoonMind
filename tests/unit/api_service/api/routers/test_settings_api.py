@@ -1473,7 +1473,6 @@ async def test_catalog_checks_saved_pack_identity_access_and_effectivity(
     settings_api_db, monkeypatch
 ):
     import hashlib
-    import json
 
     from moonmind.workflows.temporal.artifacts import (
         TemporalArtifactStateError,
