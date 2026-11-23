@@ -134,9 +134,11 @@ def installed_pack(pack_id: str):
     """Installed declared-pack bytes and their validated pack, by exact ID."""
     from moonmind.security.framework_packs import parse_declared_pack
 
-    if pack_id not in INSTALLED_PACK_IDS:
+    # The file name comes from the installed list, never from the caller.
+    installed = next((known for known in INSTALLED_PACK_IDS if known == pack_id), None)
+    if installed is None:
         raise ValueError(f"Unknown installed framework pack: {pack_id}")
-    raw = (PACK_DIRECTORY / f"{pack_id}.json").read_bytes()
+    raw = (PACK_DIRECTORY / f"{installed}.json").read_bytes()
     return raw, parse_declared_pack(raw)
 
 

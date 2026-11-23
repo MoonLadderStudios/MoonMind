@@ -47,11 +47,15 @@ async def _selected_framework(execution, request, framework, controls):
             "missing_framework",
         )
     _, raw = await execution.read(packs[0]["artifactRef"])
-    return (
-        parse_declared_pack(raw),
-        readiness_report(controls[1], packs[0]),
-        controls[0],
-    )
+    pack = parse_declared_pack(raw)
+    if pack.distribution != "redistributable":
+        # Catalogs copy requirement text, which restricted packs keep in their
+        # authorized artifact and out of every portable report.
+        raise UnsupportedExport(
+            "A restricted-distribution framework pack is not exported to OSCAL; its licensed text stays in the authorized pack artifact.",
+            "restricted_distribution",
+        )
+    return pack, readiness_report(controls[1], packs[0]), controls[0]
 
 
 async def export_assessment(

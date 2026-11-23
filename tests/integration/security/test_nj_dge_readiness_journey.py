@@ -295,6 +295,29 @@ async def test_export_cannot_read_foreign_assessor_approval_evidence(environment
         await invoke(service, request_payload(data))
 
 
+@pytest.mark.parametrize("location", ["evidence", "annual"])
+async def test_export_rejects_malformed_mandatory_nj_artifact_refs(
+    environment, location
+):
+    # Approval and annual-assessment references are mandatory artifacts, not
+    # optional citations: a non-artifact value cannot satisfy a requirement.
+    from temporalio.exceptions import ApplicationError
+
+    service = environment.service
+    data, _ = await materialize(service)
+    if location == "evidence":
+        row = next(r for r in data["evidence"] if r.get("divisionApprovalRef"))
+        row["divisionApprovalRef"] = "asserted"
+        data["framework"]["evidenceRefs"] = [
+            await put(service, r) for r in data["evidence"]
+        ]
+    else:
+        data["audit"]["assessments"][0]["divisionApprovalRef"] = "asserted"
+        data["framework"]["auditRef"] = await put(service, data["audit"])
+    with pytest.raises(ApplicationError):
+        await invoke(service, request_payload(data))
+
+
 async def test_comparison_accepts_retained_nj_rule_source_metadata(environment):
     service = environment.service
     data, _ = await materialize(service)

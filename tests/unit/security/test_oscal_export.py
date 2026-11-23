@@ -596,6 +596,42 @@ def test_unified_gaming_exports_validate_with_unchanged_control_identities(pack_
         assert control_id("nj.partner.player-accounts") not in selected
 
 
+@pytest.mark.asyncio
+async def test_restricted_declared_pack_is_not_copied_into_exports():
+    from types import SimpleNamespace
+
+    from moonmind.security.framework_registry import installed_pack
+    from moonmind.workflows.skills.security_oscal import export_assessment
+
+    comparison, _, _, _ = native_fixture()
+    _, control, metadata = unified_gaming_report("gli-19-readiness", comparison)
+    restricted = json.loads(installed_pack("gli-19-readiness")[0])
+    restricted["distribution"] = "restricted"
+
+    class Execution:
+        async def read(self, ref):
+            assert ref == "art_pack"
+            return None, json.dumps(restricted).encode()
+
+    result = await export_assessment(
+        Execution(),
+        request=SimpleNamespace(
+            selected_packs=[restricted["id"]],
+            oscal_export=SimpleNamespace(models=["catalog"], context_ref=None),
+        ),
+        comparison=comparison,
+        comparison_ref="art_comparison",
+        framework=None,
+        controls=(
+            "art_control",
+            SimpleNamespace(pack_metadata=[{**metadata, "artifactRef": "art_pack"}]),
+        ),
+    )
+    assert result["status"] == "unsupported"
+    assert result["artifacts"] == {}
+    assert [d["code"] for d in result["diagnostics"]] == ["restricted_distribution"]
+
+
 def test_native_accepted_risk_and_deviations_remain_attributed():
     from moonmind.security.assessments import ComparedDecision, TriageDecision
     from moonmind.security.oscal_export import OscalAdapter, OscalContext

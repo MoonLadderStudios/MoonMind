@@ -555,21 +555,24 @@ def evaluate_readiness(
 
 
 def input_refs(pack, behavior: PackBehavior, *, profile, records, audit) -> list[str]:
-    """Artifacts a readiness conclusion cites, for access checks and sealing."""
+    """Artifacts a readiness conclusion cites, for access checks and sealing.
+
+    A source citation may name something other than an artifact, so only its
+    artifact IDs are read. Reliance reviews, approvals and assessment records are
+    mandatory artifacts: a malformed one must fail the read, not be dropped.
+    """
     from moonmind.workflows.temporal.artifacts import ARTIFACT_ID_PATTERN
 
-    refs = []
+    citations = [record.provenance.source_ref for record in records]
     field = pack.profile.field("jurisdiction_basis") if pack.profile else None
     if field:
         basis = JurisdictionBasis.model_validate((profile or {}).get(field.name) or {})
-        refs.append(basis.source_ref)
+        citations.insert(0, basis.source_ref)
+    refs = [ref for ref in citations if ref and ARTIFACT_ID_PATTERN.fullmatch(ref)]
     for record in records:
-        refs.append(record.provenance.source_ref)
         if record.reliance:
             refs.append(record.reliance.review_ref)
         refs.extend(behavior.evidence_refs(record))
     if audit is not None:
         refs.extend(behavior.record_refs(audit))
-    return list(
-        dict.fromkeys(ref for ref in refs if ref and ARTIFACT_ID_PATTERN.fullmatch(ref))
-    )
+    return list(dict.fromkeys(ref for ref in refs if ref))
