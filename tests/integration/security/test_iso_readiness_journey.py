@@ -83,7 +83,10 @@ async def test_catalog_direct_and_retry_keep_same_soa_and_export(environment, tm
 
 
 async def test_iso_report_preserves_methodology_gaps_and_native_findings(environment):
-    from tests.integration.security.test_web_api_methodology_journey import retain_plan
+    from tests.integration.security.test_web_api_methodology_journey import (
+        retain_plan,
+        select_methodology,
+    )
 
     service = environment.service
     request, _, _ = await recurring.inputs(service)
@@ -91,7 +94,7 @@ async def test_iso_report_preserves_methodology_gaps_and_native_findings(environ
         mode="json", by_alias=True
     )
     plan_ref, _ = await retain_plan(service)
-    request["methodology"] = {"planRef": plan_ref}
+    request = await select_methodology(service, request, plan_ref)
 
     result = await recurring.invoke(service, request)
     comparison = await recurring.read(service, result["comparisonRef"])

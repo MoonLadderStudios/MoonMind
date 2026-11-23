@@ -30,6 +30,17 @@ Method = Literal[
 ]
 
 
+def procedure_evidence(method: str) -> tuple[str, frozenset[str]]:
+    """The assessment method a procedure method provides, and the evidence
+    kinds that establish it. Executable jobs check deterministically; review
+    and observation procedures are agent interpretation."""
+    if method == "zap":
+        return "deterministic_check", frozenset({"tool_match", "reproduction"})
+    if method == "application-access":
+        return "deterministic_check", frozenset({"reproduction"})
+    return "agent_interpretation", frozenset({"review_judgment", "reproduction"})
+
+
 class AssessmentProcedure(Contract):
     id: Text
     method: Method
@@ -81,6 +92,9 @@ class MethodologyInput(Contract):
     plan_ref: Text
     results_ref: Text | None = None
     baseline_ref: Text | None = None
+    # Readable rules of engagement for a ``security-plan/v1`` plan, which
+    # carries no authority. Retained v1 plans name theirs as ``authorityRef``.
+    authority_ref: Text | None = Field(default=None, exclude_if=lambda v: v is None)
 
 
 class ProcedureRun(Contract):
@@ -224,10 +238,10 @@ def validate_plan(plan, pack, *, now):
                 raise ValueError("procedure names unknown identity")
 
 
-def evidence_refs(plan, results=None):
+def evidence_refs(plan, results=None, *, pack_ref, authority_ref):
     refs = [
-        plan.pack.artifact_ref,
-        plan.authority_ref,
+        pack_ref,
+        authority_ref,
         *plan.source_refs,
         *plan.api_context_refs,
     ]
@@ -438,15 +452,7 @@ def evaluate_coverage(plan, pack, results, *, plan_ref):
                 gaps.append("Procedure was not executed or reviewed")
             else:
                 status = run.status
-                supported_kinds = (
-                    {"tool_match", "reproduction"}
-                    if procedure.method == "zap"
-                    else (
-                        {"reproduction"}
-                        if procedure.method == "application-access"
-                        else {"review_judgment", "reproduction"}
-                    )
-                )
+                supported_kinds = procedure_evidence(procedure.method)[1]
                 if (
                     run.status in {"completed", "partial"}
                     and run.evidence_kind not in supported_kinds

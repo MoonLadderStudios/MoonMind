@@ -579,6 +579,8 @@ def validate_profile_launch(spec, profiles) -> None:
 #: credential grants; they have no deployment profile of their own.
 WEB_ASSESSMENT_PROFILE_REF = "web-assessment"
 CLOUD_ASSESSMENT_PROFILE_REF = "cloud-posture"
+TLS_ASSESSMENT_PROFILE_REF = "tls-assessment"
+TLS_ACTION_CLASS = "tls-inspection"
 
 
 class AssessmentTarget(_Model):
@@ -942,8 +944,8 @@ def tls_assessment_within_scope(spec, scope: AdmittedAssessmentScope) -> None:
     if tls.assessment_ref != scope.assessment_ref:
         raise PermissionError("TLS assessment belongs to another assessment")
     if (
-        "tls-assessment" not in scope.profile_refs
-        or "tls-inspection" not in scope.action_classes
+        TLS_ASSESSMENT_PROFILE_REF not in scope.profile_refs
+        or TLS_ACTION_CLASS not in scope.action_classes
     ):
         raise PermissionError("TLS inspection is not admitted")
     if tls.egress_policy_ref not in scope.network_refs:
@@ -1147,6 +1149,8 @@ def resolved_job_within_scope(spec, scope: AdmittedAssessmentScope, profiles) ->
 
 __all__ = [
     "CLOUD_ASSESSMENT_PROFILE_REF",
+    "TLS_ACTION_CLASS",
+    "TLS_ASSESSMENT_PROFILE_REF",
     "WEB_ASSESSMENT_PROFILE_REF",
     "WORKLOAD_CREDENTIALS_TARGET",
     "WORKLOAD_PROFILES_ENV_KEY",

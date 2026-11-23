@@ -34,6 +34,7 @@ from moonmind.schemas.container_job_models import (
     OwnerIdentity,
 )
 from moonmind.schemas.repository_scanner_models import ImageAssessment, RepositoryScan
+from moonmind.security.assessment_preset_inputs import READINESS_ACTIONS as _ACTIONS
 from moonmind.security.assessment_preset_inputs import assessment_job_spec
 from moonmind.security.workload_credentials import (
     authorize_workload_credentials,
@@ -41,17 +42,6 @@ from moonmind.security.workload_credentials import (
 )
 from moonmind.security.workload_profiles import AdmittedAssessmentScope
 
-_ACTIONS = {
-    "invalid_assessment_input": "Review the selected assessment inputs and their admitted scope.",
-    "assessment_authority_unavailable": "Review the current assessment authorization and credential grants before retrying.",
-    "feed_cache_unavailable": "Prepare the selected scanner feed cache with the supported feed refresh or offline import journey.",
-    "scanner_image_unavailable": "Review the deployment scanner image source and its image preparation diagnostics.",
-    "scanner_probe_unavailable": "The scanner runtime could not be verified. Review the worker and scanner image, then retry.",
-    "credential_backend_unavailable": "Cloud and web workload credentials require an active managed db:// secret; select a supported credential before retrying.",
-    "credential_unavailable": "The selected credential is missing, disabled, malformed or no longer at its admitted revision. Review its backend, grant and active secret.",
-    "credential_resolution_unavailable": "The selected registry credential could not be checked in time. Restore its configured secret backend and retry.",
-    "worker_unavailable": "The container worker could not complete readiness checks. Restore the worker and retry.",
-}
 _PROBE_CODES = frozenset(
     [
         "scanner_executable_unavailable",

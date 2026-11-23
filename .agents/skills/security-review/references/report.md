@@ -39,18 +39,20 @@ retains its native scan/comparison even if interpretation is unavailable. Raw
 scanner bytes remain unchanged. Native comparable absence remains distinct from
 a verified fix; changed rules, partial scanning or reduced scope cannot prove one.
 
-For a selected web/API methodology, retain a `web-api-test-plan/v1` artifact
-before testing and pass `methodology: {planRef, resultsRef?, baselineRef?}` to
-`security.assess`. The plan selects the retained [procedure pack](web-api.json)
-through existing `FrameworkPackSelection` identity, digest and period fields.
-It records `scope`, `candidateRef`, `systemBoundary`, `threatModel`, readable
-rules of engagement as `authorityRef`, `interfaces` (id, asset, protocol, locator),
-value-free `identities` (id, available, credentialRef), `sourceRefs`,
-`apiContextRefs`, `allowedMethods`, and all pack `objectives`. Each objective
-records applicability/reason and selected procedures with assets, interface IDs,
-identity IDs, existing authorization `caseRefs`, and their pre-execution
-`caseSpecDigest` from the existing application-access spec digest function. Record unavailable context
-explicitly; no plan field grants execution authority or changes a case oracle.
+For a selected web/API methodology, retain a
+[`security-plan/v1`](../../../../docs/Security/SecurityPlans.md) before testing
+and pass `methodology: {planRef, authorityRef, resultsRef?, baselineRef?}` to
+`security.assess`; `authorityRef` names the readable rules of engagement. The
+plan selects the retained [procedure pack](web-api.json) as a standard. Its
+`methodology` section names that standard and records `threatModel`,
+`interfaces` (id, asset, protocol, locator), `identities` (id, available; no
+credentials), `sourceRefs`, `apiContextRefs` and `allowedMethods`. Every pack
+requirement row records applicability, reason and selected procedures with
+assets, interface IDs, identity IDs, existing authorization `caseRefs`, and
+their pre-execution `caseSpecDigest` from the existing application-access spec
+digest function. Record unavailable context explicitly; no plan field grants
+execution authority or changes a case oracle. Retained `web-api-test-plan/v1`
+plans stay readable.
 
 Retain `web-api-procedure-results/v1` with that exact `planRef` and `runs` naming
 objective/procedure IDs, actual status, supporting evidence, evidence kind and

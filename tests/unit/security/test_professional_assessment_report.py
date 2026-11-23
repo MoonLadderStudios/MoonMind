@@ -424,12 +424,15 @@ def test_final_report_pipeline_preserves_cumulative_omission_count(line):
 
 @pytest.mark.asyncio
 async def test_executive_coverage_preserves_incomplete_methodology(environment):
-    from tests.integration.security.test_web_api_methodology_journey import retain_plan
+    from tests.integration.security.test_web_api_methodology_journey import (
+        retain_plan,
+        select_methodology,
+    )
 
     service = environment.service
     request, _, _ = await recurring.inputs(service, rules=False)
     plan_ref, _ = await retain_plan(service)
-    request["methodology"] = {"planRef": plan_ref}
+    request = await select_methodology(service, request, plan_ref)
     result = await recurring.invoke(service, request)
     comparison = await recurring.read(service, result["comparisonRef"])
     assert comparison["coverageStatus"] == "complete"
