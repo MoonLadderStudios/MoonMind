@@ -947,16 +947,38 @@ class TestFamilyCatalogAuthority:
         with pytest.raises(ModelTierFamilyUnavailableError):
             self._resolve(_observed(["claude-sonnet-5-5"]))
 
-    @pytest.mark.parametrize("models", [["claude-sonnet-5-5"], ["claude-opus-6"]])
-    def test_a_replaced_credential_s_catalog_is_unobserved(self, models):
-        resolved = self._resolve(_observed(models, generation=1), generation=2)
+    def test_a_replaced_credential_s_catalog_never_refuses_a_family(self):
+        resolved = self._resolve(
+            _observed(["claude-sonnet-5-5"], generation=1), generation=2
+        )
 
         assert resolved.model == "claude-opus-5-5"
         assert resolved.family_resolution_status == "unverified"
         assert resolved.family_resolution_source == "cold_start_placeholder"
+
+    def test_signing_in_again_keeps_the_newest_release_the_profile_saw(self):
+        # Re-authentication replaces the credential generation. The old
+        # observation no longer counts as observed, but it must not send the
+        # profile back to an older built-in starting release.
+        resolved = self._resolve(
+            _observed(["claude-opus-6"], generation=1), generation=2
+        )
+
+        assert resolved.model == "claude-opus-6"
+        assert resolved.family_resolution_status == "unverified"
+        assert resolved.family_resolution_source == "previous_credential_catalog"
         # The same observation still answers for its own credential.
         current = self._resolve(_observed(["claude-opus-6"], generation=2))
         assert current.model == "claude-opus-6"
+        assert current.family_resolution_status == "resolved"
+
+    def test_a_replaced_credential_s_older_release_keeps_the_starting_release(self):
+        resolved = self._resolve(
+            _observed(["claude-opus-5"], generation=1), generation=2
+        )
+
+        assert resolved.model == "claude-opus-5-5"
+        assert resolved.family_resolution_source == "cold_start_placeholder"
 
     def test_an_expired_absence_lets_the_next_launch_reread(self):
         resolved = self._resolve(_observed(["claude-sonnet-5-5"], age_hours=24 * 7))
