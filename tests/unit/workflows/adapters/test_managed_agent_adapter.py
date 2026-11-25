@@ -1996,6 +1996,148 @@ async def test_provider_profile_list_preserves_path_aware_codex_materialization_
             "outputPerMillionUsd": 0.8,
         }
 
+
+def _launch_ready_claude_profile(**tier_fields: Any) -> ManagedAgentProviderProfile:
+    return ManagedAgentProviderProfile(
+        profile_id="claude-tiers",
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+        runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+        volume_ref="oauth-volume://claude",
+        volume_mount_path="/home/app/.claude",
+        clear_env_keys=[
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+            "CLAUDE_API_KEY",
+            "OPENAI_API_KEY",
+        ],
+        max_parallel_runs=1,
+        cooldown_after_429_seconds=300,
+        rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
+        enabled=True,
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        last_auth_method=ProviderProfileAuthMethod.OAUTH_VOLUME,
+        **tier_fields,
+    )
+
+
+async def _list_claude_profiles(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, session: AsyncSession
+) -> list[dict[str, Any]]:
+    import api_service.db.base as _db_base_mod
+
+    @asynccontextmanager
+    async def _session_context():
+        yield session
+
+    monkeypatch.setattr(_db_base_mod, "get_async_session_context", _session_context)
+    activities = TemporalArtifactActivities(
+        TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+    )
+    result = await activities.provider_profile_list(runtime_id="claude_code")
+    return result["profiles"]
+
+
+_RUNTIME_DEFAULT_TIER = {
+    "label": "Runtime default",
+    "model": None,
+    "effort": None,
+    "parameters": {},
+    "annotations": {},
+}
+
+
+_LEGACY_DEFAULT_TIER = {
+    "label": "Legacy default",
+    "model": "claude-legacy-model",
+    "effort": "high",
+    "parameters": {},
+    "annotations": {},
+}
+
+
+@pytest.mark.parametrize(
+    ("stored_tiers", "stored_default_tier"),
+    [
+        pytest.param([], 1, id="empty-tiers"),
+        pytest.param([_RUNTIME_DEFAULT_TIER], 1, id="runtime-default-placeholder"),
+        pytest.param([_LEGACY_DEFAULT_TIER], None, id="missing-default-tier"),
+    ],
+)
+async def test_provider_profile_list_snapshot_normalizes_legacy_model_tiers(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    stored_tiers: list[dict[str, Any]],
+    stored_default_tier: int | None,
+):
+    async with _in_memory_db(tmp_path) as session_factory:
+        async with session_factory() as session:
+            session.add(
+                _launch_ready_claude_profile(
+                    default_model="claude-legacy-model",
+                    default_effort="high",
+                    model_tiers=stored_tiers,
+                    default_model_tier=1,
+                )
+            )
+            await session.commit()
+
+        # default_model_tier is NOT NULL, so a legacy row without a default is
+        # simulated on an unflushed identity-map instance the activity loads.
+        async with session_factory(autoflush=False) as session:
+            row = await session.get(ManagedAgentProviderProfile, "claude-tiers")
+            row.default_model_tier = stored_default_tier
+            profiles = await _list_claude_profiles(monkeypatch, tmp_path, session)
+
+    assert len(profiles) == 1
+    assert profiles[0]["model_tiers"] == [_LEGACY_DEFAULT_TIER]
+    assert profiles[0]["default_model_tier"] == 1
+    assert profiles[0]["default_model"] == "claude-legacy-model"
+    assert profiles[0]["default_effort"] == "high"
+
+
+async def test_provider_profile_list_snapshot_keeps_explicit_model_tier_policy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    explicit_tiers = [
+        {
+            "label": label,
+            "model": model,
+            "effort": effort,
+            "parameters": {},
+            "annotations": {},
+        }
+        for label, model, effort in (
+            ("Plan", "claude-opus", "high"),
+            ("Implement", "claude-sonnet", "medium"),
+            ("Review", "claude-haiku", "low"),
+        )
+    ]
+    async with _in_memory_db(tmp_path) as session_factory:
+        async with session_factory() as session:
+            session.add(
+                _launch_ready_claude_profile(
+                    default_model="claude-legacy-model",
+                    default_effort="xhigh",
+                    model_tiers=explicit_tiers,
+                    default_model_tier=2,
+                )
+            )
+            await session.commit()
+
+        async with session_factory() as session:
+            profiles = await _list_claude_profiles(monkeypatch, tmp_path, session)
+
+    assert len(profiles) == 1
+    assert profiles[0]["model_tiers"] == explicit_tiers
+    assert profiles[0]["default_model_tier"] == 2
+
+
 # ---------------------------------------------------------------------------
 # Store-backed status / fetch_result tests
 # ---------------------------------------------------------------------------
