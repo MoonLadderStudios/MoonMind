@@ -619,7 +619,7 @@ async def test_reselection_requires_proof_no_announcement_was_authorized(
     state, service, sessions = journey
     owner = "default/reservation-crash"
     context = {"execution_owner": owner}
-    claim = await tools._prepare_github_issue_claim(
+    await tools._prepare_github_issue_claim(
         inputs={"repository": "example/repo", "issueNumber": 3970},
         context=context,
         repository="example/repo",

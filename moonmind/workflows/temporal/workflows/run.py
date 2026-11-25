@@ -9842,7 +9842,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             remediation_gate=remediation_gate,
         )
         loop_context = self._publish_context.get("boundedStoryLoop")
-        prior_progress_signature = None
         prior_no_progress_attempts = 0
         prior_progress_vector: RemediationProgressVector | None = None
         prior_loop_state: BoundedRemediationLoopState | None = None
@@ -9866,9 +9865,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             if isinstance(prior_decision, Mapping):
                 prior_gate = prior_decision.get("gate")
                 if isinstance(prior_gate, Mapping):
-                    prior_progress_signature = (
-                        str(prior_gate.get("progressSignature") or "").strip() or None
-                    )
                     prior_vector_payload = prior_gate.get("progressVector")
                     if isinstance(prior_vector_payload, Mapping):
                         try:
@@ -10001,7 +9997,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             prior_no_progress_attempts + 1 if repeated_progress else 0
         )
         max_no_progress_attempts = 2
-        explicit_no_progress_budget = False
         if progress_budget_enabled and isinstance(loop_context, Mapping):
             loop_budgets = loop_context.get("budgets")
             if isinstance(loop_budgets, Mapping):
@@ -10010,7 +10005,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 )
                 if configured_no_progress_attempts is not None:
                     max_no_progress_attempts = configured_no_progress_attempts
-                    explicit_no_progress_budget = True
         hard_max_attempts = remediation_max or 6
         consumed = dict(prior_consumed_counters)
         prior_failures = (
@@ -29081,5 +29075,3 @@ class MoonMindUserWorkflow(MoonMindRunWorkflow):
     @workflow.run
     async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
         return await super().run(input_payload)
-
-    advance_remediation_loop_state,

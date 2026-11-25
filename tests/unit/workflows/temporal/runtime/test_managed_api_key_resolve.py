@@ -1641,7 +1641,7 @@ async def test_scheduled_merge_child_reads_exact_parent_start_authority(monkeypa
     monkeypatch.setattr(TemporalExecutionService, "describe_execution", describe)
     monkeypatch.setattr(TemporalClientAdapter, "read_workflow_start_input", reader)
     monkeypatch.setattr(activity, "in_activity", lambda: True)
-    monkeypatch.setattr(activity, "client", lambda: SimpleNamespace())
+    monkeypatch.setattr(activity, "client", SimpleNamespace)
 
     async def parent(workflow_id):
         return "mm:scheduled" if workflow_id == "merge-child" else ""

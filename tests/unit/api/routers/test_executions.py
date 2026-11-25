@@ -4084,7 +4084,7 @@ def test_list_executions_passes_no_implicit_owner_for_operator() -> None:
     )
     app.dependency_overrides[_get_service] = lambda: mock_service
     _override_temporal_client(app)
-    mock_user = _override_user_dependencies(app, is_superuser=False)
+    _override_user_dependencies(app, is_superuser=False)
 
     with TestClient(app) as test_client:
         response = test_client.get("/api/executions")
@@ -4107,7 +4107,7 @@ def test_list_executions_passes_explicit_owner_filter_for_operator() -> None:
     )
     app.dependency_overrides[_get_service] = lambda: mock_service
     _override_temporal_client(app)
-    mock_user = _override_user_dependencies(app, is_superuser=False)
+    _override_user_dependencies(app, is_superuser=False)
 
     with TestClient(app) as test_client:
         response = test_client.get("/api/executions", params={"ownerType": "user"})

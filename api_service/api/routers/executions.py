@@ -15738,7 +15738,7 @@ async def create_execution(
         request = CreateExecutionRequest.model_validate(payload)
         # Rejected before a recurring definition or execution can store it.
         _refuse_authored_repository_tool_admissions(request.initial_parameters)
-        assessment_scope = _admitted_assessment_scope_parameter(
+        _admitted_assessment_scope_parameter(
             request.initial_parameters.get("assessmentScope"),
             principal=(principal_context or {}).get("verified_principal"),
         )
@@ -21105,7 +21105,7 @@ async def rerun_execution(
     from uuid import uuid4 as _uuid4
 
     # Fetch the original execution
-    original = await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
 
     # Fetch the canonical record to get full initial_parameters
     canonical = await session.get(TemporalExecutionCanonicalRecord, workflow_id)

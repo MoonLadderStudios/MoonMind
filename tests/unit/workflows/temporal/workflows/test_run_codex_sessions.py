@@ -623,7 +623,6 @@ async def test_run_clears_workflow_scoped_session_once_per_step_execution(
 ) -> None:
     workflow = MoonMindRunWorkflow()
     _configure_workflow_runtime(monkeypatch)
-    now = datetime(2026, 6, 10, 12, 0, tzinfo=UTC)
     activity_calls: list[tuple[str, Any]] = []
     signal_calls: list[tuple[str, Any]] = []
 

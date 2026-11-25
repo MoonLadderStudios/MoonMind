@@ -4453,7 +4453,6 @@ async def test_seed_refresh_preserves_operator_availability_override(
     async with template_db(tmp_path) as maker, maker() as session:
         service = PresetCatalogService(session)
         await service.sync_seed_templates(seed_dir=seed_dir)
-        reviewer = uuid4()
         if override == "review":
             await service.set_release_status(
                 slug="reviewed",

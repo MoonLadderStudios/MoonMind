@@ -205,13 +205,6 @@ class TestVerifyVolumeCredentials:
 
     @pytest.mark.asyncio
     async def test_docker_timeout(self) -> None:
-        async def slow_exec(*args, **kwargs):
-            mock_proc = AsyncMock()
-            mock_proc.communicate = AsyncMock(
-                side_effect=asyncio.TimeoutError()
-            )
-            return mock_proc
-
         with patch(
             "asyncio.create_subprocess_exec",
             side_effect=asyncio.TimeoutError(),

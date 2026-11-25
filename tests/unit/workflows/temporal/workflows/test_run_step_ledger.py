@@ -1346,7 +1346,6 @@ def test_review_gate_retry_requires_reattempt_recommendation(
     verdict: str,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
-    workflow = MoonMindRunWorkflow()
 
     assert review_gate_retry_allowed(
         verdict=SimpleNamespace(

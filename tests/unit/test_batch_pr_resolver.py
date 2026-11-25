@@ -1134,7 +1134,6 @@ def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
     """When MOONMIND_URL is set, _submit_jobs should POST to /api/executions."""
     module = _load_module()
     submit_jobs_via_http = module["_submit_jobs_via_http"]
-    _read_worker_token = module["_read_worker_token"]
 
     monkeypatch.setenv("MOONMIND_WORKER_TOKEN", "test-token-abc")
     monkeypatch.setenv(

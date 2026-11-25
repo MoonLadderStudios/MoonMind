@@ -1325,10 +1325,6 @@ async def test_postgres_instance_routes_need_no_virtual_person(pg_maker, monkeyp
     monkeypatch.setattr(settings.feature_flags, "preset_catalog", True)
     monkeypatch.setattr(settings.workflow, "test_mode", False)
 
-    def no_virtual_person():
-        pytest.fail("Instance consumers must use permission admission, not a virtual User")
-
-
     async def database():
         async with pg_maker() as db:
             yield db
@@ -1437,10 +1433,6 @@ async def account_free_product(pg_maker, monkeypatch, tmp_path, request):
         "_build_store_from_settings",
         staticmethod(lambda: LocalTemporalArtifactStore(tmp_path / "artifacts")),
     )
-
-    def no_virtual_person():
-        pytest.fail("Journey consumers must use admission, not a transient User")
-
 
     async def database():
         async with pg_maker() as db:

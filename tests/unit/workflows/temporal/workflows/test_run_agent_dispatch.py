@@ -3700,7 +3700,6 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
 
 class TestReviewGateHelpers(unittest.TestCase):
     def test_review_gate_skips_matching_tool_identifier(self) -> None:
-        wf = MoonMindRunWorkflow()
         approval_policy = SimpleNamespace(
             enabled=True,
             skip_tool_types=("repo.publish",),
@@ -3715,7 +3714,6 @@ class TestReviewGateHelpers(unittest.TestCase):
         self.assertFalse(is_active)
 
     def test_review_gate_still_skips_matching_tool_type(self) -> None:
-        wf = MoonMindRunWorkflow()
         approval_policy = SimpleNamespace(
             enabled=True,
             skip_tool_types=("agent_runtime",),

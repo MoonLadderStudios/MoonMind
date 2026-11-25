@@ -1192,7 +1192,7 @@ async def _resolve_initial_context_message(
     )
     record_context = getattr(run_store, "record_initial_context", None)
     if callable(record_context):
-        durable_row = await record_context(
+        await record_context(
             request.idempotency_key,
             evidence=evidence,
         )
