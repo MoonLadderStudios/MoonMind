@@ -2810,7 +2810,6 @@ class PresetCatalogService:
             )
             launch, skipped = plan_run.derive_plan_run(
                 plan,
-                plan_ref=plan_ref,
                 assessment_ref=declared.get("assessmentRef") or None,
                 bindings=bindings,
                 excluded=excluded,

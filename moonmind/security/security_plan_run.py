@@ -204,7 +204,6 @@ def parse_run_inputs(
 def derive_plan_run(
     plan: SecurityPlan,
     *,
-    plan_ref: str,
     assessment_ref: str | None = None,
     bindings: Mapping[str, LaunchBinding] | None = None,
     excluded: Mapping[str, str] | None = None,
@@ -233,7 +232,7 @@ def derive_plan_run(
             if missing is None:
                 launch.append((job.id, preset, value))
                 continue
-            reason = f"Not launched: {missing}."
+            reason = f"{missing[0].upper()}{missing[1:]}."
         skipped.append(ExcludedJob(job_id=job.id, kind=job.kind, reason=reason))
     return launch, skipped
 

@@ -84,9 +84,7 @@ def plan_with(*, cloud=False, tls=False):
 
 def test_planned_jobs_launch_as_their_existing_technical_presets():
     plan = plan_with()
-    launch, excluded = derive_plan_run(
-        plan, plan_ref=PLAN_REF, assessment_ref="shop-assessment"
-    )
+    launch, excluded = derive_plan_run(plan, assessment_ref="shop-assessment")
     assert [(job, preset) for job, preset, _ in launch] == [
         ("code-scan", "security-code-supply-chain"),
         ("web-baseline", "security-web-api"),
@@ -100,7 +98,7 @@ def test_planned_jobs_launch_as_their_existing_technical_presets():
         assert value == {**planned[job], **bound}
     assert excluded == []
     # Without the reference, scoped work is reported as not launched.
-    launch, excluded = derive_plan_run(plan, plan_ref=PLAN_REF)
+    launch, excluded = derive_plan_run(plan)
     assert [job for job, _, _ in launch] == ["code-scan", "image-sbom"]
     assert "assessment reference" in excluded[0].reason
 
@@ -109,7 +107,6 @@ def test_unlaunchable_and_unbound_jobs_are_reported_never_dropped():
     plan = plan_with(cloud=True, tls=True)
     launch, excluded = derive_plan_run(
         plan,
-        plan_ref=PLAN_REF,
         assessment_ref="shop-assessment",
         excluded={"web-baseline": "Outside the window."},
     )
@@ -121,7 +118,6 @@ def test_unlaunchable_and_unbound_jobs_are_reported_never_dropped():
     # Launch bindings come from the saved authorization, never from the plan.
     launch, excluded = derive_plan_run(
         plan,
-        plan_ref=PLAN_REF,
         assessment_ref="shop-assessment",
         bindings={"cloud-posture": LaunchBinding(credential_ref="db://aws-audit")},
     )
@@ -130,7 +126,7 @@ def test_unlaunchable_and_unbound_jobs_are_reported_never_dropped():
     assert bound["credentialRef"] == "db://aws-audit"
     assert "credentialRef" not in plan.jobs[-2].input
     with pytest.raises(PlanRunError, match="unknown planned job IDs: ghost"):
-        derive_plan_run(plan, plan_ref=PLAN_REF, excluded={"ghost": "x"})
+        derive_plan_run(plan, excluded={"ghost": "x"})
 
 
 def test_run_inputs_are_job_bindings_and_excluded_job_ids():
