@@ -107,7 +107,10 @@ async def test_pin_verification_is_read_only_and_rejects_wrong_head(tmp_path):
     with pytest.raises(HarnessPlatformError, match="HEAD does not match"):
         await materializer._verify_initial_repository_pin(candidate, PIN, runtime_uid=os.getuid(), runtime_gid=os.getgid())
     assert (candidate / "later-work.txt").read_text() == "Must survive a refused checkout.\n"
-    assert subprocess.check_output(["git", "-C", str(candidate), "rev-parse", "HEAD"], text=True).strip() == head
+    current_head = subprocess.check_output(
+        ["git", "-C", str(candidate), "rev-parse", "HEAD"], text=True
+    ).strip()
+    assert current_head == head
 
 
 def test_api_preserves_existing_abbreviated_commit_for_native_owner():

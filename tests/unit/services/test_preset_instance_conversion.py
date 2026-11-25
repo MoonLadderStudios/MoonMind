@@ -720,17 +720,16 @@ async def seed_instance_admission(session, schema_revision):
     )
     assert result.published
     row = (await session.execute(select(SingleUserConversionRun))).scalar_one()
-    if True:
-        stored = deepcopy(row.result_json)
-        stored["schema_revision"] = schema_revision
-        stored["production_transforms_completed"] = True
-        # Predecessors predate later transforms but certify admission.
-        if schema_revision != "398_instance_settings":
-            stored["transforms"].pop("settings")
-        if schema_revision == "396_artifact_operator_recovery":
-            stored["transforms"].pop("presets")
-        row.result_json = stored
-        await session.commit()
+    stored = deepcopy(row.result_json)
+    stored["schema_revision"] = schema_revision
+    stored["production_transforms_completed"] = True
+    # Predecessors predate later transforms but certify admission.
+    if schema_revision != "398_instance_settings":
+        stored["transforms"].pop("settings")
+    if schema_revision == "396_artifact_operator_recovery":
+        stored["transforms"].pop("presets")
+    row.result_json = stored
+    await session.commit()
     return row.id
 
 

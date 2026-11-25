@@ -13,6 +13,7 @@ import importlib
 import os
 import re
 import asyncio
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select, text
@@ -559,7 +560,7 @@ def _parse_migration_graph():
 
     pattern = os.path.join(VERSIONS_DIR, "*.py")
     for filepath in glob.glob(pattern):
-        content = open(filepath).read()
+        content = Path(filepath).read_text(encoding="utf-8")
         rev_m = re.search(r'^revision\s*(?::\s*str)?\s*=\s*[\'\"]([\w]+)[\'\"]', content, re.MULTILINE)
         down_m = re.search(r'^down_revision\s*[^=]*=\s*(.*)', content, re.MULTILINE)
         if rev_m:

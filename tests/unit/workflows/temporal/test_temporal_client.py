@@ -362,27 +362,6 @@ async def test_control_persistence_failure_cancels_parallel_dispatch(adapter, mo
         handle.query.assert_not_awaited()
 
 
-async def test_control_resumes_legacy_persisted_batch_without_generation(adapter):
-    from moonmind.schemas.workflow_control_models import WorkflowControlBatch
-
-    batch = WorkflowControlBatch.model_validate({
-        "requestId": "legacy", "action": "Resume", "enumerated": True,
-        "targets": [{"workflowId": "legacy-workflow", "runId": "old-run", "updateId": "old-update"}],
-    })
-    handle = AsyncMock()
-    handle.get_update_handle = Mock(return_value=SimpleNamespace(result=AsyncMock(return_value=None)))
-    handle.query.return_value = {"runId": "old-run", "resumed": True}
-    adapter._client.get_workflow_handle = Mock(return_value=handle)
-    adapter._client.list_workflows = Mock(side_effect=AssertionError("Existing identities are immutable"))
-
-    result = await adapter.send_batch_resume_update(batch=batch)
-
-    assert result.status == "succeeded"
-    assert handle.start_update.await_args.kwargs["args"] == []
-    assert handle.start_update.await_args.kwargs["id"] == "old-update"
-    adapter._client.get_workflow_handle.assert_called_once_with("legacy-workflow", run_id="old-run")
-
-
 # ---- Bounded enumeration and truthful dispositions (MoonMind#3953) ----
 
 async def test_control_resumes_legacy_persisted_batch_without_generation(adapter):

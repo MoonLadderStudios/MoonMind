@@ -1002,7 +1002,6 @@ async def test_child_internal_retry_retains_controlling_through_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Req 6 + Acceptance E: internal retry shares the controlling attempt."""
-    controlling = "att_" + "a" * 24
     service = _AdmissionFakeService(labels=[])
     _install_admission_http(monkeypatch)
     _install_dynamic_issue_fetch(monkeypatch, service, 4178)
@@ -1029,7 +1028,6 @@ async def test_child_review_wait_retains_controlling_through_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Req 6 + Acceptance E: a review wait is not a disappeared owner."""
-    controlling = "att_" + "c" * 24
     service = _AdmissionFakeService(labels=[])
     _install_admission_http(monkeypatch)
     _install_dynamic_issue_fetch(monkeypatch, service, 4178)
@@ -1056,7 +1054,6 @@ async def test_child_controlling_fallback_chain_through_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Req 6 fallback: controlling attempt resolves from previous outputs."""
-    controlling = "att_" + "d" * 24
     service = _AdmissionFakeService(labels=[])
     _install_admission_http(monkeypatch)
     _install_dynamic_issue_fetch(monkeypatch, service, 4178)
