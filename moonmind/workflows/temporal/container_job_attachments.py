@@ -177,7 +177,11 @@ def _open_checked(
     expected: os.stat_result,
     kind: Callable[[int], bool],
 ) -> int | None:
-    """Open the entry that was classified, or None when it was replaced."""
+    """Open the entry that was classified, or None when it was replaced.
+
+    The descriptor stays owned here until it is validated: it is closed unless
+    it is returned, including when validation itself raises.
+    """
 
     try:
         fd = _open_at(name, flags, dir_fd)
@@ -185,11 +189,16 @@ def _open_checked(
         if exc.errno in _REPLACED:
             return None
         raise
-    opened = os.fstat(fd)
-    if kind(opened.st_mode) and (opened.st_dev, opened.st_ino) == (
-        expected.st_dev,
-        expected.st_ino,
-    ):
+    try:
+        opened = os.fstat(fd)
+        matches = kind(opened.st_mode) and (opened.st_dev, opened.st_ino) == (
+            expected.st_dev,
+            expected.st_ino,
+        )
+    except BaseException:
+        os.close(fd)
+        raise
+    if matches:
         return fd
     os.close(fd)
     return None

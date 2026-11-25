@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -316,6 +318,119 @@ def test_failed_capture_releases_every_descriptor(tmp_path):
         )
 
     assert len(os.listdir("/proc/self/fd")) == before
+
+
+@pytest.fixture
+def entry_dir(tmp_path):
+    """A classified ``a.txt`` and the parent descriptor capture opens it through."""
+
+    (tmp_path / "a.txt").write_text("classified")
+    fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    yield fd, os.stat(tmp_path / "a.txt", follow_symlinks=False)
+    os.close(fd)
+
+
+def _track_descriptors(monkeypatch) -> tuple[list[int], list[int]]:
+    """Record each descriptor ``_open_checked`` acquires and every close."""
+
+    acquired: list[int] = []
+    closed: list[int] = []
+    real_open_at, real_close = attachments._open_at, os.close
+
+    def open_at(name, flags, dir_fd):
+        fd = real_open_at(name, flags, dir_fd)
+        acquired.append(fd)
+        return fd
+
+    def close(fd):
+        closed.append(fd)
+        real_close(fd)
+
+    monkeypatch.setattr(attachments, "_open_at", open_at)
+    monkeypatch.setattr(attachments.os, "close", close)
+    return acquired, closed
+
+
+@pytest.mark.parametrize("failure", ["fstat", "kind"])
+def test_validation_failure_closes_the_acquired_descriptor_once(
+    entry_dir, monkeypatch, failure
+):
+    dir_fd, expected = entry_dir
+    acquired, closed = _track_descriptors(monkeypatch)
+    injected = OSError(errno.EIO, "injected validation failure")
+    real_fstat = os.fstat
+
+    def fstat(fd):
+        if fd in acquired:
+            raise injected
+        return real_fstat(fd)
+
+    def kind(mode):
+        raise injected
+
+    if failure == "fstat":
+        monkeypatch.setattr(attachments.os, "fstat", fstat)
+    with pytest.raises(OSError) as raised:
+        fd = attachments._open_checked(
+            "a.txt",
+            attachments._FILE_FLAGS,
+            dir_fd,
+            expected,
+            kind if failure == "kind" else stat.S_ISREG,
+        )
+        if fd is not None:
+            os.close(fd)  # a regression returned it; release it before failing
+    monkeypatch.undo()
+
+    assert raised.value is injected
+    assert len(acquired) == 1
+    assert closed.count(acquired[0]) == 1
+    with pytest.raises(OSError) as released:
+        os.fstat(acquired[0])
+    assert released.value.errno == errno.EBADF
+
+
+@pytest.mark.parametrize("mismatch", ["replaced", "wrong_kind"])
+def test_mismatched_entry_is_closed_once_and_not_transferred(
+    entry_dir, tmp_path, monkeypatch, mismatch
+):
+    dir_fd, expected = entry_dir
+    if mismatch == "replaced":
+        (tmp_path / "b.txt").write_text("replacement")
+        os.replace(tmp_path / "b.txt", tmp_path / "a.txt")
+    acquired, closed = _track_descriptors(monkeypatch)
+
+    fd = attachments._open_checked(
+        "a.txt",
+        attachments._FILE_FLAGS,
+        dir_fd,
+        expected,
+        stat.S_ISDIR if mismatch == "wrong_kind" else stat.S_ISREG,
+    )
+    if fd is not None:
+        os.close(fd)  # a regression returned it; release it before failing
+
+    assert fd is None
+    assert len(acquired) == 1
+    assert closed.count(acquired[0]) == 1
+
+
+def test_validated_entry_is_transferred_open(entry_dir, monkeypatch):
+    dir_fd, expected = entry_dir
+    acquired, closed = _track_descriptors(monkeypatch)
+
+    fd = attachments._open_checked(
+        "a.txt", attachments._FILE_FLAGS, dir_fd, expected, stat.S_ISREG
+    )
+
+    assert fd is not None
+    try:
+        assert acquired == [fd]
+        assert fd not in closed
+        opened = os.fstat(fd)
+        assert (opened.st_dev, opened.st_ino) == (expected.st_dev, expected.st_ino)
+    finally:
+        os.close(fd)
 
 
 @pytest.mark.asyncio
