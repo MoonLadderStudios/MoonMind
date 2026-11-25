@@ -16,12 +16,14 @@ from moonmind.security.security_plan import (
 )
 from moonmind.security.security_plan_run import (
     JOB_STATES,
+    MAX_CONCLUSION_REPORTS,
     REQUIREMENT_STATES,
     RUN_PRESETS,
     ExcludedJob,
     LaunchBinding,
     PlanJobRecord,
     PlanRunError,
+    conclusion_reports,
     conclusion_step,
     derive_plan_run,
     job_record_path,
@@ -127,6 +129,39 @@ def test_unlaunchable_and_unbound_jobs_are_reported_never_dropped():
     assert "credentialRef" not in plan.jobs[-2].input
     with pytest.raises(PlanRunError, match="unknown planned job IDs: ghost"):
         derive_plan_run(plan, excluded={"ghost": "x"})
+
+
+def test_a_registry_image_job_takes_its_bound_target_credential():
+    raw = hand_authored()
+    raw["jobs"].append(
+        {
+            "id": "image-registry",
+            "kind": "image-assessment",
+            "input": {
+                "operation": "assess",
+                "target": "registry",
+                "imageReference": "registry.example.com/shop/app:1.0",
+                "egressPolicyRef": "registry-egress",
+            },
+            "assets": ["shop-app"],
+            "sources": source(),
+        }
+    )
+    plan = parse_security_plan(raw)
+    planned = {job.id: job.input for job in plan.jobs}["image-registry"]
+    # Without a binding the registry is read anonymously, as the preset does.
+    launch, _ = derive_plan_run(plan, assessment_ref="shop-assessment")
+    assert {job: value for job, _, value in launch}["image-registry"] == planned
+    launch, _ = derive_plan_run(
+        plan,
+        assessment_ref="shop-assessment",
+        bindings={"image-registry": LaunchBinding(credential_ref="db://registry")},
+    )
+    bound = {job: value for job, _, value in launch}["image-registry"]
+    # The private registry credential reaches the preset's own credential field;
+    # an unscoped image job never gains the assessment reference.
+    assert bound == {**planned, "targetCredentialRef": "db://registry"}
+    assert "targetCredentialRef" not in planned
 
 
 def test_run_inputs_are_job_bindings_and_excluded_job_ids():
@@ -456,6 +491,78 @@ def test_a_completion_claim_without_native_evidence_is_a_failure():
     row = rows(result)["code-scan"]
     assert row["state"] == "failed"
     assert "without readable native evidence" in row["reason"]
+
+
+def test_reports_beyond_the_conclusion_limit_are_named_never_dropped():
+    plan = plan_with(cloud=True, tls=True)
+    records = {
+        job.id: record(job.id, "completed", [f"art_{job.id}_{n}" for n in range(8)])
+        for job in plan.jobs
+    }
+    readable = {
+        ref: "readable" for item in records.values() for ref in item.report_refs
+    }
+    assert len(readable) > MAX_CONCLUSION_REPORTS
+    first = plan_against_actual(
+        plan,
+        plan_ref=PLAN_REF,
+        identity=plan_identity(plan),
+        excluded=[],
+        records=records,
+        reports=readable,
+    )
+    evaluated, statuses = conclusion_reports(first, readable)
+    assert len(evaluated) == MAX_CONCLUSION_REPORTS
+    # Plan job order decides which reports one conclusion evaluates.
+    assert (
+        evaluated
+        == [ref for job in plan.jobs for ref in records[job.id].report_refs][
+            :MAX_CONCLUSION_REPORTS
+        ]
+    )
+    overflow = set(readable) - set(evaluated)
+    assert {statuses[ref] for ref in overflow} == {"unevaluated"}
+    result = plan_against_actual(
+        plan,
+        plan_ref=PLAN_REF,
+        identity=plan_identity(plan),
+        excluded=[],
+        records=records,
+        reports=statuses,
+    )
+    job_rows = rows(result)
+    # Every report the record carries is one the conclusion evaluates.
+    assert {ref for row in result["jobs"] for ref in row["reportRefs"]} == set(
+        evaluated
+    )
+    last = plan.jobs[-1].id
+    assert job_rows[last]["state"] == "failed"
+    assert "not evaluated" in job_rows[last]["reason"]
+    assert all(job_rows[job.id]["state"] == "completed" for job in plan.jobs[:4])
+    # A requirement whose job was not fully evaluated is never collected.
+    for row in result["requirements"]:
+        if last in row["jobIds"]:
+            assert row["state"] == "inconclusive"
+
+
+def test_a_report_the_retained_report_owner_rejects_is_not_evidence():
+    result = actual(
+        [
+            record("code-scan", "completed", ["art_code"]),
+            record("web-baseline", "completed", ["art_web", "art_invalid"]),
+        ],
+        {**CLEAN, "art_invalid": "rejected"},
+    )
+    row = rows(result)["web-baseline"]
+    assert row["state"] == "partial" and row["reportRefs"] == ["art_web"]
+    assert "art_invalid rejected" in row["reason"]
+    alone = rows(
+        actual(
+            [record("code-scan", "completed", ["art_invalid"])],
+            {"art_invalid": "rejected"},
+        )
+    )["code-scan"]
+    assert alone["state"] == "failed" and alone["reportRefs"] == []
 
 
 def test_work_removed_before_launch_leaves_its_requirements_not_assessed():

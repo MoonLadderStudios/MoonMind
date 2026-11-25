@@ -2136,10 +2136,11 @@ class AssessmentExecution:
     async def prepare_plan_run(self, request):
         """Bind this conclusion to a retained plan and its jobs' outcomes.
 
-        Returns the request with every readable job report as retained
-        evidence, and the plan-against-actual record. Job records are agent
-        claims: each cited report is read through the artifact owner, and a
-        claim without readable native evidence is not a completed job.
+        Returns the request with the readable job reports as retained
+        evidence, and the pending plan run that ``finish_plan_run`` records
+        once the retained-report owner has validated them. Job records are
+        agent claims: each cited report is read through the artifact owner,
+        and a claim without accepted native evidence is not a completed job.
         """
         selection = request.plan_run
         if selection is None:
@@ -2228,17 +2229,18 @@ class AssessmentExecution:
                     reports[record.review_ref] = "readable"
                 except (TemporalArtifactError, ToolFailure):
                     reports[record.review_ref] = "unavailable"
-        actual = plan_run.plan_against_actual(
-            plan,
-            plan_ref=selection.plan_ref,
-            identity=identity,
-            excluded=selection.excluded,
-            records=records,
-            reports=reports,
-        )
-        report_refs = list(
-            dict.fromkeys(ref for job in actual["jobs"] for ref in job["reportRefs"])
-        )[:32]
+
+        def against(statuses):
+            return plan_run.plan_against_actual(
+                plan,
+                plan_ref=selection.plan_ref,
+                identity=identity,
+                excluded=selection.excluded,
+                records=records,
+                reports=statuses,
+            )
+
+        report_refs, reports = plan_run.conclusion_reports(against(reports), reports)
         if report_refs:
             request = request.model_copy(
                 update={
@@ -2246,6 +2248,24 @@ class AssessmentExecution:
                     "tools": [*request.tools, "retained-report"],
                 }
             )
+        return request, {
+            "against": against,
+            "reports": reports,
+            "planRef": selection.plan_ref,
+            "recordRefs": record_refs,
+            "diagnostics": diagnostics,
+        }
+
+    async def finish_plan_run(self, pending, rejected_reports):
+        """Retain the plan-against-actual record over the evaluated reports.
+
+        A report the retained-report owner refused is not evidence of its
+        job, even when its schema version was recognized.
+        """
+        plan_ref = pending["planRef"]
+        actual = pending["against"](
+            {**pending["reports"], **{ref: "rejected" for ref in rejected_reports}}
+        )
         key = content_key(actual)
         saved = await self.saved(kind="security.plan-run", key=key)
         root = (
@@ -2257,16 +2277,13 @@ class AssessmentExecution:
         async def dependencies():
             return [
                 ArtifactDependency(
-                    selection.plan_ref,
-                    await self.digest(selection.plan_ref),
-                    True,
-                    CITED_PLAN_ROLE,
+                    plan_ref, await self.digest(plan_ref), True, CITED_PLAN_ROLE
                 ),
                 *[
                     ArtifactDependency(
                         ref, await self.digest(ref), True, "security.plan-job"
                     )
-                    for ref in dict.fromkeys(record_refs)
+                    for ref in dict.fromkeys(pending["recordRefs"])
                 ],
                 # Interpretations stay optional: they never hold native retention.
                 *[
@@ -2282,10 +2299,10 @@ class AssessmentExecution:
             ]
 
         await self.seal(root, dependencies)
-        return request, {
+        return {
             "ref": root,
             "record": actual,
-            "diagnostics": diagnostics,
+            "diagnostics": pending["diagnostics"],
         }
 
     async def prepare_methodology_plan(self, request):
@@ -2703,6 +2720,7 @@ class AssessmentExecution:
         if saved:
             await self.revalidate_game_math_inputs(inputs)
             scan_ref, work = saved
+            rejected_reports = work.get("rejectedReports", [])
             observation = Observation.model_validate(work["observation"])
             await self.seal(
                 scan_ref, lambda: self._scan_dependencies(refs, work, history)
@@ -2712,11 +2730,15 @@ class AssessmentExecution:
             product_scan_refs = []
             outcomes = []
             scanner_summaries = []
+            rejected_reports = []
             github_alerts = None
             if (
                 baseline
                 and baseline["observation"]["provenance"].get("assessmentWork")
                 == scan_key
+                # A plan run records which job reports were accepted, so its
+                # reports are always validated by this execution.
+                and plan_run is None
             ):
                 await self.revalidate_game_math_inputs(inputs)
                 # Duplicate feed delivery may reference the previous occurrence's
@@ -3354,6 +3376,7 @@ class AssessmentExecution:
                             "complete" if observation.complete(now) else "incomplete"
                         )
                     except (ValidationError, ValueError, AttributeError) as exc:
+                        rejected_reports.append(ref)
                         scan_diagnostics.append(
                             {"boundary": "retained-report", "error": type(exc).__name__}
                         )
@@ -3472,10 +3495,14 @@ class AssessmentExecution:
             }
             if github_alerts is not None:
                 work["githubAlerts"] = github_alerts["projection"]
+            if rejected_reports:
+                work["rejectedReports"] = rejected_reports
             scan_ref = await self.write(_json(work), kind="security.scan", key=scan_key)
             await self.seal(
                 scan_ref, lambda: self._scan_dependencies(refs, work, history)
             )
+        if plan_run is not None:
+            plan_run = await self.finish_plan_run(plan_run, rejected_reports)
         comparison = compare_observations(
             observation,
             baseline,

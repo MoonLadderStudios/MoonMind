@@ -35,7 +35,8 @@ annotations:
         title: Launch bindings
         description: 'For planned cloud jobs and web jobs with a test identity, map the job ID to the
           credentialRef granted by the saved authorization, for example {"cloud-1": {"credentialRef":
-          "db://..."}}. Jobs without one are reported as not launched.'
+          "db://..."}}. Jobs without one are reported as not launched. A registry image job uses its
+          credentialRef for a private registry and otherwise reads anonymously.'
       excluded_jobs:
         type: array
         title: Excluded jobs

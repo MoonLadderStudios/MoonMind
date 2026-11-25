@@ -180,7 +180,9 @@ derives, in order:
 
 Web and cloud jobs need the selected authorization's assessment reference
 (`assessment_ref`), and cloud jobs or test identities the granted
-`credentialRef` (`launch_bindings`). A job without them, a kind with no
+`credentialRef` (`launch_bindings`). A registry image job's bound
+`credentialRef` becomes its `targetCredentialRef`; without one it reads the
+registry anonymously. A job without them, a kind with no
 launchable step, or one the operator lists in `excluded_jobs` is not launched
 and named with its reason. The rules-of-engagement review adds "Not covered
 by this authorization" listing those jobs and any scoped step the selected
@@ -198,7 +200,9 @@ Each job step writes a `security-plan-job/v1` outcome record that the agent
 runtime publishes to the run. The conclusion treats records as claims: it
 reads every cited report through the artifact owner, passes readable native
 evidence to the retained-report owner, and retains a `security-plan-run/v1`
-record sealed with the plan and the records. The report's Plan against actual
+record sealed with the plan and the records. A report that owner rejects, or a
+readable report beyond the 32 one conclusion evaluates, is named in its job's
+reason and evidences nothing. The report's Plan against actual
 section shows each planned job as `completed`, `partial`, `failed`,
 `blocked_admission`, `blocked_readiness` or `not_run` with its reason, and
 each requirement as `evidence_collected`, `inconclusive`, `not_assessed`,

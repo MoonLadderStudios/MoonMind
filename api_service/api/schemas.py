@@ -255,6 +255,22 @@ class _InstancePresetInput(BaseModel):
         return value
 
 
+def _is_none(value: object) -> bool:
+    return value is None
+
+
+_SECURITY_PLAN_RUN_FIELDS = frozenset(
+    {
+        "kind",
+        "plan_ref",
+        "assessment_ref",
+        "launch_bindings",
+        "excluded_jobs",
+        "previous_assessment_ref",
+    }
+)
+
+
 class PresetStepBlueprintSchema(_InstancePresetInput):
     """Template step blueprint definition."""
 
@@ -270,6 +286,21 @@ class PresetStepBlueprintSchema(_InstancePresetInput):
     tool: Optional[PresetStepToolSchema] = None
     skill: Optional[PresetStepSkillSchema] = None
     annotations: dict[str, Any] = Field(default_factory=dict)
+    # A security-plan-run step's selection: values are templates over the
+    # preset's inputs, so bindings and exclusions may still be strings.
+    plan_ref: Optional[str] = Field(None, alias="planRef", exclude_if=_is_none)
+    assessment_ref: Optional[str] = Field(
+        None, alias="assessmentRef", exclude_if=_is_none
+    )
+    launch_bindings: Optional[str | dict[str, Any]] = Field(
+        None, alias="launchBindings", exclude_if=_is_none
+    )
+    excluded_jobs: Optional[str | list[Any]] = Field(
+        None, alias="excludedJobs", exclude_if=_is_none
+    )
+    previous_assessment_ref: Optional[str] = Field(
+        None, alias="previousAssessmentRef", exclude_if=_is_none
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -280,6 +311,18 @@ class PresetStepBlueprintSchema(_InstancePresetInput):
             payload.pop("presetVersion", None)
             return payload
         return value
+
+    def catalog_step(self) -> dict[str, Any]:
+        """The step as the catalog stores it.
+
+        A security-plan-run step names only its kind and selection; the other
+        blueprint fields belong to ordinary and include steps.
+        """
+        if self.kind == "security-plan-run":
+            return self.model_dump(
+                by_alias=True, include=_SECURITY_PLAN_RUN_FIELDS, exclude_none=True
+            )
+        return self.model_dump(by_alias=True)
 
 class PresetSummarySchema(BaseModel):
     """List response model for presets."""

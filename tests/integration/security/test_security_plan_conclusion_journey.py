@@ -193,7 +193,12 @@ async def test_plan_run_concludes_once_over_the_jobs_retained_evidence(environme
 
 @pytest.mark.parametrize(
     ("scenario", "state"),
-    [("malformed_output", "failed"), ("not_run", "not_run"), ("cancelled", "not_run")],
+    [
+        ("malformed_output", "failed"),
+        ("invalid_summary", "failed"),
+        ("not_run", "not_run"),
+        ("cancelled", "not_run"),
+    ],
 )
 async def test_missing_or_unusable_evidence_never_becomes_a_clean_result(
     environment, scenario, state
@@ -202,6 +207,15 @@ async def test_missing_or_unusable_evidence_never_becomes_a_clean_result(
     plan_ref, identity, raw = await retained_plan(service)
     if scenario == "malformed_output":
         bad = await put(service, b"not json {", link_type="output.summary")
+        await job_record(service, identity, "completed", [bad])
+    elif scenario == "invalid_summary":
+        # A recognized summary version is not a valid summary: the
+        # retained-report owner rejects it, so it cannot evidence completion.
+        bad = await put(
+            service,
+            {"schemaVersion": "repository-scanner/v1"},
+            link_type="output.summary",
+        )
         await job_record(service, identity, "completed", [bad])
     elif scenario == "cancelled":
         await job_record(service, identity, "cancelled", [], reason="Cancelled.")
@@ -215,6 +229,9 @@ async def test_missing_or_unusable_evidence_never_becomes_a_clean_result(
         service, outputs["securityPlanRunRef"], principal=f"workflow:{RUN}"
     )
     assert record["jobs"][0]["state"] == state
+    if scenario == "invalid_summary":
+        assert "rejected" in record["jobs"][0]["reason"]
+        assert outputs["planAgainstActual"]["jobs"] == {"failed": 1}
     # No native evidence was carried, so nothing was scanned clean.
     assert outputs["scannerSummaries"] == []
     planned = [row for row in record["requirements"] if row["jobIds"]]

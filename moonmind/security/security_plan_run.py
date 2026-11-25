@@ -21,7 +21,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field, StringConstraints, ValidationError
 
-from moonmind.security.assessments import Contract
+from moonmind.security.assessments import MAX_REPORT_REFS, Contract
 from moonmind.security.assessments import ExcludedPlanJob as ExcludedJob
 from moonmind.security.assessments import PlanRunInput
 from moonmind.security.frameworks import AssessmentText as Text
@@ -50,6 +50,9 @@ RUN_PRESETS = {
 SCOPED_PRESET_KINDS = frozenset({"web-assessment", "cloud-assessment"})
 #: Concluding budget: offline evaluation of retained evidence only.
 CONCLUSION_BUDGET = {"baseSeconds": 120, "maxSeconds": 300, "progressStallSeconds": 120}
+#: Retained reports one conclusion evaluates; readable reports beyond it are
+#: reported as unevaluated, never silently dropped.
+MAX_CONCLUSION_REPORTS = MAX_REPORT_REFS
 #: Job report summaries the retained-report owner of security.assess reads.
 NATIVE_SUMMARY_VERSIONS = frozenset(
     {
@@ -151,6 +154,10 @@ def _bind(
     if binding.credential_ref:
         if kind == "cloud-assessment":
             value["credentialRef"] = binding.credential_ref
+        elif kind == "image-assessment":
+            # A private target registry; the image contract admits it for
+            # registry targets only.
+            value["targetCredentialRef"] = binding.credential_ref
         elif kind == "web-assessment" and isinstance(value.get("identity"), dict):
             value["identity"] = {
                 **value["identity"],
@@ -391,6 +398,24 @@ def review_items(plan_document: Mapping[str, Any], scope) -> list[str] | None:
 # --- Plan against actual ---------------------------------------------------
 
 
+#: Why a cited report is not evidence, by the status the conclusion recorded.
+_UNUSABLE = {
+    "malformed": "malformed",
+    "unavailable": "unavailable",
+    "rejected": "rejected by the retained-report check",
+    "unevaluated": (
+        f"not evaluated (beyond the {MAX_CONCLUSION_REPORTS} reports one "
+        "conclusion evaluates)"
+    ),
+}
+
+
+def _unusable(refs: Iterable[str], reports: Mapping[str, str]) -> str:
+    return "; ".join(
+        f"{ref} {_UNUSABLE.get(reports.get(ref, ''), 'unavailable')}" for ref in refs
+    )
+
+
 def job_outcome(
     job_id: str,
     *,
@@ -401,7 +426,9 @@ def job_outcome(
     """``(state, reason, readable report refs)`` for one planned job.
 
     ``reports`` maps each cited report (and review) to ``readable``,
-    ``malformed`` or ``unavailable`` as the existing artifact owner found it.
+    ``malformed`` or ``unavailable`` as the artifact owner read it,
+    ``rejected`` when the retained-report owner refused it, or
+    ``unevaluated`` when it exceeds the conclusion's report bound.
     """
     if job_id in excluded:
         return "not_run", f"Not launched: {excluded[job_id]}", []
@@ -420,18 +447,15 @@ def job_outcome(
             return (
                 "failed",
                 f"Reported {record.state} without readable native evidence"
-                + (
-                    f" ({', '.join(unusable)} malformed or unavailable)"
-                    if unusable
-                    else ""
-                )
+                + (f" ({_unusable(unusable, reports)})" if unusable else "")
                 + f": {record.reason}",
                 [],
             )
         if unusable:
             return (
                 "partial",
-                f"Native evidence {', '.join(unusable)} is malformed or unavailable: {record.reason}",
+                f"Native evidence not usable ({_unusable(unusable, reports)}): "
+                f"{record.reason}",
                 readable,
             )
     return record.state, record.reason, readable
@@ -551,6 +575,23 @@ def plan_against_actual(
             "requirements": dict(Counter(row["state"] for row in requirements)),
         },
     }
+
+
+def conclusion_reports(
+    record: Mapping[str, Any], reports: Mapping[str, str]
+) -> tuple[list[str], dict[str, str]]:
+    """The reports one conclusion evaluates, and statuses naming any overflow.
+
+    Readable reports are taken in plan job order up to the conclusion's bound;
+    each one beyond it becomes ``unevaluated``, so its job and requirements are
+    reported as not fully assessed instead of being silently truncated.
+    """
+    refs = list(
+        dict.fromkeys(ref for job in record["jobs"] for ref in job["reportRefs"])
+    )
+    statuses = dict(reports)
+    statuses.update({ref: "unevaluated" for ref in refs[MAX_CONCLUSION_REPORTS:]})
+    return refs[:MAX_CONCLUSION_REPORTS], statuses
 
 
 def render_plan_against_actual(record: Mapping[str, Any], *, ref: str | None) -> str:

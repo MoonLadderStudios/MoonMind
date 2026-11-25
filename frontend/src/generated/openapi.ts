@@ -10822,6 +10822,18 @@ export interface components {
             annotations?: {
                 [key: string]: unknown;
             };
+            /** Planref */
+            planRef?: string | null;
+            /** Assessmentref */
+            assessmentRef?: string | null;
+            /** Launchbindings */
+            launchBindings?: string | {
+                [key: string]: unknown;
+            } | null;
+            /** Excludedjobs */
+            excludedJobs?: string | unknown[] | null;
+            /** Previousassessmentref */
+            previousAssessmentRef?: string | null;
         };
         /**
          * PresetStepSkillSchema

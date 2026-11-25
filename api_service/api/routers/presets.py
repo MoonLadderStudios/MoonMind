@@ -140,7 +140,7 @@ async def create_template(
             description=payload.description,
             tags=payload.tags,
             inputs_schema=[item.model_dump(by_alias=True) for item in payload.inputs],
-            steps=[item.model_dump(by_alias=True) for item in payload.steps],
+            steps=[item.catalog_step() for item in payload.steps],
             annotations=payload.annotations,
             required_capabilities=payload.required_capabilities,
             release_status=PresetReleaseStatus(payload.release_status),
@@ -166,7 +166,7 @@ async def save_from_workflow(
             slug=payload.slug,
             title=payload.title,
             description=payload.description,
-            steps=[item.model_dump(by_alias=True) for item in payload.steps],
+            steps=[item.catalog_step() for item in payload.steps],
             suggested_inputs=[
                 item.model_dump(by_alias=True) for item in payload.suggested_inputs
             ],

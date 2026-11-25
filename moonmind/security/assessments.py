@@ -48,6 +48,8 @@ from moonmind.security.web_api_methodology import (
 )
 
 MAX_RETAINED_REPORT_BYTES = 8 * 1024 * 1024
+#: Retained reports one assessment evaluates.
+MAX_REPORT_REFS = 32
 
 Text = AssessmentText
 Items = Annotated[list[Text], Field(max_length=4096)]
@@ -1054,7 +1056,9 @@ class AssessmentRequest(Contract):
     network_refs: Items
     inventory_ref: Text | None = None
     feed_ref: Text | None = None
-    report_refs: Annotated[Items, Field(max_length=32)] = Field(default_factory=list)
+    report_refs: Annotated[Items, Field(max_length=MAX_REPORT_REFS)] = Field(
+        default_factory=list
+    )
     baseline_ref: Text | None = None
     decisions_ref: Text | None = None
     review_ref: Text | None = None
