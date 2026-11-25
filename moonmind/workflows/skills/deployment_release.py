@@ -116,13 +116,6 @@ def release_failure_summary(history):
     )
 
 
-# Polls one gateway recreate keeps to itself before another may replace it.
-# The gateway healthcheck runs every 10s after a 10s start period and needs
-# three passes, so a recreate that is going to work reports healthy well
-# inside this cooldown.
-_GATEWAY_REPAIR_COOLDOWN_POLLS = 20
-
-
 async def docker(*args, input_bytes=None, timeout_seconds=360):
     process = await asyncio.create_subprocess_exec(
         "docker",

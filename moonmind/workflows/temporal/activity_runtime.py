@@ -437,8 +437,6 @@ def _saved_work_diff_to_deltas(
     return parse_git_diff_raw_to_deltas(diff_raw, excluded)
 
 
-_PROFILE_MANAGER_READY_POLL_ATTEMPTS = 60
-_PROFILE_MANAGER_READY_POLL_SECONDS = 1.0
 _MANAGED_AGENT_UID = 1000
 _MANAGED_AGENT_GID = 1000
 
@@ -538,40 +536,6 @@ _GIT_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS = 100_000
 _GIT_PUSH_SCAN_MAX_FILE_DIFF_CHARS = 200_000
 _GIT_PUSH_SCAN_MAX_CHANGED_FILES = 200
 
-_PROPOSAL_TELEMETRY_SIGNAL_TAGS = {
-    "retry",
-    "duplicate_output",
-    "missing_ref",
-    "conflicting_instructions",
-    "flaky_test",
-    "loop_detected",
-    "artifact_gap",
-}
-_PROPOSAL_TELEMETRY_TAG_ALIASES = {
-    "artifact": "artifact_gap",
-    "artifact_missing": "artifact_gap",
-    "diagnostic_gap": "artifact_gap",
-    "duplicate": "duplicate_output",
-    "duplicate_outputs": "duplicate_output",
-    "flaky": "flaky_test",
-    "flaky_tests": "flaky_test",
-    "loop": "loop_detected",
-    "missing_file": "missing_ref",
-    "missing_files": "missing_ref",
-    "missing_reference": "missing_ref",
-    "missing_refs": "missing_ref",
-    "repeated_retry": "retry",
-    "retry_exhausted": "retry",
-}
-_PROPOSAL_TELEMETRY_TAG_LABELS = {
-    "artifact_gap": "artifact gap",
-    "conflicting_instructions": "conflicting instructions",
-    "duplicate_output": "duplicate output",
-    "flaky_test": "flaky test",
-    "loop_detected": "loop detection",
-    "missing_ref": "missing reference",
-    "retry": "retry",
-}
 _AUTO_SKILL_SENTINEL = "auto"
 #: Non-secret MoonMind-owned keys every managed session may read.
 _NON_SECRET_MANAGED_SESSION_ENV_KEYS: tuple[str, ...] = ("MOONMIND_URL",)
@@ -644,9 +608,8 @@ PlanGenerator = Callable[
 SessionContractT = TypeVar("SessionContractT", bound=BaseModel)
 _PLACEHOLDER_DIGEST_FRAGMENT = "sha256:dummy"
 _GITHUB_REPOSITORY_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-_GITHUB_PULL_REQUEST_URL_PATTERN = re.compile(
-    r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+"
-)
+
+
 def build_git_push_with_lease_args(
     *,
     branch: str,

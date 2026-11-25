@@ -557,16 +557,6 @@ def _native_ui_diagnostics(*, config: OmnigentBridgeConfig) -> dict[str, Any]:
     }
 
 
-_EMBEDDED_EVIDENCE_SLOTS = {
-    "proxyConformance": ("proxy_conformance", "proxy_conformance_evidence_ref"),
-    "liveSmoke": ("live_smoke", "live_smoke_evidence_ref"),
-    "hostAuthConformance": (
-        "host_auth_conformance",
-        "host_auth_conformance_evidence_ref",
-    ),
-}
-
-
 async def _resolve_bridge_policy_authority() -> dict[str, Any]:
     """Fail closed unless the bridge's persisted default authority is usable."""
 

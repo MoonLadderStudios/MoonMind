@@ -150,29 +150,6 @@ def bind_cold_restore_workspace_spec(
     return workspace_spec
 
 
-# Optional positive-integer ceilings an authoring surface may narrow. The
-# retrieval gateway (``_bridge_authoritative_issue``) and the deployment budget
-# snapshot (``_server_policy_snapshot``) clamp any host request against these at
-# issue time, so the compiled block is an *authored* per-run ceiling and can
-# never broaden deployment policy.
-_FOLLOW_UP_RETRIEVAL_INT_FIELDS: tuple[str, ...] = (
-    "topK",
-    "maxSources",
-    "maxQueryBytes",
-    "maxContextBytes",
-    "maxContextTokens",
-    "maxQueries",
-    "latencyMs",
-    "maxConcurrency",
-    "maxRequestsPerMinute",
-    "embeddingTimeoutMs",
-    "searchTimeoutMs",
-    "overlayMaxAgeSeconds",
-    "retentionDays",
-    "maxLifetimeSeconds",
-)
-
-
 def _coerce_positive_int(value: Any) -> int | None:
     if isinstance(value, bool):
         return None
