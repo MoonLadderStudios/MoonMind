@@ -338,8 +338,9 @@ def _track_descriptors(monkeypatch) -> tuple[list[int], list[int]]:
     real_open_at, real_close = attachments._open_at, os.close
 
     def open_at(name, flags, dir_fd):
-        acquired.append(real_open_at(name, flags, dir_fd))
-        return acquired[-1]
+        fd = real_open_at(name, flags, dir_fd)
+        acquired.append(fd)
+        return fd
 
     def close(fd):
         closed.append(fd)
@@ -370,13 +371,15 @@ def test_validation_failure_closes_the_acquired_descriptor_once(
     if failure == "fstat":
         monkeypatch.setattr(attachments.os, "fstat", fstat)
     with pytest.raises(OSError) as raised:
-        attachments._open_checked(
+        fd = attachments._open_checked(
             "a.txt",
             attachments._FILE_FLAGS,
             dir_fd,
             expected,
             kind if failure == "kind" else stat.S_ISREG,
         )
+        if fd is not None:
+            os.close(fd)  # a regression returned it; release it before failing
     monkeypatch.undo()
 
     assert raised.value is injected
@@ -404,6 +407,8 @@ def test_mismatched_entry_is_closed_once_and_not_transferred(
         expected,
         stat.S_ISDIR if mismatch == "wrong_kind" else stat.S_ISREG,
     )
+    if fd is not None:
+        os.close(fd)  # a regression returned it; release it before failing
 
     assert fd is None
     assert len(acquired) == 1
