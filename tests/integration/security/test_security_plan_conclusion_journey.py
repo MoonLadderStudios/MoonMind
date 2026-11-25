@@ -100,7 +100,9 @@ async def native_evidence(service, plan):
     return await put(service, summary, link_type="output.summary")
 
 
-async def job_record(service, identity, state, reports, *, reason="Recorded."):
+async def job_record(
+    service, identity, state, reports, *, reason="Recorded.", review=None
+):
     return await put(
         service,
         {
@@ -111,6 +113,7 @@ async def job_record(service, identity, state, reports, *, reason="Recorded."):
             "reason": reason,
             "containerJobIds": ["cj-1"],
             "reportRefs": reports,
+            **({"reviewRef": review} if review else {}),
         },
         link_type=JOB_RECORD_LINK,
     )
@@ -144,7 +147,12 @@ async def test_plan_run_concludes_once_over_the_jobs_retained_evidence(environme
     summary_ref = await native_evidence(service, raw)
     # A restarted job step publishes a newer record; only the latest counts.
     await job_record(service, identity, "failed", [], reason="Interrupted.")
-    record_ref = await job_record(service, identity, "completed", [summary_ref])
+    review_ref = await put(
+        service, {"schemaVersion": "security-review/v1"}, link_type="output.review"
+    )
+    record_ref = await job_record(
+        service, identity, "completed", [summary_ref], review=review_ref
+    )
 
     outputs = await recurring.invoke(
         service,
@@ -162,9 +170,10 @@ async def test_plan_run_concludes_once_over_the_jobs_retained_evidence(environme
     assert outputs["planAgainstActual"]["jobs"] == {"completed": 1}
     # The job's native evidence reached the existing retained-report owner.
     assert [row["summaryRef"] for row in outputs["scannerSummaries"]] == [summary_ref]
-    assert {plan_ref, record_ref} <= await recurring.required(
-        service, outputs["securityPlanRunRef"]
-    )
+    required = await recurring.required(service, outputs["securityPlanRunRef"])
+    assert {plan_ref, record_ref} <= required
+    # The job's interpretation is cited, but never holds native retention.
+    assert job["reviewRef"] == review_ref and review_ref not in required
     states = {row["requirementId"]: row["state"] for row in record["requirements"]}
     assert "evidence_collected" in states.values()
     assert "met" not in states.values()

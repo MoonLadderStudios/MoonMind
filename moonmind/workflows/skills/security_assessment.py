@@ -2221,7 +2221,14 @@ class AssessmentExecution:
                     reports[ref] = "malformed"
                 except (TemporalArtifactError, ToolFailure):
                     reports[ref] = "unavailable"
-        record = plan_run.plan_against_actual(
+            # An interpretation is cited only when this conclusion can read it.
+            if record.review_ref:
+                try:
+                    await self.read(record.review_ref)
+                    reports[record.review_ref] = "readable"
+                except (TemporalArtifactError, ToolFailure):
+                    reports[record.review_ref] = "unavailable"
+        actual = plan_run.plan_against_actual(
             plan,
             plan_ref=selection.plan_ref,
             identity=identity,
@@ -2230,7 +2237,7 @@ class AssessmentExecution:
             reports=reports,
         )
         report_refs = list(
-            dict.fromkeys(ref for job in record["jobs"] for ref in job["reportRefs"])
+            dict.fromkeys(ref for job in actual["jobs"] for ref in job["reportRefs"])
         )[:32]
         if report_refs:
             request = request.model_copy(
@@ -2239,12 +2246,12 @@ class AssessmentExecution:
                     "tools": [*request.tools, "retained-report"],
                 }
             )
-        key = content_key(record)
+        key = content_key(actual)
         saved = await self.saved(kind="security.plan-run", key=key)
         root = (
             saved[0]
             if saved
-            else await self.write(_json(record), kind="security.plan-run", key=key)
+            else await self.write(_json(actual), kind="security.plan-run", key=key)
         )
 
         async def dependencies():
@@ -2261,12 +2268,23 @@ class AssessmentExecution:
                     )
                     for ref in dict.fromkeys(record_refs)
                 ],
+                # Interpretations stay optional: they never hold native retention.
+                *[
+                    ArtifactDependency(
+                        job["reviewRef"],
+                        self.digests[job["reviewRef"]],
+                        False,
+                        "security.review",
+                    )
+                    for job in actual["jobs"]
+                    if job.get("reviewRef")
+                ],
             ]
 
         await self.seal(root, dependencies)
         return request, {
             "ref": root,
-            "record": record,
+            "record": actual,
             "diagnostics": diagnostics,
         }
 

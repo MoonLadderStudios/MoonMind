@@ -360,9 +360,9 @@ CLEAN = {"art_code": "readable", "art_web": "readable", "art_image": "readable"}
             "vulnerable_or_repaired",
             [
                 record("code-scan", "completed", ["art_code"], review="art_review"),
-                record("web-baseline", "completed", ["art_web"]),
+                record("web-baseline", "completed", ["art_web"], review="art_gone"),
             ],
-            CLEAN,
+            {**CLEAN, "art_review": "readable", "art_gone": "unavailable"},
             {"code-scan": "completed", "image-sbom": "not_run"},
             "evidence_collected",
         ),
@@ -451,6 +451,8 @@ def test_scenarios_yield_truthful_plan_against_actual_states(
         assert job_rows["web-baseline"]["reportRefs"] == ["art_web"]
     if scenario == "vulnerable_or_repaired":
         assert job_rows["code-scan"]["reviewRef"] == "art_review"
+        # An interpretation the conclusion cannot read is not cited.
+        assert "reviewRef" not in job_rows["web-baseline"]
 
 
 def test_a_completion_claim_without_native_evidence_is_a_failure():

@@ -401,8 +401,8 @@ def job_outcome(
 ) -> tuple[str, str, list[str]]:
     """``(state, reason, readable report refs)`` for one planned job.
 
-    ``reports`` maps each cited report to ``readable``, ``malformed`` or
-    ``unavailable`` as the existing artifact owner found it.
+    ``reports`` maps each cited report (and review) to ``readable``,
+    ``malformed`` or ``unavailable`` as the existing artifact owner found it.
     """
     if job_id in excluded:
         return "not_run", f"Not launched: {excluded[job_id]}", []
@@ -469,7 +469,12 @@ def plan_against_actual(
             "reason": reason,
             "reportRefs": refs,
         }
-        if record is not None and record.review_ref and state != "not_run":
+        if (
+            record is not None
+            and record.review_ref
+            and state != "not_run"
+            and reports.get(record.review_ref) == "readable"
+        ):
             row["reviewRef"] = record.review_ref
         jobs.append(row)
     requirements = []
