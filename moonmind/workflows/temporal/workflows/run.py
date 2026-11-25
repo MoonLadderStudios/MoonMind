@@ -1545,6 +1545,14 @@ RUN_CONTAINER_JOB_DERIVED_IDEMPOTENCY_KEY_PATCH = (
 # Operator-admitted assessment scope reaches only the trusted step policy that
 # launch boundaries sign into container-job capabilities.
 RUN_ASSESSMENT_SCOPE_AUTHORITY_PATCH = "run-assessment-scope-authority-v1"
+# Repository and image job steps run outside an admitted assessment scope, as
+# they do alone: the container-job owner refuses repository and image scans
+# inside a scope, so a reviewed plan run could not otherwise execute them
+# beside its scoped web and cloud steps. Such a step can only lose authority:
+# scoped work stays refused without the scope, and fan-out stays refused.
+RUN_ASSESSMENT_UNSCOPED_JOB_STEPS_PATCH = "run-assessment-unscoped-job-steps-v1"
+#: Job kinds whose derived plan authority is unscoped (security_plan.job_authority).
+_UNSCOPED_ASSESSMENT_JOB_KINDS = frozenset({"repository-scan", "image-assessment"})
 # Tool steps receive the run's runtime selection so issue search can check
 # provider capacity before claiming work. Replay-gated so histories that
 # recorded the old tool Activity arguments keep replaying them.
@@ -24022,6 +24030,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             # A security planning step's declared draft; publication carries it
             # to the deterministic security.plan step. Absent from older steps.
             "securityPlanDraftPath",
+            # A security plan run job step's outcome record, published for the
+            # concluding security.assess. Absent from other steps.
+            "securityPlanJobPath",
             # Built-in vector retrieval is retired (#4105): `rag` /
             # `followUpRetrieval` are never forwarded into new agent requests.
             # Admission rejects explicit retired requirements for new work, so
@@ -24818,11 +24829,20 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if assessment_scope is not None and self._workflow_patch_enabled(
             RUN_ASSESSMENT_SCOPE_AUTHORITY_PATCH
         ):
+            hint = (node_annotations or {}).get("securityAssessment")
+            unscoped_job = (
+                isinstance(hint, Mapping)
+                and hint.get("kind") in _UNSCOPED_ASSESSMENT_JOB_KINDS
+                and self._workflow_patch_enabled(
+                    RUN_ASSESSMENT_UNSCOPED_JOB_STEPS_PATCH
+                )
+            )
             # Run parameters are the operator's admission; step inputs, Skills
             # and model output cannot set or widen this scope.
-            skill_source_policy["assessmentScope"] = self._json_value(
-                assessment_scope, path="assessmentScope"
-            )
+            if not unscoped_job:
+                skill_source_policy["assessmentScope"] = self._json_value(
+                    assessment_scope, path="assessmentScope"
+                )
             # Child runs do not inherit the scope, so fan-out would escape it.
             skill_source_policy["executionFanout"] = {
                 "authorized": False,

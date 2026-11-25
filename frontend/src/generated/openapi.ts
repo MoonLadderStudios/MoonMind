@@ -10801,7 +10801,7 @@ export interface components {
          */
         PresetStepBlueprintSchema: {
             /** Kind */
-            kind?: ("step" | "include") | null;
+            kind?: ("step" | "include" | "security-plan-run") | null;
             /** Type */
             type?: ("tool" | "skill") | null;
             /** Slug */

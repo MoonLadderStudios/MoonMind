@@ -163,6 +163,53 @@ gaps, and the operator corrects them by editing and rerunning. The saved
 environment's evidence-processing policy is enforced before the planner
 starts, with no fallback provider.
 
+## Running a plan
+
+A retained plan's Reports entry offers Run this plan, which opens Create with
+the `security-plan-run` preset and the plan selected. API callers submit the
+same preset; both expand it through the one preset compiler. Expansion reads
+the retained `security.plan` artifact with the operator's authority and
+derives, in order:
+
+- each `repository-scan`, `image-assessment`, `web-assessment` and
+  `cloud-assessment` job as its existing technical preset's step with the
+  plan's job input, so each keeps its readiness check, budget, admission and
+  native evidence;
+- one concluding `security.assess` over the plan's standards as
+  `frameworkPacks`, bound by `planRun: {planRef, planIdentity, excluded}`.
+
+Web and cloud jobs need the selected authorization's assessment reference
+(`assessment_ref`), and cloud jobs or test identities the granted
+`credentialRef` (`launch_bindings`). A job without them, a kind with no
+launchable step, or one the operator lists in `excluded_jobs` is not launched
+and named with its reason. The rules-of-engagement review adds "Not covered
+by this authorization" listing those jobs and any scoped step the selected
+authorization would refuse; the operator excludes it and reviews again. One
+review covers the whole run. Its digest covers every derived step, so a
+changed plan or authorization needs a fresh review, and an unchanged rerun or
+schedule keeps the reviewed authority.
+
+In a scoped run, repository and image job steps run without the assessment
+scope, as they do alone, because the container-job owner refuses those scans
+inside one. They can only lose authority, and no step of a scoped run can fan
+out.
+
+Each job step writes a `security-plan-job/v1` outcome record that the agent
+runtime publishes to the run. The conclusion treats records as claims: it
+reads every cited report through the artifact owner, passes readable native
+evidence to the retained-report owner, and retains a `security-plan-run/v1`
+record sealed with the plan and the records. The report's Plan against actual
+section shows each planned job as `completed`, `partial`, `failed`,
+`blocked_admission`, `blocked_readiness` or `not_run` with its reason, and
+each requirement as `evidence_collected`, `inconclusive`, `not_assessed`,
+`review`, `organisational`, `external_only` or `not_applicable`, naming who
+can close external and organisational rows. Missing, malformed or uncollected
+evidence leaves a requirement inconclusive or not assessed; zero findings
+never mean met. A restarted job's latest record counts. Pass
+`previous_assessment_ref` to compare with an earlier conclusion, which reports
+a changed pack edition as an assessment-intelligence change. The run
+authorizes no remediation; findings feed the existing finding-to-fix journey.
+
 ## Web/API methodology
 
 The `methodology` section names the standard that declares procedures and

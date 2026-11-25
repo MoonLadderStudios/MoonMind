@@ -162,6 +162,21 @@ _INCLUDE_STEP_KEYS = frozenset(
 )
 _STEP_KIND = "step"
 _INCLUDE_KIND = "include"
+# Derives the steps of one retained, digest-identified security plan: each
+# launchable planned job includes its existing technical preset, followed by
+# the concluding security.assess. The only kind that reads an artifact.
+_SECURITY_PLAN_RUN_KIND = "security-plan-run"
+_SECURITY_PLAN_RUN_KEYS = frozenset(
+    {
+        "kind",
+        "planRef",
+        "assessmentRef",
+        "launchBindings",
+        "excludedJobs",
+        "previousAssessmentRef",
+    }
+)
+_STEP_KINDS = (_STEP_KIND, _INCLUDE_KIND, _SECURITY_PLAN_RUN_KIND)
 _STEP_TYPE_TOOL = "tool"
 _STEP_TYPE_SKILL = "skill"
 _STEP_TYPE_PRESET = "preset"
@@ -242,6 +257,19 @@ class ExpandOptions:
     """Options provided when expanding template steps."""
 
     should_enforce_step_limit: bool = True
+    #: The caller's artifact read authority. Only a security plan run reads an
+    #: artifact (the retained plan); without this authority it is refused.
+    artifact_access: Any = None
+
+
+def _template_max_step_count(steps: list[dict[str, Any]]) -> int:
+    from moonmind.security.security_plan import MAX_PLAN_JOBS
+
+    count = max(25, len(steps))
+    if any(step.get("kind") == _SECURITY_PLAN_RUN_KIND for step in steps):
+        # Every planned job plus the concluding step.
+        count = max(count, len(steps) + MAX_PLAN_JOBS)
+    return count
 
 
 def _normalize_slug(value: str) -> str:
@@ -539,6 +567,20 @@ def _preset_step_to_include(
     if annotations is not None:
         include_payload["annotations"] = annotations
     return include_payload
+
+
+def _apply_security_plan_job_overlay(
+    step: dict[str, Any], overlay: Mapping[str, Any]
+) -> None:
+    """Bind one expanded technical-preset step to its planned job."""
+    step["annotations"] = {
+        **dict(step.get("annotations") or {}),
+        **overlay["annotations"],
+    }
+    skill = step.get("skill")
+    if isinstance(skill, dict):
+        skill["args"] = {**dict(skill.get("args") or {}), **overlay["args"]}
+    step["instructions"] = f"{step['instructions']}\n\n{overlay['instructions']}"
 
 
 def _slugify_from_title(title: str) -> str:
@@ -2382,7 +2424,7 @@ class PresetCatalogService:
             inputs_schema=validated_inputs,
             steps=validated_steps,
             annotations=_normalize_preset_annotations(annotations, validated_inputs),
-            max_step_count=max(25, len(validated_steps)),
+            max_step_count=_template_max_step_count(validated_steps),
             release_status=release_status,
             seed_source=seed_source,
             is_active=True,
@@ -2528,10 +2570,24 @@ class PresetCatalogService:
                     f"Step {index} uses forbidden keys: {', '.join(blocked)}."
                 )
             kind = str(raw_step.get("kind") or _STEP_KIND).strip().lower()
-            if kind not in {_STEP_KIND, _INCLUDE_KIND}:
+            if kind not in _STEP_KINDS:
                 raise PresetValidationError(
-                    f"Step {index} kind must be one of: {_STEP_KIND}, {_INCLUDE_KIND}."
+                    f"Step {index} kind must be one of: {', '.join(_STEP_KINDS)}."
                 )
+            if kind == _SECURITY_PLAN_RUN_KIND:
+                unsupported = sorted(
+                    str(key)
+                    for key in raw_step
+                    if str(key).strip() not in _SECURITY_PLAN_RUN_KEYS
+                )
+                if unsupported or not raw_step.get("planRef"):
+                    raise PresetValidationError(
+                        f"Step {index} security-plan-run names planRef and optional "
+                        "assessmentRef, launchBindings, excludedJobs and "
+                        "previousAssessmentRef only."
+                    )
+                validated.append({**raw_step, "kind": _SECURITY_PLAN_RUN_KIND})
+                continue
             if kind == _INCLUDE_KIND:
                 unsupported = sorted(
                     key
@@ -2700,6 +2756,108 @@ class PresetCatalogService:
             )
         return child_template, include_alias, include_path
 
+    async def _security_plan_run_steps(
+        self,
+        source_index: int,
+        source_step: Mapping[str, Any],
+        *,
+        variables: dict[str, Any],
+        artifact_access: Any,
+    ) -> list[tuple[int, Any, dict[str, Any], dict | None]]:
+        """Derive the steps of one retained plan for the shared step path.
+
+        Plan content stays data: each derived step is a native template over
+        step-local variables, so no plan string is rendered as a template.
+        """
+        from moonmind.security import security_plan_run as plan_run
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactError,
+            TemporalArtifactRepository,
+            TemporalArtifactService,
+        )
+
+        declared = _render_value(
+            self._template_env, dict(source_step), variables=variables
+        )
+        plan_ref = str(declared.get("planRef") or "").strip()
+        if not re.fullmatch(r"art_[A-Za-z0-9_-]+", plan_ref):
+            raise PresetValidationError(
+                "Select a retained security plan artifact (art_...) to run."
+            )
+        if artifact_access is None:
+            raise PresetValidationError(
+                "A security plan run reads its retained plan with the operator's "
+                "authority; expand it from Create or the operator API."
+            )
+        try:
+            artifacts = TemporalArtifactService(
+                TemporalArtifactRepository(self._session)
+            )
+            _artifact, links, _pinned, _policy = await artifacts.get_metadata(
+                artifact_id=plan_ref, access=artifact_access
+            )
+            if not any(link.link_type == "security.plan" for link in links):
+                raise PresetValidationError(
+                    "planRef is not a retained security plan; run the plan's "
+                    "security.plan or security.assess step first."
+                )
+            _artifact, raw = await artifacts.read(
+                artifact_id=plan_ref, access=artifact_access
+            )
+            plan, identity = plan_run.read_plan(raw)
+            bindings, excluded = plan_run.parse_run_inputs(
+                declared.get("launchBindings"), declared.get("excludedJobs")
+            )
+            launch, skipped = plan_run.derive_plan_run(
+                plan,
+                plan_ref=plan_ref,
+                assessment_ref=declared.get("assessmentRef") or None,
+                bindings=bindings,
+                excluded=excluded,
+            )
+        except PresetValidationError:
+            raise
+        except TemporalArtifactError:
+            raise PresetValidationError(
+                "The retained security plan is missing or unreadable."
+            ) from None
+        except ValueError as exc:
+            raise PresetValidationError(f"Security plan run: {exc}") from None
+        steps: list[dict[str, Any]] = [
+            {
+                "kind": _INCLUDE_KIND,
+                "slug": preset,
+                "alias": f"plan-job-{job_id}",
+                "inputMapping": {
+                    "goal": f"Planned job {job_id} of security plan {identity}.",
+                    "assessment": value,
+                },
+            }
+            for job_id, preset, value in launch
+        ]
+        steps.append(
+            plan_run.conclusion_step(
+                plan,
+                plan_ref=plan_ref,
+                identity=identity,
+                excluded=skipped,
+                previous_assessment_ref=declared.get("previousAssessmentRef") or None,
+            )
+        )
+        step_variables = {**variables, "securityPlanRun": {"steps": steps}}
+        overlays = [
+            plan_run.job_step_overlay(job_id, identity) for job_id, _, _ in launch
+        ] + [None]
+        return [
+            (
+                source_index,
+                "{{ securityPlanRun.steps[%d] }}" % index,
+                step_variables,
+                overlay,
+            )
+            for index, overlay in enumerate(overlays)
+        ]
+
     async def _current_declared_capabilities(
         self,
         template: Preset,
@@ -2749,6 +2907,7 @@ class PresetCatalogService:
         resolved_steps: list[dict[str, Any]],
         alias: str | None = None,
         input_mapping: dict[str, Any] | None = None,
+        artifact_access: Any = None,
     ) -> dict[str, Any]:
         inputs = variables["inputs"]
         if (
@@ -2786,9 +2945,25 @@ class PresetCatalogService:
         if input_mapping:
             node["inputMapping"] = dict(input_mapping)
 
+        source_steps: list[tuple[int, Any, dict[str, Any], dict | None]] = []
         for source_index, source_step in enumerate(template.steps or [], start=1):
+            if (
+                isinstance(source_step, Mapping)
+                and source_step.get("kind") == _SECURITY_PLAN_RUN_KIND
+            ):
+                source_steps.extend(
+                    await self._security_plan_run_steps(
+                        source_index,
+                        source_step,
+                        variables=variables,
+                        artifact_access=artifact_access,
+                    )
+                )
+            else:
+                source_steps.append((source_index, source_step, variables, None))
+        for source_index, source_step, step_variables, overlay in source_steps:
             rendered = _render_value(
-                self._template_env, source_step, variables=variables
+                self._template_env, source_step, variables=step_variables
             )
             if not isinstance(rendered, dict):
                 raise PresetValidationError(
@@ -2861,6 +3036,7 @@ class PresetCatalogService:
                     **variables,
                     "inputs": child_inputs,
                 }
+                first_child_step = len(resolved_steps)
                 child_node = await self._expand_preset_steps(
                     template=child_template,
                     variables=child_variables,
@@ -2873,14 +3049,18 @@ class PresetCatalogService:
                     resolved_steps=resolved_steps,
                     alias=include_alias,
                     input_mapping=child_inputs,
+                    artifact_access=artifact_access,
                 )
+                if overlay is not None:
+                    for child_step in resolved_steps[first_child_step:]:
+                        _apply_security_plan_job_overlay(child_step, overlay)
                 node["includes"].append(child_node)
                 node["stepIds"].extend(child_node["stepIds"])
                 continue
 
             if kind != _STEP_KIND:
                 raise PresetValidationError(
-                    f"Expanded step kind must be one of: {_STEP_KIND}, {_INCLUDE_KIND}."
+                    f"Expanded step kind must be one of: {', '.join(_STEP_KINDS)}."
                 )
             blocked = sorted(
                 key for key in rendered if str(key).strip() in _FORBIDDEN_STEP_KEYS
@@ -3070,6 +3250,7 @@ class PresetCatalogService:
             path=root_path,
             visited={template.slug},
             resolved_steps=resolved_steps,
+            artifact_access=options.artifact_access if options else None,
         )
         _validate_moonspec_remediation_topology(resolved_steps)
         authored_presets = _authored_presets_from_composition(composition)
@@ -3663,7 +3844,7 @@ class PresetCatalogService:
             if dict(template.annotations or {}) != annotations:
                 template.annotations = annotations
                 updated = True
-            max_step_count = max(25, len(validated_steps))
+            max_step_count = _template_max_step_count(validated_steps)
             if int(template.max_step_count or 0) != max_step_count:
                 template.max_step_count = max_step_count
                 updated = True

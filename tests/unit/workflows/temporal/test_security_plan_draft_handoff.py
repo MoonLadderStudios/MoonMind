@@ -127,6 +127,67 @@ async def test_missing_draft_publishes_no_ref_and_keeps_the_result(
     assert published.summary == "Drafted"
 
 
+@pytest.mark.asyncio
+async def test_plan_run_job_record_reaches_the_parent_for_the_conclusion(
+    tmp_path, monkeypatch
+):
+    """A plan run job step's outcome record is published like the draft (#5432)."""
+    from moonmind.security.security_plan_run import JOB_RECORD_LINK, job_record_path
+
+    execution_context(monkeypatch)
+    path = job_record_path("code-scan")
+    workspace = tmp_path / "workspace"
+    (workspace / "artifacts/security-plan-run").mkdir(parents=True)
+    body = json.dumps({"schemaVersion": "security-plan-job/v1", "jobId": "code-scan"})
+    (workspace / path).write_text(body)
+    run_store = ManagedRunStore(tmp_path / "runs")
+    run_store.save(
+        ManagedRunRecord(
+            runId="job-run",
+            agentId="codex_cli",
+            runtimeId="codex_cli",
+            status="completed",
+            startedAt=datetime.now(UTC),
+            workspacePath=str(workspace),
+        )
+    )
+    result = MoonMindAgentRun()._enrich_result_metadata(
+        request=_request(securityPlanJobPath=path),
+        result=AgentRunResult(summary="Scanned", metadata={"agentRunId": "job-run"}),
+        include_parent_execution=True,
+    )
+    assert result.metadata["securityPlanJobPath"] == path
+    async with temporal_db(tmp_path) as session:
+        service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "blobs"),
+        )
+        publisher = TemporalAgentRuntimeActivities(
+            artifact_service=service, run_store=run_store
+        )
+        monkeypatch.setattr(
+            publisher,
+            "execution_notify_completion",
+            AsyncMock(return_value={"status": "skipped"}),
+        )
+        published = await publisher.agent_runtime_publish_artifacts(result)
+        ref = published.metadata["securityPlanJobRef"]
+        assert "securityPlanDraftRef" not in published.metadata
+        linked = await service.list_for_execution(
+            namespace="default",
+            workflow_id="parent",
+            run_id="parent-run",
+            link_type=JOB_RECORD_LINK,
+            access=access_for_test("workflow:parent"),
+        )
+        assert [item.artifact_id for item in linked] == [ref]
+        _, stored = await service.read(
+            artifact_id=ref, access=access_for_test("workflow:parent")
+        )
+        # Untrusted bytes are kept unchanged; security.assess checks them.
+        assert stored == body.encode()
+
+
 def test_planner_reads_the_context_step_outputs_as_trusted_context():
     context = {
         "schemaVersion": "security-plan-context/v1",

@@ -1,0 +1,64 @@
+slug: security-plan-run
+title: Run a security plan
+description: Run a retained security plan's jobs through their existing assessment presets, then
+  conclude per selected standard and report the plan against what actually ran. Launching needs a
+  saved authorization and the rules-of-engagement review.
+tags:
+- security
+- assessment
+- security-plan
+releaseStatus: active
+requiredCapabilities:
+- sandbox
+annotations:
+  workflowPublish:
+    mode: none
+  inputSchema:
+    type: object
+    required:
+    - plan_ref
+    properties:
+      plan_ref:
+        type: string
+        title: Retained security plan
+        pattern: ^art_[A-Za-z0-9_-]+$
+        description: The security.plan artifact a planning run retained. Its content identity binds
+          the derived steps; a changed plan is a new plan and needs a fresh review.
+      assessment_ref:
+        type: string
+        title: Assessment reference
+        pattern: ^[a-z0-9][a-z0-9.-]{0,127}$
+        description: The assessment reference of the saved authorization you will select. Planned web
+          and cloud jobs need it; without it they are reported as not launched.
+      launch_bindings:
+        type: object
+        title: Launch bindings
+        description: 'For planned cloud jobs and web jobs with a test identity, map the job ID to the
+          credentialRef granted by the saved authorization, for example {"cloud-1": {"credentialRef":
+          "db://..."}}. Jobs without one are reported as not launched.'
+      excluded_jobs:
+        type: array
+        title: Excluded jobs
+        maxItems: 32
+        items:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$
+        description: Planned job IDs to leave out, such as work the selected authorization does not
+          cover. Their requirements are reported as not assessed.
+      previous_assessment_ref:
+        type: string
+        title: Previous plan-run assessment
+        pattern: ^art_[A-Za-z0-9_-]+$
+        description: Optional earlier conclusion of this plan to compare with. Omit for a first run.
+  defaults:
+    assessment_ref: null
+    launch_bindings: {}
+    excluded_jobs: []
+    previous_assessment_ref: null
+steps:
+- kind: security-plan-run
+  planRef: '{{ inputs.plan_ref }}'
+  assessmentRef: '{{ inputs.assessment_ref }}'
+  launchBindings: '{{ inputs.launch_bindings }}'
+  excludedJobs: '{{ inputs.excluded_jobs }}'
+  previousAssessmentRef: '{{ inputs.previous_assessment_ref }}'

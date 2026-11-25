@@ -260,7 +260,7 @@ class PresetStepBlueprintSchema(_InstancePresetInput):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    kind: Optional[Literal["step", "include"]] = None
+    kind: Optional[Literal["step", "include", "security-plan-run"]] = None
     type: Optional[Literal["tool", "skill"]] = None
     slug: Optional[str] = None
     title: Optional[str] = None

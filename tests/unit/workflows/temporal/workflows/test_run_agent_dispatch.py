@@ -35,6 +35,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH,
     RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH,
     RUN_ASSESSMENT_SCOPE_AUTHORITY_PATCH,
+    RUN_ASSESSMENT_UNSCOPED_JOB_STEPS_PATCH,
     RUN_AUTO_PUBLISH_TERMINAL_CONTRACT_PATCH,
     RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
     RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH,
@@ -446,6 +447,72 @@ def test_operator_assessment_scope_reaches_only_trusted_step_policy() -> None:
     assert "assessmentScope" not in step_only.step_execution.skill_source_policy
     replaying = build(patched=False, workflow_parameters={"assessmentScope": scope})
     assert "assessmentScope" not in replaying.step_execution.skill_source_policy
+
+
+@pytest.mark.parametrize(
+    ("kind", "scoped"),
+    [
+        ("repository-scan", False),
+        ("image-assessment", False),
+        ("web-assessment", True),
+        ("cloud-assessment", True),
+        (None, True),
+    ],
+)
+@pytest.mark.parametrize("patched", [True, False])
+def test_repository_and_image_job_steps_run_outside_the_admitted_scope(
+    kind, scoped, patched
+) -> None:
+    """A reviewed plan run mixes unscoped and scoped job steps (#5432).
+
+    The container-job owner refuses repository and image scans inside a scope,
+    so those steps receive no scope and can only lose authority. Fan-out stays
+    refused for every step of a scoped run. Old histories keep their policy.
+    """
+    info = SimpleNamespace(
+        namespace="default", workflow_id="mm:plan-run", run_id="run-1", parent=None
+    )
+    scope = {
+        "assessmentRef": "shop",
+        "profileRefs": ["web-assessment"],
+        "actionClasses": ["web-passive"],
+        "targets": [{"webOrigin": "https://app.example.test"}],
+        "maxJobs": 4,
+        "maxJobSeconds": 1800,
+        "evidenceIntent": "Plan run",
+    }
+    gates = {
+        RUN_ASSESSMENT_SCOPE_AUTHORITY_PATCH,
+        RUN_EXECUTION_FANOUT_AUTHORIZATION_PATCH,
+        *([RUN_ASSESSMENT_UNSCOPED_JOB_STEPS_PATCH] if patched else []),
+    }
+    with (
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=info,
+        ),
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: patch_id in gates,
+        ),
+    ):
+        request = MoonMindRunWorkflow()._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": "omnigent"}},
+            node_id="job-1",
+            tool_name="omnigent",
+            node_annotations=(
+                {"securityAssessment": {"kind": kind, "phase": "collect"}}
+                if kind
+                else {}
+            ),
+            workflow_parameters={"assessmentScope": scope},
+        )
+    policy = request.step_execution.skill_source_policy
+    assert ("assessmentScope" in policy) is (scoped or not patched)
+    assert policy["executionFanout"]["authorized"] is False
+    assert (
+        policy["executionFanout"]["reasonCode"] == "assessment_scope_restricts_fanout"
+    )
 
 
 def _resolved_skill(skill_name: str) -> ResolvedSkillEntry:

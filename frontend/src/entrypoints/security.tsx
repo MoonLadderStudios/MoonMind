@@ -18,6 +18,10 @@ const Detail = z.object({ namespace: z.string(), runId: z.string().optional(), t
 type Run = z.infer<typeof Runs>['items'][number];
 function runId(run: Run) { return run.workflowId || run.taskId || ''; }
 function workflowHref(id: string) { return `/workflows/${encodeURIComponent(id)}`; }
+function linkType(link: { linkType?: unknown; link_type?: unknown }) { return String(link.linkType || link.link_type || ''); }
+// Create derives the plan's jobs and conclusion; the operator still selects an
+// authorization and reviews the rules of engagement before anything runs.
+function runPlanHref(planRef: string) { return `/workflows/new?preset=security-plan-run&presetInputs=${encodeURIComponent(JSON.stringify({ plan_ref: planRef }))}`; }
 async function read(apiBase: string, path: string, signal?: AbortSignal) {
   const response = await fetch(`${apiBase}${path}`, { credentials: 'same-origin', ...(signal ? { signal } : {}) });
   if (!response.ok) throw await responseError(response, 'Security workspace request failed');
@@ -53,7 +57,7 @@ function AssessmentHistory({ apiBase, reports }: { apiBase: string; reports: boo
     queryFn: async ({ signal }) => {
       const value = await read(apiBase, `/executions/${encodeURIComponent(context!.namespace)}/${encodeURIComponent(selected)}/${encodeURIComponent(recordedRunId!)}/artifacts`, signal);
       const list = z.object({ artifacts: z.array(z.record(z.string(), z.unknown())) }).parse(value);
-      return list.artifacts.map(item => ({ ...item, artifactId: String(item.artifactId || item.artifact_id || '') } as SavedResultArtifactLike)).filter(item => item.artifactId && item.links?.some(link => String(link.linkType || link.link_type || '').startsWith('report.')));
+      return list.artifacts.map(item => ({ ...item, artifactId: String(item.artifactId || item.artifact_id || '') } as SavedResultArtifactLike)).filter(item => item.artifactId && item.links?.some(link => { const type = linkType(link); return type.startsWith('report.') || type === 'security.plan'; }));
     },
   });
   const changePage = (next: string[] ) => { setTokens(next); setTarget(''); setSelected(''); };
@@ -77,7 +81,7 @@ function AssessmentHistory({ apiBase, reports }: { apiBase: string; reports: boo
       {evidence.isFetching ? <p role="status">Loading report links…</p> : null}
       {evidence.isError ? <p role="alert">{evidence.error.message}</p> : null}
       {evidence.isSuccess && evidence.data.length === 0 ? <p>No report-linked artifacts are retained for this run. Other evidence may still be available in the workflow.</p> : null}
-      <ul>{evidence.data?.map(artifact => <li key={artifact.artifactId}><span>{artifact.links?.find(link => String(link.linkType || link.link_type || '').startsWith('report.'))?.label || artifact.artifactId}</span>{' · '}<a href={buildSavedResultPreviewHref(apiBase, artifact)}>Preview</a>{canDownloadSavedResultRaw(artifact) ? <> · <a href={buildSavedResultDownloadHref(apiBase, artifact)}>Download</a></> : null}</li>)}</ul>
+      <ul>{evidence.data?.map(artifact => { const plan = artifact.links?.some(link => linkType(link) === 'security.plan'); return <li key={artifact.artifactId}><span>{plan ? 'Retained security plan' : artifact.links?.find(link => linkType(link).startsWith('report.'))?.label || artifact.artifactId}</span>{' · '}<a href={buildSavedResultPreviewHref(apiBase, artifact)}>Preview</a>{canDownloadSavedResultRaw(artifact) ? <> · <a href={buildSavedResultDownloadHref(apiBase, artifact)}>Download</a></> : null}{plan ? <>{' · '}<Link to={runPlanHref(artifact.artifactId)}>Run this plan</Link></> : null}</li>; })}</ul>
     </section> : null}
   </section>;
 }
@@ -92,6 +96,6 @@ export default function SecurityPage({ payload }: { payload: BootPayload }) {
   const params = new URLSearchParams(location.search);
   const authorizationRef = params.get('authorizationRef') || undefined;
   return <SettingsDraftGuardProvider><main className="evidence-workspace space-y-6"><header><h1>Security</h1><p>Assessments, reusable target context, and retained reports. Saving a target does not authorize access or start work.</p><nav aria-label="Security sections" className="flex gap-4">{['assessments', 'targets', 'reports'].map(value => <Link key={value} to={`/security/${value}`} aria-current={tab === value ? 'page' : undefined}>{value[0]!.toUpperCase() + value.slice(1)}</Link>)}</nav></header>
-    {tab === 'targets' ? <><h2>Targets</h2><p>Saved systems and environments are context only. Select and review a separate, current authorization when launching an assessment.</p><AssessmentProjectsSettings /><AssessmentAuthorizationsSettings {...(authorizationRef ? { authorizationRef } : {})} /></> : <>{tab === 'assessments' ? <section><h2>Start or continue an assessment</h2><p>Start with a security plan: choose what you are securing, a saved environment and the standards to meet. The plan runs no scanner or network job; launch planned work later with an explicit authorization. Existing runs resume through their workflow controls; opening a run does not restart it.</p><Link to="/workflows/new?preset=security-plan">Start a security plan</Link>{' · '}<Link to="/workflows/new">Start another assessment</Link>{' · '}<Link to="/security/targets">Manage targets and authorizations</Link></section> : null}<AssessmentHistory apiBase={payload.apiBase || '/api'} reports={tab === 'reports'} /></>}
+    {tab === 'targets' ? <><h2>Targets</h2><p>Saved systems and environments are context only. Select and review a separate, current authorization when launching an assessment.</p><AssessmentProjectsSettings /><AssessmentAuthorizationsSettings {...(authorizationRef ? { authorizationRef } : {})} /></> : <>{tab === 'assessments' ? <section><h2>Start or continue an assessment</h2><p>Start with a security plan: choose what you are securing, a saved environment and the standards to meet. The plan runs no scanner or network job. To run it, open the plan's Reports and choose Run this plan; Create prefills its jobs and conclusion for your authorization and review. Existing runs resume through their workflow controls; opening a run does not restart it.</p><Link to="/workflows/new?preset=security-plan">Start a security plan</Link>{' · '}<Link to="/workflows/new">Start another assessment</Link>{' · '}<Link to="/security/targets">Manage targets and authorizations</Link></section> : null}<AssessmentHistory apiBase={payload.apiBase || '/api'} reports={tab === 'reports'} /></>}
   </main></SettingsDraftGuardProvider>;
 }

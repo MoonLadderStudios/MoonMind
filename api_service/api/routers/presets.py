@@ -20,7 +20,7 @@ from api_service.api.schemas import (
     PresetReviewRequestSchema,
     PresetSaveFromWorkflowRequestSchema,
 )
-from api_service.auth_providers import get_instance_access
+from api_service.auth_providers import get_artifact_access, get_instance_access
 from api_service.db.base import get_async_session
 from api_service.db.models import PresetReleaseStatus
 from api_service.services.presets.catalog import (
@@ -183,6 +183,7 @@ async def expand_template(
     slug: str,
     payload: PresetExpandRequestSchema,
     service: PresetCatalogService = Depends(_get_catalog_service),
+    access=Depends(get_artifact_access),
 ) -> PresetExpandResponseSchema:
     ensure_preset_catalog_enabled()
 
@@ -192,7 +193,9 @@ async def expand_template(
             inputs=payload.inputs,
             context=payload.context,
             options=ExpandOptions(
-                should_enforce_step_limit=payload.options.enforce_step_limit
+                should_enforce_step_limit=payload.options.enforce_step_limit,
+                # A security plan run reads the retained plan as the operator.
+                artifact_access=access,
             ),
         )
     except Exception as exc:  # pragma: no cover - thin API mapping

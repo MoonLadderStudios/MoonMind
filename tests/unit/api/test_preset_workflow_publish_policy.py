@@ -57,6 +57,7 @@ _PUBLISH_NOTHING_PRESETS = frozenset(
         "security-iso-27001",
         "security-policy-pack",
         "security-plan",
+        "security-plan-run",
     }
 )
 
