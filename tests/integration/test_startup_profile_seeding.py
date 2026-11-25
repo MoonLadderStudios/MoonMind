@@ -5,7 +5,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-_DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000"
 from api_service.db import base as db_base
 from api_service.db.models import (
     Base,

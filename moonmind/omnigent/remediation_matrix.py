@@ -1091,11 +1091,6 @@ _MANUAL_MUTATION_ROWS = frozenset(
     for row in REMEDIATION_ROW_CATALOG
     if row.gate == GATE_MANUAL_MUTATION
 )
-_AUTONOMOUS_ROWS = frozenset(
-    row.row_id
-    for row in REMEDIATION_ROW_CATALOG
-    if row.gate == GATE_AUTONOMOUS_ROLLOUT
-)
 
 # Per-operation evidence scopes (MoonLadderStudios/MoonMind#3626 REQ-C3).
 # Full-release promotion still requires the complete matrix, but an actual

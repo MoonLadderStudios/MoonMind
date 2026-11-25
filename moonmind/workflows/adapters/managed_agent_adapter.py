@@ -79,9 +79,6 @@ _PR_RESOLVER_ATTEMPTS_DIR = Path("var/pr_resolver/attempts")
 _PR_RESOLVER_FAILURE_STATUSES: frozenset[str] = frozenset(
     {"failed", "blocked", "attempts_exhausted"}
 )
-_PR_RESOLVER_BLOCKED_STATUSES: frozenset[str] = frozenset(
-    {"blocked", "attempts_exhausted"}
-)
 _PR_RESOLVER_MERGED_STATUSES: frozenset[str] = frozenset({"merged"})
 # fix_only finish mode reaches a clean merge gate without merging.
 _PR_RESOLVER_REVIEW_CLEAN_STATUSES: frozenset[str] = frozenset({"review_clean"})

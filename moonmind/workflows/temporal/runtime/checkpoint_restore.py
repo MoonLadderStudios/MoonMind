@@ -35,12 +35,10 @@ from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from .git_auth import build_github_token_git_environment
 from .managed_api_key_resolve import AdmittedGitRead, resolve_admitted_git_read
 
-# Checkpoint archive/manifest artifacts are written by the capture path under the
-# ``system`` owner. The artifact service only grants cross-owner reads to
-# callers carrying an admitted scope, so each restore read carries the capture
-# owner explicitly instead of relying on a bare service-principal grant.
+# Restoration evidence is written under this service principal. Reads of the
+# capture-owned checkpoint archive and manifest use the caller's admitted
+# ``ArtifactAccessContext`` instead.
 _CHECKPOINT_RESTORE_PRINCIPAL = "service:checkpoint_restore"
-_CHECKPOINT_CAPTURE_PRINCIPAL = "system"
 
 
 def _digest(payload: bytes) -> str:

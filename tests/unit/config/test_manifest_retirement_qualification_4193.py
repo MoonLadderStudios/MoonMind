@@ -138,12 +138,6 @@ _NATIVE_MANIFEST_ACTIVITY_RE = re.compile(
     r"TemporalManifestActivities|manifest_compile|manifest_write_summary"
 )
 
-# User/legitimate manifests that the no-reintroduction guard must allow.
-_ALLOWED_USER_MANIFEST_RE = re.compile(
-    r"manifest\.yaml$|vite.*manifest|skill|capabilit|saved-work|checkpoint|recovery",
-    re.IGNORECASE,
-)
-
 
 def _is_native_manifest_product_path(name: str) -> bool:
     """Whether a repo-relative path is a native Manifest product surface."""
