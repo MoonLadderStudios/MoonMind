@@ -6592,11 +6592,6 @@ def _assessment_verdict_from_artifact(
     return verdict, True, payload
 
 
-_ASSESSMENT_VERDICTS = frozenset(
-    {"FULLY_IMPLEMENTED", "PARTIALLY_IMPLEMENTED", "NOT_IMPLEMENTED", "BLOCKED"}
-)
-
-
 def _normalize_assessment_verdict(value: Any) -> str:
     # Canonical implementation lives in assessment_verdict.py; this wrapper
     # keeps one verdict path for GitHub/Jira callers in this module.

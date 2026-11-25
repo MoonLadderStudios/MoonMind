@@ -21269,30 +21269,6 @@ async def rerun_execution(
     return execution
 
 
-_RECOVERY_PAYLOAD_FORBIDDEN_FIELDS = {
-    "task",
-    "instructions",
-    "steps",
-    "attachments",
-    "inputAttachments",
-    "runtime",
-    "targetRuntime",
-    "publishMode",
-    "branch",
-    "startingBranch",
-    "targetBranch",
-    "presets",
-    "dependencies",
-    "model",
-    "requestedModel",
-    "effort",
-    "parametersPatch",
-    "inputArtifactRef",
-    "planArtifactRef",
-    "manifestArtifactRef",
-}
-
-
 def _csv_setting(value: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in value.split(",") if item.strip())
 

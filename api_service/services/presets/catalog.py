@@ -117,7 +117,6 @@ _GITHUB_ISSUE_BREAKDOWN_SOURCE_INPUTS = (
     "feature_request",
 )
 _SLUG_PATTERN = re.compile(r"[^a-z0-9-]+")
-_UNRESOLVED_PLACEHOLDER_PATTERN = re.compile(r"{{\s*[^}]+\s*}}")
 _NATIVE_SCALAR_TEMPLATE_PATTERN = re.compile(r"^\{\{.*\}\}$", re.DOTALL)
 _SECRET_LIKE_KEY_PATTERN = re.compile(
     r"(authorization|cookie|password|secret|token|api[_-]?key|access[_-]?key)",
