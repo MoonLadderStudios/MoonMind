@@ -60,8 +60,22 @@ export async function reviewAssessmentProposal(payload: Record<string, unknown>,
     method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({ payload, authorizationRef, ...(executionId ? { executionId } : {}) }), ...(signal ? { signal } : {}),
   });
+  return readAssessmentReview(response, authorizationRef);
+}
+async function readAssessmentReview(response: Response, authorizationRef: string): Promise<AssessmentEngagementReview> {
   if (!response.ok) throw await responseError(response, 'Could not prepare rules of engagement');
   const review = copyAssessmentReview(await response.json());
   if (!review || review.authorizationRef !== authorizationRef) throw new Error('The rules of engagement response did not match the selected authorization. Review again.');
   return review;
+}
+/**
+ * Review a schedule edit that changes the agent. The server applies that
+ * selection to the target when it saves, so only it can compile the proposal.
+ */
+export async function reviewScheduleAssessmentProposal(endpoint: string, edit: { target: Record<string, unknown>; runtime: Record<string, unknown> }, authorizationRef: string): Promise<AssessmentEngagementReview> {
+  const response = await fetch(endpoint, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ authorizationRef, ...edit }),
+  });
+  return readAssessmentReview(response, authorizationRef);
 }

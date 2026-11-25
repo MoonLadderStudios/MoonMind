@@ -170,6 +170,16 @@ class RecurringAgentSelectionModel(BaseModel):
     effort: Optional[str] = Field(None, alias="effort")
 
 
+class RecurringAssessmentProposalRequest(BaseModel):
+    """A schedule edit to review before it replaces assessment authority."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    authorization_ref: str = Field(..., alias="authorizationRef", min_length=1)
+    target: Optional[dict[str, Any]] = Field(None, alias="target")
+    runtime: Optional[RecurringAgentSelectionModel] = Field(None, alias="runtime")
+
+
 class UpdateRecurringWorkflowRequest(BaseModel):
     """Request payload for updating recurring schedules."""
 
@@ -895,6 +905,60 @@ async def _target_with_agent_selection(
     return target
 
 
+async def _edited_target(
+    definition: Any,
+    target: dict[str, Any] | None,
+    selection: RecurringAgentSelectionModel | None,
+    *,
+    session: AsyncSession,
+    user: OperatorAdmission,
+) -> dict[str, Any] | None:
+    """The replacement target an edit submits, or None when it keeps the saved one."""
+
+    if selection is None:
+        return target
+    return await _target_with_agent_selection(
+        _normalize_target(definition.target if target is None else target),
+        selection,
+        session=session,
+        user=user,
+    )
+
+
+@router.post("/{definition_id}/assessment-proposal")
+async def review_recurring_assessment_proposal(
+    definition_id: UUID,
+    payload: RecurringAssessmentProposalRequest,
+    service: RecurringWorkflowsService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: OperatorAdmission = Depends(get_instance_access),
+) -> dict[str, Any]:
+    """Compile the rules of engagement for a schedule edit as saving admits it.
+
+    Runtime choices are part of the reviewed plan, and an agent selection
+    changes the target here rather than in the form, so only this boundary
+    can show the operator the proposal that edit will be held to.
+    """
+    try:
+        definition = await service.get_definition(definition_id)
+        target = await _edited_target(
+            definition, payload.target, payload.runtime, session=session, user=user
+        )
+        return await service.review_assessment_target(
+            definition.target if target is None else target,
+            authorization_ref=payload.authorization_ref,
+            actor=user,
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        _log_route_exception(
+            action="review_recurring_assessment_proposal",
+            definition_id=definition_id,
+            user_id=None,
+            exc=exc,
+        )
+        raise _map_error(exc) from exc
+
+
 @router.patch("/{definition_id}", response_model=RecurringWorkflowDefinitionModel)
 async def update_recurring_workflow(
     definition_id: UUID,
@@ -910,14 +974,9 @@ async def update_recurring_workflow(
     user_uuid = user_id if isinstance(user_id, UUID) else None
     try:
         definition = await service.get_definition(definition_id)
-        target = payload.target
-        if payload.runtime is not None:
-            target = await _target_with_agent_selection(
-                _normalize_target(definition.target if target is None else target),
-                payload.runtime,
-                session=session,
-                user=user,
-            )
+        target = await _edited_target(
+            definition, payload.target, payload.runtime, session=session, user=user
+        )
         updated = await service.update_definition(
             definition,
             name=payload.name,

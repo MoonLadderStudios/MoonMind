@@ -1938,6 +1938,37 @@ class RecurringWorkflowsService:
             apply_assessment_project_parameter_defaults(parameters, snapshot)
         return normalized
 
+    async def review_assessment_target(
+        self,
+        target: Mapping[str, Any],
+        *,
+        authorization_ref: str,
+        actor: OperatorAdmission | None,
+    ) -> dict[str, Any]:
+        """Return the proposal a replacement ``target`` has to be reviewed with.
+
+        It is compiled from the same normalized target as
+        ``_admit_target_inputs``, so a review of this proposal admits that
+        target and no other.
+        """
+        from api_service.services.assessment_engagements import (
+            compile_admission_proposal,
+        )
+
+        normalized = _normalize_target(_json_object(target, field_name="target"))
+        return await compile_admission_proposal(
+            normalized["initialParameters"],
+            authorization_ref,
+            session=self._session,
+            user=actor,
+            access=(
+                ArtifactAccessContext.for_operator(actor)
+                if actor is not None
+                else ArtifactAccessContext.for_service("system")
+            ),
+            plan_overrides=normalized,
+        )
+
     async def _admit_omnigent_schedule_target(
         self,
         *,
@@ -1947,7 +1978,7 @@ class RecurringWorkflowsService:
         actor: OperatorAdmission | None,
         require_actor: bool = True,
         advanced_from: Mapping[str, Any] | None = None,
-        replace_usage: bool = False,
+        replace_agent_selection: bool = False,
     ) -> dict[str, Any] | None:
         """Compile the execution plan an Omnigent schedule target launches with.
 
@@ -1957,8 +1988,10 @@ class RecurringWorkflowsService:
         None when the target selects another runtime or already carries
         launch authority. A supplied snapshot must match durable usage, or,
         when the deployment refresh advanced it, ``advanced_from`` must.
-        ``replace_usage`` moves the definition's existing usage to a newly
-        selected snapshot, for an edit that changes its Provider Profile.
+        ``replace_agent_selection`` marks an edit that reselected the agent: a
+        changed Provider Profile moves the definition's existing usage to its
+        newly selected snapshot, and a kept snapshot's own model does not
+        outrank the model the edit resolved.
         """
 
         initial_parameters = dict(target.get("initialParameters") or {})
@@ -2055,7 +2088,7 @@ class RecurringWorkflowsService:
             # Replacement needs a usage row to move; a definition that never
             # held one (a direct schedule moving to Omnigent) records its first.
             replaces_usage = (
-                replace_usage
+                replace_agent_selection
                 and await self._session.scalar(
                     select(OmnigentAgentProfileUsage.id).where(
                         OmnigentAgentProfileUsage.consumer_type == "schedule",
@@ -2074,10 +2107,19 @@ class RecurringWorkflowsService:
         initial_parameters = dict(target.get("initialParameters") or {})
         if defaults_to_omnigent:
             initial_parameters["targetRuntime"] = "omnigent"
+        selected = {
+            field: initial_parameters[field]
+            for field in ("model", "effort")
+            if field in initial_parameters
+        }
         initial_parameters = compile_agent_profile_snapshot_parameters(
             initial_parameters,
             snapshot=snapshot,
         )
+        if replace_agent_selection and retained_snapshot is not None:
+            # Compilation copies the snapshot's own model over the pair the
+            # edit just resolved, and the plan launches whichever is recorded.
+            initial_parameters.update(selected)
         target_runtime = str(
             initial_parameters.get("targetRuntime") or ""
         ).strip().lower()
@@ -2427,7 +2469,7 @@ class RecurringWorkflowsService:
                     target=normalized_target,
                     agent_profile_selection=None,
                     actor=actor,
-                    replace_usage=replace_agent_selection,
+                    replace_agent_selection=replace_agent_selection,
                 )
                 if admitted_target is not None:
                     normalized_target = admitted_target

@@ -139,6 +139,7 @@ The page uses the existing schedule endpoints. Delete is surfaced only when the 
 | --- | --- | --- |
 | `GET` | `/api/recurring-workflows/{definitionId}` | Load schedule detail |
 | `PATCH` | `/api/recurring-workflows/{definitionId}` | Save schedule edits |
+| `POST` | `/api/recurring-workflows/{definitionId}/assessment-proposal` | Review an edit that changes the agent of an assessment schedule |
 | `POST` | `/api/recurring-workflows/{definitionId}/run` | Trigger immediate manual run |
 | `GET` | `/api/recurring-workflows/{definitionId}/runs` | Load run history |
 | `DELETE` | `/api/recurring-workflows/{definitionId}` | Delete schedule and stop future dispatch |
@@ -187,7 +188,9 @@ A changed selection is sent as `runtime` on the update request, never as edited 
 | `modelTier` | Follow this profile tier. Not combined with `model` or `effort`. |
 | `model`, `effort` | Custom pair, sent together. Null means Runtime default. |
 
-An omitted part keeps what the schedule saved. Steps with their own profile or model keep it; the others follow the workflow. Runs that already started keep the agent they launched with.
+An omitted part keeps what the schedule saved, including a selection an older target authored beside the workflow rather than in its runtime block. Steps with their own profile or model keep it; the others follow the workflow. Runs that already started keep the agent they launched with.
+
+On a schedule that carries assessment authority, runtime choices are part of the reviewed plan, so a different agent needs a current proposal review like any other changed plan. The form cannot compile that proposal itself, because the server applies the selection when it saves. **Review current assessment authority** therefore sends the target and the pending `runtime` to the schedule's `assessment-proposal` route, which returns the proposal that the same edit is admitted against. A review covers one agent selection; changing the agent again needs another.
 
 Save behavior:
 

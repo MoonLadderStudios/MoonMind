@@ -234,8 +234,34 @@ def test_an_authored_flat_model_survives_a_profile_change() -> None:
 
     target = replace_schedule_agent_selection(saved, {"profileId": "codex-work"})
 
-    assert target["initialParameters"]["model"] == "pinned-model"
-    assert target["initialParameters"]["effort"] == "low"
+    # Admission resolves only the nested selection, so the kept pair moves there.
+    parameters = target["initialParameters"]
+    runtime = parameters["workflow"]["runtime"]
+    assert (runtime["model"], runtime["effort"]) == ("pinned-model", "low")
+    assert "model" not in parameters and "effort" not in parameters
+
+
+def test_an_authored_flat_tier_survives_a_profile_change() -> None:
+    saved = _admitted_target()
+    saved["initialParameters"]["workflow"]["runtime"].pop("modelTier")
+
+    target = replace_schedule_agent_selection(saved, {"profileId": "codex-work"})
+
+    parameters = target["initialParameters"]
+    assert parameters["workflow"]["runtime"]["modelTier"] == 2
+    # The pair Tier 2 resolved to on the previous profile is not authored.
+    assert "model" not in parameters["workflow"]["runtime"]
+    assert "modelTier" not in parameters
+
+
+def test_another_profile_gives_up_a_backend_named_on_the_target_envelope() -> None:
+    saved = _admitted_target()
+    saved.update(targetRuntime="omnigent", target_runtime="omnigent")
+
+    target = replace_schedule_agent_selection(saved, {"profileId": "codex-work"})
+
+    assert "targetRuntime" not in target
+    assert "target_runtime" not in target
 
 
 def test_a_default_backend_is_resolved_again() -> None:

@@ -19,6 +19,7 @@ from moonmind.runtime_intent import (
     PROVIDER_PROFILE_REF_KEYS,
     is_custom_selection,
     merge_runtime_selection,
+    model_selection_fields,
     provider_profile_ref_from_mapping,
 )
 
@@ -83,6 +84,8 @@ def replace_schedule_agent_selection(
     ``selection`` may name a ``profileId``, and either a ``modelTier`` or a
     complete ``model``/``effort`` pair (null means Runtime default). An omitted
     part keeps what the schedule saved: the profile, or the model selection.
+    A kept selection that was authored beside the workflow moves into its
+    runtime block, the only place admission resolves a selection from.
 
     A changed Provider Profile also gives up the Backend, launch policy and
     Agent Profile snapshot chosen for the previous one, since each belongs to
@@ -160,6 +163,12 @@ def replace_schedule_agent_selection(
 
     for name in _RESOLVED_RUNTIME_KEYS:
         runtime.pop(name, None)
+    if not replaces_model and not model_selection_fields(runtime):
+        runtime.update(
+            (name, parameters.pop(name))
+            for name in MODEL_SELECTION_KEYS
+            if name in parameters
+        )
     authored: dict[str, Any] = dict(model_selection)
     if profile_changed:
         authored["profileId"] = profile_ref
@@ -188,9 +197,9 @@ def replace_schedule_agent_selection(
         # The next admission resolves the Backend this profile normally uses.
         runtime.pop("mode", None)
         parameters.pop("runtimeCutover", None)
-        for name in _BACKEND_KEYS:
-            parameters.pop(name, None)
-            task.pop(name, None)
+        for holder in (updated, parameters, task):
+            for name in _BACKEND_KEYS:
+                holder.pop(name, None)
     task["runtime"] = runtime
 
     steps = task.get("steps")

@@ -396,6 +396,22 @@ async def compile_assessment_proposal(
     return build_assessment_proposal(parameters, record)
 
 
+async def compile_admission_proposal(
+    parameters, authorization_ref, *, session, user, access, plan_overrides=None
+):
+    """Compile the proposal a review must match to admit ``parameters``.
+
+    Callers pass actual parameters separately from transport metadata. A
+    recurring target may supply a complete direct envelope as its override;
+    normalize that owner before merging instead of creating a mixed shape.
+    """
+    _reject_parameter_envelope(parameters)
+    material = {**parameters, **_parameter_document(plan_overrides or {})}
+    return await compile_assessment_proposal(
+        material, authorization_ref, session=session, user=user, access=access
+    )
+
+
 async def admit_assessment_parameters(
     parameters, *, session, user, access, principal=None, plan_overrides=None
 ):
@@ -415,13 +431,13 @@ async def admit_assessment_parameters(
         raise _denied(
             "Select a saved assessment authorization and review its proposal before starting. Existing admitted executions retain their recorded authority."
         )
-    # Callers pass actual parameters separately from transport metadata. A
-    # recurring target may supply a complete direct envelope as its override;
-    # normalize that owner before merging instead of creating a mixed shape.
-    _reject_parameter_envelope(parameters)
-    material = {**parameters, **_parameter_document(plan_overrides or {})}
-    proposal = await compile_assessment_proposal(
-        material, ref, session=session, user=user, access=access
+    proposal = await compile_admission_proposal(
+        parameters,
+        ref,
+        session=session,
+        user=user,
+        access=access,
+        plan_overrides=plan_overrides,
     )
     if parameters.get(REVIEW_KEY) != proposal:
         raise _denied(
