@@ -441,13 +441,6 @@ async def create_oauth_session(
         existing_session.failure_reason = "OAuth session workflow is not running"
         await db.commit()
         await _stop_oauth_auth_runner(existing_session)
-        existing_session = None
-
-        if existing_session is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="An active OAuth session already exists for this profile.",
-            )
 
     session_id = f"oas_{uuid.uuid4().hex[:12]}"
 

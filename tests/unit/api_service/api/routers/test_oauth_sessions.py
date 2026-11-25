@@ -737,6 +737,65 @@ async def test_create_oauth_session_rejects_duplicate_connected_pty(
 
 
 @pytest.mark.asyncio
+async def test_create_oauth_session_returns_503_when_active_status_is_unknown(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile_id = "codex-cli-unverifiable-active-profile"
+    active_session_id = "oas_unverifiable01"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=active_session_id,
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="11111111-2222-4333-8444-555555555555",
+                created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+            )
+        )
+        await session.commit()
+
+    async def _status_unavailable(_session_id: str) -> str | None:
+        raise RuntimeError("Failed to inspect OAuth session workflow")
+
+    async def _unexpected_start(_session_model) -> None:
+        raise AssertionError("workflow start should not be called")
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.get_oauth_session_workflow_status",
+        _status_unavailable,
+    )
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _unexpected_start,
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/oauth-sessions", json=_oauth_payload(profile_id)
+        )
+
+    assert response.status_code == 503
+    assert (
+        response.json()["detail"]
+        == "Unable to verify the active OAuth session. Please retry."
+    )
+
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(
+            select(ManagedAgentOAuthSession).where(
+                ManagedAgentOAuthSession.profile_id == profile_id
+            )
+        )
+        rows = result.scalars().all()
+    assert [row.session_id for row in rows] == [active_session_id]
+    assert rows[0].status == OAuthSessionStatus.AWAITING_USER
+    assert rows[0].completed_at is None
+    assert rows[0].failure_reason is None
+
+
+@pytest.mark.asyncio
 async def test_create_oauth_session_replaces_active_row_without_running_workflow(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:

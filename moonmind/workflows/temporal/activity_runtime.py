@@ -16159,8 +16159,7 @@ class TemporalAgentRuntimeActivities:
                     result.update(extra)
                 if head_sha:
                     result["push_head_sha"] = head_sha
-                if final_commit_count >= 0:
-                    result["push_commit_count"] = final_commit_count
+                result["push_commit_count"] = final_commit_count
                 return result
 
             remote_sha = await self._resolve_workspace_remote_branch_sha(
