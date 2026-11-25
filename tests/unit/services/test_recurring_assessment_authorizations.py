@@ -250,3 +250,68 @@ async def test_route_denies_unreviewed_scope_before_resolving_defaults(
     assert error.value.status_code == 422
     resolver.assert_not_awaited()
     owner.create_definition.assert_not_awaited()
+
+
+async def test_schedule_agent_edit_is_reviewed_as_the_update_will_admit_it(
+    authority, tmp_path
+):
+    """Runtime choices are part of the reviewed plan, and an agent selection
+    changes the target on the server, so the server compiles that review."""
+    from tests.unit.api.routers.test_recurring_workflows import (
+        _mm3788_create_payload,
+        _mm3788_route_target,
+        _mm3788_service,
+        _mm3788_session,
+        _patch_agent_selection,
+    )
+
+    async with _mm3788_session(tmp_path) as session:
+        target = _mm3788_route_target(
+            target_runtime="claude_code", profile_id="claude_minimax_team"
+        )
+        target["initialParameters"]["assessmentAuthorizationRef"] = authority.ref
+        target["initialParameters"]["assessmentReview"] = build_assessment_proposal(
+            target, authority
+        )
+        created = await recurring_workflows.create_recurring_workflow(
+            payload=_mm3788_create_payload(target),
+            service=_mm3788_service(session),
+            session=session,
+            user=OPERATOR,
+        )
+        saved_review = created.target["initialParameters"]["assessmentReview"]
+        runtime = {"model": "edited-model", "effort": "high"}
+
+        # The recorded review covers the previous agent only.
+        with pytest.raises(HTTPException) as refused:
+            await _patch_agent_selection(session, created, runtime)
+        assert "Review the current proposal" in refused.value.detail["message"]
+        await session.rollback()
+
+        review = await recurring_workflows.review_recurring_assessment_proposal(
+            definition_id=created.id,
+            payload=recurring_workflows.RecurringAssessmentProposalRequest(
+                authorizationRef=authority.ref, runtime=runtime
+            ),
+            service=_mm3788_service(session),
+            session=session,
+            user=OPERATOR,
+        )
+        assert review["proposalDigest"] != saved_review["proposalDigest"]
+        reviewed = deepcopy(created.target)
+        reviewed["initialParameters"]["assessmentReview"] = review
+        reviewed["initialParameters"].pop("assessmentScope")
+
+        updated, _ = await _patch_agent_selection(
+            session, created, runtime, target=reviewed
+        )
+
+        parameters = updated.target["initialParameters"]
+        assert parameters["model"] == "edited-model"
+        assert parameters["assessmentReview"]["proposalDigest"] == (
+            review["proposalDigest"]
+        )
+        assert (
+            parameters["assessmentScope"]["engagement"]["authorizationGeneration"]
+            == authority.generation
+        )

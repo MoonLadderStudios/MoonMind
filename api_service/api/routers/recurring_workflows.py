@@ -28,6 +28,7 @@ from api_service.services.recurring_workflows_service import (
     RecurringWorkflowsService,
     RecurringWorkflowValidationError,
     ScheduleRunExecution,
+    _normalize_target,
 )
 from moonmind.schemas.temporal_models import ObjectiveOutcomeValue
 from moonmind.security.operator_admission import OperatorAdmission
@@ -152,6 +153,33 @@ class CreateRecurringWorkflowRequest(BaseModel):
     target: dict[str, Any] = Field(default_factory=dict, alias="target")
     policy: dict[str, Any] = Field(default_factory=dict, alias="policy")
 
+
+class RecurringAgentSelectionModel(BaseModel):
+    """Agent selection that replaces the one a schedule was authored with.
+
+    Field presence is the intent: ``modelTier`` follows a profile tier, a
+    ``model``/``effort`` pair is Custom (null means Runtime default), and an
+    omitted part keeps what the schedule saved.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    profile_id: Optional[str] = Field(None, alias="profileId", min_length=1)
+    model_tier: Optional[int] = Field(None, alias="modelTier", ge=1)
+    model: Optional[str] = Field(None, alias="model")
+    effort: Optional[str] = Field(None, alias="effort")
+
+
+class RecurringAssessmentProposalRequest(BaseModel):
+    """A schedule edit to review before it replaces assessment authority."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    authorization_ref: str = Field(..., alias="authorizationRef", min_length=1)
+    target: Optional[dict[str, Any]] = Field(None, alias="target")
+    runtime: Optional[RecurringAgentSelectionModel] = Field(None, alias="runtime")
+
+
 class UpdateRecurringWorkflowRequest(BaseModel):
     """Request payload for updating recurring schedules."""
 
@@ -164,6 +192,7 @@ class UpdateRecurringWorkflowRequest(BaseModel):
     timezone: Optional[str] = Field(None, alias="timezone")
     scope_ref: Optional[str] = Field(None, alias="scopeRef")
     target: Optional[dict[str, Any]] = Field(None, alias="target")
+    runtime: Optional[RecurringAgentSelectionModel] = Field(None, alias="runtime")
     policy: Optional[dict[str, Any]] = Field(None, alias="policy")
     version: int = Field(..., ge=1, alias="version")
 
@@ -836,11 +865,106 @@ async def get_recurring_workflow(
     )
 
 
+async def _target_with_agent_selection(
+    saved_target: dict[str, Any],
+    selection: RecurringAgentSelectionModel,
+    *,
+    session: AsyncSession,
+    user: OperatorAdmission,
+) -> dict[str, Any]:
+    """Author ``saved_target`` with ``selection`` and resolve it like creation.
+
+    The operator chose a Provider Profile or model for future runs, so the
+    target goes back through the selection owner new schedules use: it picks
+    the Backend that profile runs on and resolves the model against the
+    profile's current tiers. The service then compiles the launch plan.
+    """
+    from api_service.api.routers.executions import (
+        _resolve_recurring_runtime_metadata,
+        _stamp_recurring_runtime_metadata,
+    )
+    from moonmind.workflows.recurring.agent_selection import (
+        ScheduleAgentSelectionError,
+        replace_schedule_agent_selection,
+    )
+
+    try:
+        target = replace_schedule_agent_selection(
+            saved_target, selection.model_dump(by_alias=True, exclude_unset=True)
+        )
+    except ScheduleAgentSelectionError as exc:
+        raise RecurringWorkflowValidationError(str(exc)) from exc
+    metadata = await _resolve_recurring_runtime_metadata(
+        target, session=session, user=user
+    )
+    if not metadata:
+        raise RecurringWorkflowValidationError(
+            "an agent selection applies only to MoonMind.UserWorkflow schedules"
+        )
+    _stamp_recurring_runtime_metadata(target["initialParameters"], metadata)
+    return target
+
+
+async def _edited_target(
+    definition: Any,
+    target: dict[str, Any] | None,
+    selection: RecurringAgentSelectionModel | None,
+    *,
+    session: AsyncSession,
+    user: OperatorAdmission,
+) -> dict[str, Any] | None:
+    """The replacement target an edit submits, or None when it keeps the saved one."""
+
+    if selection is None:
+        return target
+    return await _target_with_agent_selection(
+        _normalize_target(definition.target if target is None else target),
+        selection,
+        session=session,
+        user=user,
+    )
+
+
+@router.post("/{definition_id}/assessment-proposal")
+async def review_recurring_assessment_proposal(
+    definition_id: UUID,
+    payload: RecurringAssessmentProposalRequest,
+    service: RecurringWorkflowsService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: OperatorAdmission = Depends(get_instance_access),
+) -> dict[str, Any]:
+    """Compile the rules of engagement for a schedule edit as saving admits it.
+
+    Runtime choices are part of the reviewed plan, and an agent selection
+    changes the target here rather than in the form, so only this boundary
+    can show the operator the proposal that edit will be held to.
+    """
+    try:
+        definition = await service.get_definition(definition_id)
+        target = await _edited_target(
+            definition, payload.target, payload.runtime, session=session, user=user
+        )
+        return await service.review_assessment_target(
+            definition.target if target is None else target,
+            authorization_ref=payload.authorization_ref,
+            actor=user,
+        )
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        _log_route_exception(
+            action="review_recurring_assessment_proposal",
+            definition_id=definition_id,
+            user_id=None,
+            exc=exc,
+        )
+        raise _map_error(exc) from exc
+
+
 @router.patch("/{definition_id}", response_model=RecurringWorkflowDefinitionModel)
 async def update_recurring_workflow(
     definition_id: UUID,
     payload: UpdateRecurringWorkflowRequest,
     service: RecurringWorkflowsService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
     user: OperatorAdmission = Depends(get_instance_access),
 ) -> RecurringWorkflowDefinitionModel:
     # Single-user (#4351): admission owns access; control reads the instance
@@ -850,6 +974,9 @@ async def update_recurring_workflow(
     user_uuid = user_id if isinstance(user_id, UUID) else None
     try:
         definition = await service.get_definition(definition_id)
+        target = await _edited_target(
+            definition, payload.target, payload.runtime, session=session, user=user
+        )
         updated = await service.update_definition(
             definition,
             name=payload.name,
@@ -858,10 +985,11 @@ async def update_recurring_workflow(
             cron=payload.cron,
             timezone=payload.timezone,
             scope_ref=payload.scope_ref,
-            target=payload.target,
+            target=target,
             policy=payload.policy,
             expected_version=payload.version,
             actor=user,
+            replace_agent_selection=payload.runtime is not None,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         _log_route_exception(

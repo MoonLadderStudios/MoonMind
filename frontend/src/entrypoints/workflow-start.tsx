@@ -14,6 +14,12 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { CSSProperties, DragEvent, ReactElement } from "react";
 import { ModelSelectionFields } from "../components/workflows/ModelSelectionFields";
+import {
+  fetchProviderProfileTierCapabilities,
+  fetchProviderProfileTierPreviews,
+  type ModelTierPreviewSelection,
+  type ProviderProfileTierPreviewItem,
+} from "../lib/providerProfileTierPreviews";
 import { CreateOptionDisclosure } from "../components/workflows/CreateOptionDisclosure";
 import {
   summarizeDependencies,
@@ -28,7 +34,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useInRouterContext, useLocation } from "react-router-dom";
 
 import type { BootPayload } from "../boot/parseBootPayload";
-import type { components } from "../generated/openapi";
 import { configQueryDefaults } from "../boot/queryClient";
 import { LoadingPlaceholder } from "../components/dashboard/LoadingPlaceholder";
 import { AttachmentImagePreview } from "../components/AttachmentImagePreview";
@@ -759,128 +764,6 @@ interface ProviderModelEffortTier {
   effort?: string | null;
   parameters?: Record<string, unknown> | null;
   annotations?: Record<string, unknown> | null;
-}
-
-type ProviderProfileTierPreviewItem =
-  components["schemas"]["ProviderProfileTierPreviewItem"];
-type ProviderProfileTierPreviewResponse =
-  components["schemas"]["ProviderProfileTierPreviewResponse"];
-
-interface ModelTierPreviewSelection {
-  id: string;
-  profileId: string;
-  runtime: ModelSelection;
-}
-
-type ProviderProfileTierPreviewLookup = Record<
-  string,
-  ProviderProfileTierPreviewItem
->;
-
-interface ProviderProfileTierPreviewResult {
-  previews: ProviderProfileTierPreviewLookup;
-  errors: Record<string, string>;
-}
-
-function modelTierPreviewEndpoint(
-  providerProfilesEndpoint: string,
-  profileId: string,
-): string {
-  const queryIndex = providerProfilesEndpoint.search(/[?#]/);
-  const endpointWithoutQuery = queryIndex >= 0
-    ? providerProfilesEndpoint.slice(0, queryIndex)
-    : providerProfilesEndpoint;
-  return `${endpointWithoutQuery.replace(/\/+$/, "")}/${encodeURIComponent(profileId)}/model-tiers:preview`;
-}
-
-async function fetchProviderProfileTierPreviews(
-  providerProfilesEndpoint: string,
-  selections: ModelTierPreviewSelection[],
-): Promise<ProviderProfileTierPreviewResult> {
-  const clampSelectionsByProfile = new Map<
-    string,
-    ModelTierPreviewSelection[]
-  >();
-  const requestGroups: Array<{
-    profileId: string;
-    selections: ModelTierPreviewSelection[];
-  }> = [];
-  for (const selection of selections) {
-    if (selection.runtime.tierFallback === "strict") {
-      requestGroups.push({
-        profileId: selection.profileId,
-        selections: [selection],
-      });
-      continue;
-    }
-    const existing = clampSelectionsByProfile.get(selection.profileId) || [];
-    existing.push(selection);
-    clampSelectionsByProfile.set(selection.profileId, existing);
-  }
-  for (const [profileId, profileSelections] of clampSelectionsByProfile) {
-    requestGroups.push({ profileId, selections: profileSelections });
-  }
-
-  const results = await Promise.all(
-    requestGroups.map(
-      async ({ profileId, selections: profileSelections }) => {
-        const errors: Record<string, string> = {};
-        try {
-          const response = await fetch(
-            modelTierPreviewEndpoint(providerProfilesEndpoint, profileId),
-            {
-              method: "POST",
-              headers: {
-                Accept: "application/json",
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                steps: profileSelections.map((selection) => ({
-                  id: selection.id,
-                  ...selection.runtime,
-                })),
-              }),
-            },
-          );
-          if (!response.ok) {
-            const message = await responseErrorMessage(
-              response,
-              "Failed to preview Provider Profile model tiers.",
-            );
-            for (const selection of profileSelections) {
-              errors[selection.id] = message;
-            }
-            return { response: null, errors };
-          }
-          return {
-            response:
-              (await response.json()) as ProviderProfileTierPreviewResponse,
-            errors,
-          };
-        } catch (error) {
-          const message = error instanceof Error
-            ? error.message
-            : "Failed to preview Provider Profile model tiers.";
-          for (const selection of profileSelections) {
-            errors[selection.id] = message;
-          }
-          return { response: null, errors };
-        }
-      },
-    ),
-  );
-
-  const previews: ProviderProfileTierPreviewLookup = {};
-  const errors: Record<string, string> = {};
-  for (const result of results) {
-    Object.assign(errors, result.errors);
-    if (result.response) {
-      for (const item of result.response.items) {
-        previews[item.stepId] = item;
-      }
-    }
-  }
-  return { previews, errors };
 }
 
 interface BranchOption {
@@ -6161,18 +6044,8 @@ function WorkflowStartPageContent({
     queryKey: ["workflow-start", "model-selection-capabilities", providerProfilesEndpoint, modelSelectionProfileIds],
     enabled: modelSelectionProfileIds.length > 0,
     queryFn: async ({ signal }): Promise<Record<string, { capabilities?: ProviderProfileTierCapabilities; error?: string }>> => {
-      const entries = await Promise.all(modelSelectionProfileIds.map(async (profileId) => {
-        try {
-          const response = await fetch(`${providerProfilesEndpoint.split("?")[0]}/${encodeURIComponent(profileId)}/capabilities`, { headers: { Accept: "application/json" }, signal });
-          if (!response.ok) throw new Error("Profile suggestions could not be loaded. Manual values are preserved.");
-          const capabilities = await response.json() as ProviderProfileTierCapabilities;
-          if (!Array.isArray(capabilities.model?.options) || !Array.isArray(capabilities.effort?.options)) throw new Error("Malformed capability response");
-          return [profileId, { capabilities }] as const;
-        } catch (error) {
-          if (signal.aborted) throw error;
-          return [profileId, { error: "Profile suggestions could not be loaded. Manual values are preserved." }] as const;
-        }
-      }));
+      const entries = await Promise.all(modelSelectionProfileIds.map(async (profileId) =>
+        [profileId, await fetchProviderProfileTierCapabilities(providerProfilesEndpoint, profileId, signal)] as const));
       return Object.fromEntries(entries);
     },
   });
@@ -6189,6 +6062,7 @@ function WorkflowStartPageContent({
       fetchProviderProfileTierPreviews(
         providerProfilesEndpoint,
         modelTierPreviewSelections,
+        responseErrorMessage,
       ),
   });
 

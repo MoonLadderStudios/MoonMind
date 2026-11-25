@@ -305,9 +305,9 @@ MoonMind.AgentRun
   -> Provider Profile release last
 ```
 
-Recurring schedule creation and target edits compile the same plan into the
-stored target when it names Omnigent or omits the runtime under an Omnigent
-default; an edit whose plan cannot be compiled is rejected. Each
+Recurring schedule creation, target edits and agent-selection edits compile the
+same plan into the stored target when it names Omnigent or defaults to it; an
+edit whose plan cannot be compiled is rejected. Each
 schedule-started occurrence recompiles the schedule's frozen inputs at
 admission, binding the installed host and server images without rewriting the
 schedule; a refused compile keeps the recorded plan under its own launch checks.

@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Owner:** MoonMind Engineering
-**Last Updated:** 2026-07-10
+**Last Updated:** 2026-11-25
 **Audience:** UI developers, backend developers, operators
 
 ## 1. Purpose
@@ -18,6 +18,7 @@ The design intent is simple: a recurring schedule detail page should feel like a
 - `docs/Temporal/WorkflowSchedulingGuide.md` — scheduling flows, API contracts, and runtime config
 - `docs/Temporal/TemporalScheduling.md` — Temporal-native scheduling desired state
 - `docs/UI/WorkflowConsoleArchitecture.md` — dashboard route model and workflow detail conventions
+- `docs/UI/HarnessProfileBackendSelection.md` and `docs/UI/WorkflowModelSelection.md` — the agent selection the edit form shares with Create
 
 ---
 
@@ -138,6 +139,7 @@ The page uses the existing schedule endpoints. Delete is surfaced only when the 
 | --- | --- | --- |
 | `GET` | `/api/recurring-workflows/{definitionId}` | Load schedule detail |
 | `PATCH` | `/api/recurring-workflows/{definitionId}` | Save schedule edits |
+| `POST` | `/api/recurring-workflows/{definitionId}/assessment-proposal` | Review an edit that changes the agent of an assessment schedule |
 | `POST` | `/api/recurring-workflows/{definitionId}/run` | Trigger immediate manual run |
 | `GET` | `/api/recurring-workflows/{definitionId}/runs` | Load run history |
 | `DELETE` | `/api/recurring-workflows/{definitionId}` | Delete schedule and stop future dispatch |
@@ -169,7 +171,26 @@ Editable fields:
 - overlap policy
 - catchup policy
 - jitter seconds
-- target workflow parameters when supported by the backend contract
+- Harness, Provider Profile, Tier, Model, and Effort for future runs
+- other target workflow parameters, as JSON
+
+### Agent selection
+
+The form offers the Harness, Provider Profile, and Tier/Model/Effort controls Create uses, so changing the agent never requires editing the target JSON. The Harness narrows the profile list and the profile decides the account. After a Harness change the form asks for one of that Harness's profiles instead of choosing one, because another account changes who is billed; the previous profile returns if the Harness is chosen again. Model selection follows [Workflow Model Selection](./WorkflowModelSelection.md): a tier is saved as the tier, Custom as the full pair, and an untouched selection is not sent, so it keeps following its tier or the profile default.
+
+These controls appear for `MoonMind.UserWorkflow` targets that run an agent. Tool-only schedules and other workflow types have no agent to choose.
+
+A changed selection is sent as `runtime` on the update request, never as edited target fields. A saved target also holds what admission resolved and compiled from the previous selection (the Backend, the resolved model pair, the Agent Profile snapshot, and the execution plan), and launch reads those results rather than the authored fields. The server therefore removes them, applies the new selection, and admits the schedule again as it would a new one: it resolves the Backend the profile runs on and compiles a new plan. A selection that cannot be admitted is rejected and the saved schedule is unchanged.
+
+| `runtime` field | Meaning |
+| --- | --- |
+| `profileId` | Provider Profile for future runs. A different profile also gives up the Backend, launch policy, and execution configuration chosen for the previous one. |
+| `modelTier` | Follow this profile tier. Not combined with `model` or `effort`. |
+| `model`, `effort` | Custom pair, sent together. Null means Runtime default. |
+
+An omitted part keeps what the schedule saved, including a selection an older target authored beside the workflow rather than in its runtime block. Steps with their own profile or model keep it; the others follow the workflow. Runs that already started keep the agent they launched with.
+
+On a schedule that carries assessment authority, runtime choices are part of the reviewed plan, so a different agent needs a current proposal review like any other changed plan. The form cannot compile that proposal itself, because the server applies the selection when it saves. **Review current assessment authority** therefore sends the target and the pending `runtime` to the schedule's `assessment-proposal` route, which returns the proposal that the same edit is admitted against. A review covers one agent selection; changing the agent again needs another.
 
 Save behavior:
 

@@ -2602,6 +2602,27 @@ h1 {
   width: fit-content;
 }
 
+.schedules-agent-selection {
+  display: grid;
+  gap: 0.8rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.schedules-agent-selection__identity {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+@media (max-width: 640px) {
+  .schedules-agent-selection__identity {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .schedules-detail-panel > details > summary {
   cursor: pointer;
   color: rgb(var(--mm-ink));

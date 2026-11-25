@@ -1,6 +1,8 @@
 import { CirclePlay, ListFilter, Pause, Plus } from 'lucide-react';
 import { AssessmentEngagementReview } from '../components/workflows/AssessmentEngagementReview';
-import { copyAssessmentReview, reviewAssessmentProposal, type AssessmentEngagementReview as EngagementReview } from '../lib/assessmentEngagement';
+import { ScheduleAgentSelectionFields } from '../components/workflows/ScheduleAgentSelectionFields';
+import { savedScheduleAgent, scheduleAgentPatch, type ScheduleAgentDraft } from '../lib/scheduleAgentSelection';
+import { copyAssessmentReview, reviewAssessmentProposal, reviewScheduleAssessmentProposal, type AssessmentEngagementReview as EngagementReview } from '../lib/assessmentEngagement';
 import { Button } from '../components/Button';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FormEvent, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -157,6 +159,12 @@ const SchedulesBootDataSchema = z
           })
           .partial()
           .optional(),
+        system: z
+          .object({
+            providerProfiles: z.object({ list: z.string().optional() }).partial().optional(),
+          })
+          .partial()
+          .optional(),
       })
       .partial()
       .optional(),
@@ -219,6 +227,10 @@ export function stripLegacyAccountScopeParam(endpoint: string): string {
   params.delete('scope');
   const serialized = params.toString();
   return `${path}${serialized ? `?${serialized}` : ''}${hash ? `#${hash}` : ''}`;
+}
+
+function providerProfilesEndpoint(payload: BootPayload): string {
+  return scheduleBootData(payload)?.dashboardConfig?.system?.providerProfiles?.list || '/api/v1/provider-profiles';
 }
 
 function scheduleListEndpoint(payload: BootPayload): string {
@@ -635,6 +647,8 @@ type ScheduleEditForm = {
   catchupMode: string;
   jitterSeconds: string;
   targetJson: string;
+  /** Null when the target has no agent to choose (tool-only or another workflow type). */
+  agent: ScheduleAgentDraft | null;
 };
 
 const SUPPORTED_CATCHUP_MODES = new Set(['none', 'last', 'all']);
@@ -660,6 +674,7 @@ function editFormFromSchedule(schedule: Schedule): ScheduleEditForm {
       ? String(jitterSeconds)
       : '0',
     targetJson: JSON.stringify(schedule.target || {}, null, 2),
+    agent: savedScheduleAgent(schedule.target),
   };
 }
 
@@ -771,6 +786,9 @@ function validateScheduleEditForm(form: ScheduleEditForm): ScheduleEditErrors {
   if (targetResult.error) {
     errors.targetJson = targetResult.error;
   }
+  if (form.agent?.harness && !form.agent.profileId) {
+    errors.agent = 'Choose a Provider Profile for the selected Harness.';
+  }
   return errors;
 }
 
@@ -808,6 +826,12 @@ function buildPolicyPayload(schedule: Schedule, form: ScheduleEditForm): Record<
   return policy;
 }
 
+/** The agent change an edit form holds against its saved schedule, if any. */
+function scheduleAgentChange(schedule: Schedule, form: ScheduleEditForm): Record<string, unknown> | null {
+  const saved = savedScheduleAgent(schedule.target);
+  return saved && form.agent ? scheduleAgentPatch(saved, form.agent) : null;
+}
+
 function buildSchedulePatchPayload(schedule: Schedule, form: ScheduleEditForm): Record<string, unknown> {
   const payload: Record<string, unknown> = {};
   if (form.name !== schedule.name) {
@@ -836,6 +860,12 @@ function buildSchedulePatchPayload(schedule: Schedule, form: ScheduleEditForm): 
   const target = parseTargetJson(form.targetJson).value || {};
   if (stableJson(target) !== stableJson(schedule.target || {})) {
     payload.target = target;
+  }
+  const runtime = scheduleAgentChange(schedule, form);
+  if (runtime) {
+    // The server replaces the saved selection and admits the schedule again;
+    // the target JSON keeps what the previous admission compiled.
+    payload.runtime = runtime;
   }
   if (Object.keys(payload).length > 0) {
     payload.version = schedule.version;
@@ -1004,7 +1034,7 @@ function ScheduleDetailPage({
 }) {
   const queryClient = useQueryClient();
   const [isEditing, setIsEditing] = useState(false);
-  const [assessmentProposal, setAssessmentProposal] = useState<{ targetJson: string; review: EngagementReview } | null>(null);
+  const [assessmentProposal, setAssessmentProposal] = useState<{ targetJson: string; agentChange: string; review: EngagementReview } | null>(null);
   const [reviewingAssessment, setReviewingAssessment] = useState(false);
   const assessmentReviewRequest = useRef(0);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -1022,10 +1052,15 @@ function ScheduleDetailPage({
   }, [isEditing]);
   const detailEndpoint = useMemo(() => scheduleEndpoint(payload, 'detail', definitionId), [payload, definitionId]);
   const updateEndpoint = useMemo(() => scheduleEndpoint(payload, 'update', definitionId), [payload, definitionId]);
+  const assessmentProposalEndpoint = useMemo(() => {
+    const [path, query] = updateEndpoint.split('?');
+    return `${path}/assessment-proposal${query ? `?${query}` : ''}`;
+  }, [updateEndpoint]);
   const runNowEndpoint = useMemo(() => scheduleEndpoint(payload, 'runNow', definitionId), [payload, definitionId]);
   const runsEndpoint = useMemo(() => scheduleEndpoint(payload, 'runs', definitionId), [payload, definitionId]);
   const deleteEndpoint = useMemo(() => scheduleEndpoint(payload, 'delete', definitionId), [payload, definitionId]);
   const listEndpoint = useMemo(() => scheduleListEndpoint(payload), [payload]);
+  const profilesEndpoint = useMemo(() => providerProfilesEndpoint(payload), [payload]);
   const sources = useMemo(() => scheduleSources(payload), [payload]);
 
   const detailQuery = useQuery({
@@ -1506,20 +1541,25 @@ function ScheduleDetailPage({
                 const parameters = target?.initialParameters ?? target;
                 const ref = parameters && typeof parameters === 'object' ? (parameters as Record<string, unknown>).assessmentAuthorizationRef : null;
                 if (typeof ref !== 'string' || !target) return null;
+                // Runtime choices are part of the reviewed plan, so a review covers one agent.
+                const runtime = schedule ? scheduleAgentChange(schedule, currentForm) : null;
+                const agentChange = JSON.stringify(runtime);
                 return <section className="stack" aria-label="Review recurring assessment changes">
-                  <p>Renewed or changed authority needs a current proposal review. Equivalent authorized runs do not need repeated confirmation.</p>
+                  <p>Renewed or changed authority, including a different agent, needs a current proposal review. Equivalent authorized runs do not need repeated confirmation.</p>
                   <Button type="button" disabled={reviewingAssessment} onClick={async () => {
                     const request = ++assessmentReviewRequest.current;
                     const targetJson = currentForm.targetJson;
                     setReviewingAssessment(true); setAssessmentProposal(null);
                     try {
-                      const review = await reviewAssessmentProposal(target, ref);
-                      if (assessmentReviewRequest.current === request) setAssessmentProposal({ targetJson, review });
+                      const review = runtime
+                        ? await reviewScheduleAssessmentProposal(assessmentProposalEndpoint, { target, runtime }, ref)
+                        : await reviewAssessmentProposal(target, ref);
+                      if (assessmentReviewRequest.current === request) setAssessmentProposal({ targetJson, agentChange, review });
                     } catch (error) {
                       if (assessmentReviewRequest.current === request) setSubmitErrors(previous => ({ ...previous, targetJson: error instanceof Error ? error.message : 'Could not review authority.' }));
                     } finally { if (assessmentReviewRequest.current === request) setReviewingAssessment(false); }
                   }}>Review current assessment authority</Button>
-                  {assessmentProposal?.targetJson === currentForm.targetJson ? <>
+                  {assessmentProposal?.targetJson === currentForm.targetJson && assessmentProposal.agentChange === agentChange ? <>
                     <AssessmentEngagementReview review={assessmentProposal.review} />
                     <Button type="button" onClick={() => {
                       const reviewed = structuredClone(target);
@@ -1532,6 +1572,17 @@ function ScheduleDetailPage({
                   </> : null}
                 </section>;
               })()}
+              {currentForm.agent ? (
+                <ScheduleAgentSelectionFields
+                  providerProfilesEndpoint={profilesEndpoint}
+                  value={currentForm.agent}
+                  error={visibleFormErrors.agent}
+                  onChange={(agent) => {
+                    setEditForm((previous) => previous ? { ...previous, agent } : null);
+                    setSubmitErrors((previous) => ({ ...previous, agent: undefined }));
+                  }}
+                />
+              ) : null}
               <label>
                 <span>Target Workflow Parameters</span>
                 <textarea

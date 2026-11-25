@@ -1938,6 +1938,37 @@ class RecurringWorkflowsService:
             apply_assessment_project_parameter_defaults(parameters, snapshot)
         return normalized
 
+    async def review_assessment_target(
+        self,
+        target: Mapping[str, Any],
+        *,
+        authorization_ref: str,
+        actor: OperatorAdmission | None,
+    ) -> dict[str, Any]:
+        """Return the proposal a replacement ``target`` has to be reviewed with.
+
+        It is compiled from the same normalized target as
+        ``_admit_target_inputs``, so a review of this proposal admits that
+        target and no other.
+        """
+        from api_service.services.assessment_engagements import (
+            compile_admission_proposal,
+        )
+
+        normalized = _normalize_target(_json_object(target, field_name="target"))
+        return await compile_admission_proposal(
+            normalized["initialParameters"],
+            authorization_ref,
+            session=self._session,
+            user=actor,
+            access=(
+                ArtifactAccessContext.for_operator(actor)
+                if actor is not None
+                else ArtifactAccessContext.for_service("system")
+            ),
+            plan_overrides=normalized,
+        )
+
     async def _admit_omnigent_schedule_target(
         self,
         *,
@@ -1947,6 +1978,7 @@ class RecurringWorkflowsService:
         actor: OperatorAdmission | None,
         require_actor: bool = True,
         advanced_from: Mapping[str, Any] | None = None,
+        replace_agent_selection: bool = False,
     ) -> dict[str, Any] | None:
         """Compile the execution plan an Omnigent schedule target launches with.
 
@@ -1956,6 +1988,10 @@ class RecurringWorkflowsService:
         None when the target selects another runtime or already carries
         launch authority. A supplied snapshot must match durable usage, or,
         when the deployment refresh advanced it, ``advanced_from`` must.
+        ``replace_agent_selection`` marks an edit that reselected the agent: a
+        changed Provider Profile moves the definition's existing usage to its
+        newly selected snapshot, and a kept snapshot's own model does not
+        outrank the model the edit resolved.
         """
 
         initial_parameters = dict(target.get("initialParameters") or {})
@@ -2049,19 +2085,41 @@ class RecurringWorkflowsService:
         elif retained_snapshot is not None:
             snapshot = retained_snapshot
         else:
+            # Replacement needs a usage row to move; a definition that never
+            # held one (a direct schedule moving to Omnigent) records its first.
+            replaces_usage = (
+                replace_agent_selection
+                and await self._session.scalar(
+                    select(OmnigentAgentProfileUsage.id).where(
+                        OmnigentAgentProfileUsage.consumer_type == "schedule",
+                        OmnigentAgentProfileUsage.consumer_id == str(definition_id),
+                    )
+                )
+                is not None
+            )
             snapshot = await resolve_default_agent_profile_snapshot(
                 self._session,
                 provider_profile_ref=authored_profile.profile_id,
                 launch_policy_ref=(initial_parameters.get("omnigent") or {}).get("launchPolicyRef"),
                 consumer_type="schedule", consumer_id=str(definition_id), user=actor,
+                **({"replace_existing_usage": True} if replaces_usage else {}),
             )
         initial_parameters = dict(target.get("initialParameters") or {})
         if defaults_to_omnigent:
             initial_parameters["targetRuntime"] = "omnigent"
+        selected = {
+            field: initial_parameters[field]
+            for field in ("model", "effort")
+            if field in initial_parameters
+        }
         initial_parameters = compile_agent_profile_snapshot_parameters(
             initial_parameters,
             snapshot=snapshot,
         )
+        if replace_agent_selection and retained_snapshot is not None:
+            # Compilation copies the snapshot's own model over the pair the
+            # edit just resolved, and the plan launches whichever is recorded.
+            initial_parameters.update(selected)
         target_runtime = str(
             initial_parameters.get("targetRuntime") or ""
         ).strip().lower()
@@ -2330,7 +2388,15 @@ class RecurringWorkflowsService:
         scope_ref: str | None = None,
         expected_version: int | None = None,
         actor: OperatorAdmission | None = None,
+        replace_agent_selection: bool = False,
     ) -> RecurringWorkflowDefinition:
+        """Update a definition; a replacement ``target`` is admitted first.
+
+        ``replace_agent_selection`` marks ``target`` as authored with a new
+        Provider Profile or model selection and without the previous
+        admission's results. It is admitted like a new schedule, replacing a
+        recorded Omnigent plan instead of requiring it unchanged.
+        """
         definition = await self._lock_definition_for_update(definition.id)
         if expected_version is not None and int(definition.version or 0) != int(
             expected_version
@@ -2383,7 +2449,11 @@ class RecurringWorkflowsService:
                 (definition.target or {}).get("initialParameters") or {}
             ).get("omnigentExecutionPlan")
             next_parameters = normalized_target.get("initialParameters") or {}
-            if isinstance(current_plan, Mapping):
+            if replace_agent_selection and next_parameters.get("omnigentExecutionPlan"):
+                raise RecurringWorkflowValidationError(
+                    "a replaced agent selection cannot carry an execution plan"
+                )
+            if isinstance(current_plan, Mapping) and not replace_agent_selection:
                 if next_parameters.get("omnigentExecutionPlan") != current_plan:
                     raise RecurringWorkflowValidationError(
                         "editing an admitted Omnigent schedule requires an "
@@ -2399,9 +2469,14 @@ class RecurringWorkflowsService:
                     target=normalized_target,
                     agent_profile_selection=None,
                     actor=actor,
+                    replace_agent_selection=replace_agent_selection,
                 )
                 if admitted_target is not None:
                     normalized_target = admitted_target
+                elif replace_agent_selection:
+                    await self._release_schedule_agent_profile(
+                        definition, normalized_target
+                    )
 
         changed_schedule = False
         now = datetime.now(UTC)
@@ -2534,6 +2609,39 @@ class RecurringWorkflowsService:
                     f"is pending: {exc}. Refresh this definition before retrying."
                 ) from exc
         return definition
+
+    async def _release_schedule_agent_profile(
+        self, definition: RecurringWorkflowDefinition, target: dict[str, Any]
+    ) -> None:
+        """Drop Agent Profile authority a re-selected target no longer uses.
+
+        A schedule moved off Omnigent launches without a plan, so a retained
+        snapshot, its projected settings or its usage row would claim an Agent
+        Profile nothing reads.
+        """
+
+        parameters = target.get("initialParameters")
+        for holder in (target, parameters):
+            if isinstance(holder, dict):
+                holder.pop("agentProfile", None)
+                holder.pop("agentProfileSnapshot", None)
+        released = ((definition.target or {}).get("initialParameters") or {}).get(
+            "agentProfileSnapshot"
+        )
+        document = released.get("document") if isinstance(released, Mapping) else None
+        if isinstance(document, Mapping) and isinstance(parameters, dict):
+            # Admission copied these from the released profile's document.
+            for key in ("capture", "workspace"):
+                if key in parameters and parameters[key] == (document.get(key) or {}):
+                    parameters.pop(key)
+        usage = await self._session.scalar(
+            select(OmnigentAgentProfileUsage).where(
+                OmnigentAgentProfileUsage.consumer_type == "schedule",
+                OmnigentAgentProfileUsage.consumer_id == str(definition.id),
+            )
+        )
+        if usage is not None:
+            await self._session.delete(usage)
 
     @staticmethod
     def _record_trigger_observation(run, observation):

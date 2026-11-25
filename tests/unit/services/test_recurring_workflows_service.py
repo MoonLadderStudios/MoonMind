@@ -2106,6 +2106,143 @@ async def test_update_definition_cannot_replace_recorded_omnigent_plan(
             )
 
 
+async def _admitted_omnigent_schedule(
+    session: AsyncSession, service: RecurringWorkflowsService
+) -> RecurringWorkflowDefinition:
+    """A schedule admitted onto an Omnigent plan under an Omnigent default."""
+
+    session.add(
+        ManagedAgentProviderProfile(
+            profile_id="codex-openai-oauth",
+            runtime_id="codex_cli",
+            provider_id="openai",
+        )
+    )
+    await session.flush()
+    definition = await service.create_definition(
+        name="Admitted Omnigent schedule",
+        description=None,
+        enabled=True,
+        schedule_type="cron",
+        cron="0 6 * * *",
+        timezone="UTC",
+        scope_type="personal",
+        scope_ref=None,
+        owner_user_id=None,
+        target={
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {"task": {"instructions": "Nightly check."}},
+        },
+        policy=None,
+        actor=OperatorAdmission(via="loopback"),
+    )
+    assert definition.target["initialParameters"]["omnigentExecutionPlan"]
+    return definition
+
+
+async def test_update_definition_replaces_the_plan_for_a_new_provider_profile(
+    tmp_path: Path, mock_temporal_adapter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A schedule edit that selects another account is a new admission: the
+    recorded plan and Agent Profile snapshot belong to the previous account."""
+
+    from moonmind.config.settings import settings
+    from moonmind.workflows.recurring.agent_selection import (
+        replace_schedule_agent_selection,
+    )
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    admission = _mm3935_plan_admission(monkeypatch)
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        service = RecurringWorkflowsService(
+            session,
+            temporal_client_adapter=mock_temporal_adapter,
+            artifact_service=SimpleNamespace(),
+        )
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="codex-second-account",
+                runtime_id="codex_cli",
+                provider_id="openai",
+            )
+        )
+        definition = await _admitted_omnigent_schedule(session, service)
+        session.add(
+            OmnigentAgentProfileUsage(
+                consumer_type="schedule",
+                consumer_id=str(definition.id),
+                profile_id=admission.snapshot["profileId"],
+                version=admission.snapshot["version"],
+                digest=admission.snapshot["digest"],
+                effective_snapshot=admission.snapshot,
+            )
+        )
+        await session.commit()
+        next_snapshot = {
+            **admission.snapshot,
+            "providerProfileRef": "codex-second-account",
+        }
+        admission.default_resolver.reset_mock()
+        admission.default_resolver.return_value = next_snapshot
+        admission.compile_plan.reset_mock()
+        target = replace_schedule_agent_selection(
+            definition.target, {"profileId": "codex-second-account"}
+        )
+        target["initialParameters"]["targetRuntime"] = "omnigent"
+
+        updated = await service.update_definition(
+            definition,
+            target=target,
+            expected_version=definition.version,
+            actor=OperatorAdmission(via="loopback"),
+            replace_agent_selection=True,
+        )
+
+    resolved = admission.default_resolver.await_args.kwargs
+    assert resolved["provider_profile_ref"] == "codex-second-account"
+    # The definition's usage moves with it instead of conflicting.
+    assert resolved["replace_existing_usage"] is True
+    admission.compile_plan.assert_awaited_once()
+    assert admission.compile_plan.await_args.kwargs["agent_profile_snapshot"] == (
+        next_snapshot
+    )
+    parameters = updated.target["initialParameters"]
+    assert parameters["agentProfileSnapshot"] == next_snapshot
+    assert parameters["profileId"] == "codex-second-account"
+    assert parameters["omnigentExecutionPlan"] == admission.plan_binding
+    assert updated.target["agentProfileSnapshot"] == next_snapshot
+    scheduled = mock_temporal_adapter.update_schedule.await_args.kwargs[
+        "workflow_input"
+    ]["initial_parameters"]
+    assert scheduled["agentProfileSnapshot"] == next_snapshot
+
+
+async def test_update_definition_refuses_a_plan_with_a_replaced_agent_selection(
+    tmp_path: Path, mock_temporal_adapter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    _mm3935_plan_admission(monkeypatch)
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        service = RecurringWorkflowsService(
+            session,
+            temporal_client_adapter=mock_temporal_adapter,
+            artifact_service=SimpleNamespace(),
+        )
+        definition = await _admitted_omnigent_schedule(session, service)
+
+        with pytest.raises(
+            RecurringWorkflowValidationError, match="cannot carry an execution plan"
+        ):
+            await service.update_definition(
+                definition,
+                target=definition.target,
+                actor=OperatorAdmission(via="loopback"),
+                replace_agent_selection=True,
+            )
+
+
 async def test_managed_refresh_recompiles_recorded_omnigent_plan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

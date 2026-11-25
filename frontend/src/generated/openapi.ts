@@ -2630,6 +2630,30 @@ export interface paths {
         patch: operations["update_recurring_workflow_api_recurring_workflows__definition_id__patch"];
         trace?: never;
     };
+    "/api/recurring-workflows/{definition_id}/assessment-proposal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Review Recurring Assessment Proposal
+         * @description Compile the rules of engagement for a schedule edit as saving admits it.
+         *
+         *     Runtime choices are part of the reviewed plan, and an agent selection
+         *     changes the target here rather than in the form, so only this boundary
+         *     can show the operator the proposal that edit will be held to.
+         */
+        post: operations["review_recurring_assessment_proposal_api_recurring_workflows__definition_id__assessment_proposal_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/recurring-workflows/{definition_id}/run": {
         parameters: {
             query?: never;
@@ -11954,6 +11978,37 @@ export interface components {
             promotionState?: string | null;
         };
         /**
+         * RecurringAgentSelectionModel
+         * @description Agent selection that replaces the one a schedule was authored with.
+         *
+         *     Field presence is the intent: ``modelTier`` follows a profile tier, a
+         *     ``model``/``effort`` pair is Custom (null means Runtime default), and an
+         *     omitted part keeps what the schedule saved.
+         */
+        RecurringAgentSelectionModel: {
+            /** Profileid */
+            profileId?: string | null;
+            /** Modeltier */
+            modelTier?: number | null;
+            /** Model */
+            model?: string | null;
+            /** Effort */
+            effort?: string | null;
+        };
+        /**
+         * RecurringAssessmentProposalRequest
+         * @description A schedule edit to review before it replaces assessment authority.
+         */
+        RecurringAssessmentProposalRequest: {
+            /** Authorizationref */
+            authorizationRef: string;
+            /** Target */
+            target?: {
+                [key: string]: unknown;
+            } | null;
+            runtime?: components["schemas"]["RecurringAgentSelectionModel"] | null;
+        };
+        /**
          * RecurringWorkflowActionPermissionsModel
          * @description Action availability for a recurring schedule visible to the caller.
          */
@@ -14332,6 +14387,7 @@ export interface components {
             target?: {
                 [key: string]: unknown;
             } | null;
+            runtime?: components["schemas"]["RecurringAgentSelectionModel"] | null;
             /** Policy */
             policy?: {
                 [key: string]: unknown;
@@ -20051,6 +20107,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecurringWorkflowDefinitionModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_recurring_assessment_proposal_api_recurring_workflows__definition_id__assessment_proposal_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                definition_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecurringAssessmentProposalRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

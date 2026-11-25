@@ -885,3 +885,377 @@ async def test_mm3935_schedule_edit_route_admits_a_default_omnigent_target(
             admission.plan_binding
         )
         assert stored.version == before["version"] + 1
+
+
+# ---------------------------------------------------------------------------
+# Schedule edit: the operator changes Provider Profile, model or effort for
+# future runs through PATCH ``runtime`` instead of editing the saved target.
+# ---------------------------------------------------------------------------
+
+
+async def _patch_agent_selection(session, definition, runtime: dict, **fields):
+    service = _mm3788_service(session)
+    service._artifact_service = SimpleNamespace()
+    updated = await recurring_router.update_recurring_workflow(
+        definition_id=definition.id,
+        payload=recurring_router.UpdateRecurringWorkflowRequest(
+            runtime=runtime, version=definition.version, **fields
+        ),
+        service=service,
+        session=session,
+        user=OperatorAdmission(via="loopback"),
+    )
+    return updated, service._adapter
+
+
+@pytest.mark.asyncio
+async def test_schedule_edit_replaces_model_and_effort_for_future_runs(
+    tmp_path: Path,
+) -> None:
+    user = OperatorAdmission(via="loopback")
+
+    async with _mm3788_session(tmp_path) as session:
+        created = await _mm3788_create_owned(_mm3788_service(session), user)
+
+        updated, adapter = await _patch_agent_selection(
+            session, created, {"model": "edited-model", "effort": "high"}
+        )
+
+        parameters = updated.target["initialParameters"]
+        runtime = parameters["workflow"]["runtime"]
+        assert (runtime["model"], runtime["effort"]) == ("edited-model", "high")
+        assert runtime["providerProfileRef"] == "claude_minimax_team"
+        # Launch reads the resolved pair, so it must follow the edit.
+        assert parameters["model"] == "edited-model"
+        assert parameters["effort"] == "high"
+        assert parameters["modelSource"] == "task_override"
+        assert parameters["targetRuntime"] == "claude_code"
+        assert parameters["workflow"]["instructions"] == "Run the nightly resolver."
+        scheduled = adapter.update_schedule.await_args.kwargs["workflow_input"][
+            "initial_parameters"
+        ]
+        assert scheduled["model"] == "edited-model"
+        assert updated.version == created.version + 1
+
+
+@pytest.mark.asyncio
+async def test_schedule_edit_moves_to_another_harness_and_provider_profile(
+    tmp_path: Path,
+) -> None:
+    user = OperatorAdmission(via="loopback")
+
+    async with _mm3788_session(tmp_path) as session:
+        created = await _mm3788_create_owned(_mm3788_service(session), user)
+        custom, _ = await _patch_agent_selection(
+            session, created, {"model": "kept-model", "effort": None}
+        )
+
+        updated, adapter = await _patch_agent_selection(
+            session, custom, {"profileId": "codex_minimax_team"}
+        )
+
+        parameters = updated.target["initialParameters"]
+        runtime = parameters["workflow"]["runtime"]
+        # The Backend follows the new profile's Harness.
+        assert parameters["targetRuntime"] == "codex_cli"
+        assert runtime["mode"] == "codex_cli"
+        assert parameters["profileId"] == "codex_minimax_team"
+        assert runtime["providerProfileRef"] == "codex_minimax_team"
+        # Custom values are the operator's and survive the account change.
+        assert (runtime["model"], runtime["effort"]) == ("kept-model", None)
+        assert parameters["model"] == "kept-model"
+        scheduled = adapter.update_schedule.await_args.kwargs["workflow_input"][
+            "initial_parameters"
+        ]
+        assert scheduled["targetRuntime"] == "codex_cli"
+        assert scheduled["profileId"] == "codex_minimax_team"
+
+
+@pytest.mark.asyncio
+async def test_schedule_edit_keeps_a_flat_authored_model_for_another_profile(
+    tmp_path: Path,
+) -> None:
+    """A target saved before selections nested under the workflow authors a
+    flat pair; choosing another account must not replace it with defaults."""
+    user = OperatorAdmission(via="loopback")
+
+    async with _mm3788_session(tmp_path) as session:
+        target = _mm3788_route_target(
+            target_runtime="claude_code", profile_id="claude_minimax_team"
+        )
+        target["initialParameters"].update(model="pinned-model", effort="low")
+        created = await _mm3788_service(session).create_definition(
+            name="Flat selection",
+            description=None,
+            enabled=True,
+            schedule_type="cron",
+            cron="0 6 * * *",
+            timezone="UTC",
+            scope_type="personal",
+            scope_ref=None,
+            owner_user_id=None,
+            target=target,
+            policy=None,
+            actor=user,
+        )
+
+        updated, _ = await _patch_agent_selection(
+            session, created, {"profileId": "codex_minimax_team"}
+        )
+
+        parameters = updated.target["initialParameters"]
+        assert parameters["profileId"] == "codex_minimax_team"
+        assert (parameters["model"], parameters["effort"]) == ("pinned-model", "low")
+        assert parameters["modelSource"] == "task_override"
+        runtime = parameters["workflow"]["runtime"]
+        assert (runtime["model"], runtime["effort"]) == ("pinned-model", "low")
+
+
+@pytest.mark.asyncio
+async def test_schedule_edit_replaces_a_backend_named_on_the_target_envelope(
+    tmp_path: Path,
+) -> None:
+    user = OperatorAdmission(via="loopback")
+
+    async with _mm3788_session(tmp_path) as session:
+        target = _mm3788_route_target(
+            target_runtime="claude_code", profile_id="claude_minimax_team"
+        )
+        target["targetRuntime"] = "claude_code"
+        created = await recurring_router.create_recurring_workflow(
+            payload=_mm3788_create_payload(target),
+            service=_mm3788_service(session),
+            session=session,
+            user=user,
+        )
+        assert created.target["targetRuntime"] == "claude_code"
+
+        updated, _ = await _patch_agent_selection(
+            session, created, {"profileId": "codex_minimax_team"}
+        )
+
+        assert "targetRuntime" not in updated.target
+        assert updated.target["initialParameters"]["targetRuntime"] == "codex_cli"
+
+
+@pytest.mark.asyncio
+async def test_schedule_edit_rejects_an_unknown_provider_profile_unchanged(
+    tmp_path: Path,
+) -> None:
+    user = OperatorAdmission(via="loopback")
+
+    async with _mm3788_session(tmp_path) as session:
+        created = await _mm3788_create_owned(_mm3788_service(session), user)
+        stored_target = dict(created.target)
+
+        with pytest.raises(HTTPException) as excinfo:
+            await _patch_agent_selection(
+                session, created, {"profileId": "missing_profile"}, name="Renamed"
+            )
+
+        assert excinfo.value.status_code in {
+            status.HTTP_404_NOT_FOUND,
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+        }
+        assert "missing_profile" in str(excinfo.value.detail)
+        await session.rollback()
+        reloaded = await session.get(
+            RecurringWorkflowDefinition, created.id, populate_existing=True
+        )
+        assert reloaded.target == stored_target
+        assert reloaded.name == "MM-3788 schedule"
+
+
+@pytest.mark.asyncio
+async def test_schedule_edit_rejects_an_ambiguous_selection() -> None:
+    with pytest.raises(ValueError):
+        recurring_router.RecurringAgentSelectionModel(modelTier=0)
+    service = AsyncMock()
+    service.get_definition.return_value = _definition()
+
+    with pytest.raises(HTTPException) as excinfo:
+        await recurring_router.update_recurring_workflow(
+            definition_id=uuid4(),
+            payload=recurring_router.UpdateRecurringWorkflowRequest(
+                runtime={"modelTier": 2, "model": "x", "effort": None}, version=1
+            ),
+            service=service,
+            session=AsyncMock(),
+            user=OperatorAdmission(via="loopback"),
+        )
+
+    assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert "cannot be combined" in excinfo.value.detail["message"]
+    service.update_definition.assert_not_awaited()
+
+
+_OMNIGENT_READY_PROFILE = {
+    "profile_id": "codex-openai-oauth",
+    "runtime_id": "codex_cli",
+    "provider_id": "openai",
+    "enabled": True,
+    "auth_state": "connected",
+    "credential_source": "secret_ref",
+    "secret_refs": {"provider_api_key": "env://OPENAI_API_KEY"},
+    "default_model": "test-model",
+}
+
+
+async def _admitted_omnigent_schedule(session, admission):
+    """A default-runtime schedule compiled onto an Omnigent plan, with its usage."""
+    from api_service.db.models import OmnigentAgentProfileUsage
+
+    session.add(ManagedAgentProviderProfile(**_OMNIGENT_READY_PROFILE))
+    await session.flush()
+    service = _mm3788_service(session)
+    service._artifact_service = SimpleNamespace()
+    created = await recurring_router.create_recurring_workflow(
+        payload=_mm3788_create_payload(
+            {
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": {"workflow": {"instructions": "Nightly."}},
+            }
+        ),
+        service=service,
+        session=session,
+        user=OperatorAdmission(via="loopback"),
+    )
+    assert created.target["initialParameters"]["omnigentExecutionPlan"] == (
+        admission.plan_binding
+    )
+    # The resolver double returns the snapshot without recording its usage.
+    session.add(
+        OmnigentAgentProfileUsage(
+            consumer_type="schedule",
+            consumer_id=str(created.id),
+            profile_id=admission.snapshot["profileId"],
+            version=admission.snapshot["version"],
+            digest=admission.snapshot["digest"],
+            effective_snapshot=admission.snapshot,
+        )
+    )
+    await session.flush()
+    return created
+
+
+@pytest.mark.asyncio
+async def test_schedule_edit_recompiles_an_admitted_omnigent_plan_for_a_new_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An admitted schedule launches from its compiled plan, so a model edit
+    has to compile a new one; the unchanged account keeps its configuration."""
+    from moonmind.config.settings import settings
+    from tests.unit.services.test_recurring_workflows_service import (
+        _mm3935_plan_admission,
+    )
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    admission = _mm3935_plan_admission(monkeypatch)
+
+    async with _mm3788_session(tmp_path) as session:
+        created = await _admitted_omnigent_schedule(session, admission)
+        admission.compile_plan.reset_mock()
+        admission.default_resolver.reset_mock()
+
+        updated, adapter = await _patch_agent_selection(
+            session, created, {"model": "edited-model", "effort": "high"}
+        )
+
+        admission.default_resolver.assert_not_awaited()
+        admission.compile_plan.assert_awaited_once()
+        compiled = admission.compile_plan.await_args.kwargs
+        assert compiled["agent_profile_snapshot"] == admission.snapshot
+        assert compiled["initial_parameters"]["model"] == "edited-model"
+        assert compiled["initial_parameters"]["effort"] == "high"
+        parameters = updated.target["initialParameters"]
+        assert parameters["targetRuntime"] == "omnigent"
+        assert parameters["workflow"]["runtime"]["model"] == "edited-model"
+        assert parameters["agentProfileSnapshot"] == admission.snapshot
+        scheduled = adapter.update_schedule.await_args.kwargs["workflow_input"][
+            "initial_parameters"
+        ]
+        assert scheduled["model"] == "edited-model"
+        assert scheduled["omnigentExecutionPlan"] == admission.plan_binding
+
+
+@pytest.mark.asyncio
+async def test_schedule_edit_model_outranks_a_retained_agent_profile_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A kept Agent Profile snapshot may carry its own model; the plan still
+    launches the model the operator just selected."""
+    from moonmind.config.settings import settings
+    from tests.unit.services.test_recurring_workflows_service import (
+        _mm3935_plan_admission,
+    )
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    admission = _mm3935_plan_admission(monkeypatch)
+    admission.snapshot["document"]["model"] = {
+        "model": "profile-model",
+        "effort": "low",
+        "settings": {},
+    }
+
+    async with _mm3788_session(tmp_path) as session:
+        created = await _admitted_omnigent_schedule(session, admission)
+        admission.compile_plan.reset_mock()
+
+        updated, adapter = await _patch_agent_selection(
+            session, created, {"model": "edited-model", "effort": "high"}
+        )
+
+        compiled = admission.compile_plan.await_args.kwargs
+        assert compiled["agent_profile_snapshot"] == admission.snapshot
+        assert compiled["initial_parameters"]["model"] == "edited-model"
+        assert compiled["initial_parameters"]["effort"] == "high"
+        parameters = updated.target["initialParameters"]
+        assert (parameters["model"], parameters["effort"]) == ("edited-model", "high")
+        scheduled = adapter.update_schedule.await_args.kwargs["workflow_input"][
+            "initial_parameters"
+        ]
+        assert (scheduled["model"], scheduled["effort"]) == ("edited-model", "high")
+
+
+@pytest.mark.asyncio
+async def test_schedule_edit_leaving_omnigent_releases_its_agent_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A profile without a shared configuration runs Direct, without a plan."""
+    from api_service.db.models import OmnigentAgentProfileUsage
+    from moonmind.config.settings import settings
+    from tests.unit.services.test_recurring_workflows_service import (
+        _mm3935_plan_admission,
+    )
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    admission = _mm3935_plan_admission(monkeypatch)
+
+    async with _mm3788_session(tmp_path) as session:
+        created = await _admitted_omnigent_schedule(session, admission)
+        admission.compile_plan.reset_mock()
+
+        updated, adapter = await _patch_agent_selection(
+            session, created, {"profileId": "codex_minimax_team"}
+        )
+
+        admission.compile_plan.assert_not_awaited()
+        parameters = updated.target["initialParameters"]
+        assert parameters["targetRuntime"] == "codex_cli"
+        assert parameters["profileId"] == "codex_minimax_team"
+        for released in (
+            "agentProfile",
+            "agentProfileSnapshot",
+            "omnigentExecutionPlan",
+            "omnigent",
+            "capture",
+            "workspace",
+        ):
+            assert released not in parameters
+        assert "agentProfileSnapshot" not in updated.target
+        assert (await session.scalars(select(OmnigentAgentProfileUsage))).all() == []
+        scheduled = adapter.update_schedule.await_args.kwargs["workflow_input"][
+            "initial_parameters"
+        ]
+        assert "omnigentExecutionPlan" not in scheduled
+        assert scheduled["profileId"] == "codex_minimax_team"
