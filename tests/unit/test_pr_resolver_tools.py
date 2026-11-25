@@ -2237,8 +2237,6 @@ def test_finalize_snapshot_auth_failure_reports_publish_unavailable(
         main()
     assert int(raised.value.code) == 0
 
-    import json
-
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert payload["status"] == "blocked"
     assert payload["reason"] == "publish_unavailable"
@@ -2357,8 +2355,6 @@ def test_finalize_merge_request_waits_for_authoritative_merged_state(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    import json
-
     main = pr_resolve_finalize_module["main"]
     globals_dict = main.__globals__
     exit_code_blocked = pr_resolve_finalize_module["EXIT_CODE_BLOCKED"]
@@ -2472,8 +2468,6 @@ def test_finalize_pr_not_found_but_merged_succeeds(
     with pytest.raises(SystemExit) as raised:
         main()
     assert int(raised.value.code) == int(exit_code_merged)
-
-    import json
 
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert payload["status"] == "merged"
@@ -2620,7 +2614,6 @@ def test_load_addressed_ids_searches_multiple_paths(
     tmp_path: Path,
 ) -> None:
     """Loader should find ledgers at both explicit path and var/pr_comments/ dir."""
-    import json
 
     load_ids = pr_resolve_snapshot_module["_load_addressed_comment_ids"]
 

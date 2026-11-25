@@ -140,7 +140,6 @@ def _run_integration_collect(
     tmp_path: Path, suite: str, result: str = "failure"
 ) -> Path:
     import os
-    import re
     import subprocess
     import shutil
 
@@ -553,8 +552,6 @@ def test_frontend_jobs_are_impact_aware_and_report_into_ci_required() -> None:
 
 
 def test_playwright_package_and_container_versions_match() -> None:
-    import json
-
     package = json.loads((REPO_ROOT / "package.json").read_text(encoding="utf-8"))
     version = package["devDependencies"]["playwright"]
     assert version[0].isdigit(), "Playwright must be an exact dependency"
@@ -1420,7 +1417,6 @@ def test_reliability_fixtures_reuse_registry_layers_without_shared_state() -> No
 
 def _run_required_gate(tmp_path, *, outputs=None, results=None, inputs=None):
     import os
-    import re
     import subprocess
 
     selected = select_suites(["README.md"], event_name="pull_request").as_outputs()

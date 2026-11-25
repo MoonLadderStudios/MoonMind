@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.db.models import Base, SettingsAuditEvent
 from api_service.services.system_operations import (
-    SystemOperationUnavailableError,
     SystemOperationValidationError,
     SystemOperationsService,
     WorkerOperationCommand,

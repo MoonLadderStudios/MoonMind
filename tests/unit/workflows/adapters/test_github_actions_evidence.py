@@ -277,8 +277,6 @@ def failed_job_fixture(monkeypatch):
 async def test_artifactless_failed_job_supplies_real_logs_annotations_and_identity(
     monkeypatch,
 ):
-    import json
-
     service, state, requests = failed_job_fixture(monkeypatch)
     result = await collect(service)
     assert result["status"] == "ready"
@@ -616,7 +614,6 @@ async def test_mark_ready_uses_admitted_mutation_and_exact_head(monkeypatch, mov
         requests.append(request)
         if request.method == "POST":
             assert request.url == "https://api.github.com/graphql"
-            import json
 
             body = json.loads(request.content)
             if "timelineItems" in body["query"]:

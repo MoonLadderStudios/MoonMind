@@ -7,7 +7,6 @@ These tests verify:
 4. The merge migration graph produces exactly one head
 """
 
-import enum
 import glob
 import importlib
 import os
@@ -16,7 +15,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 

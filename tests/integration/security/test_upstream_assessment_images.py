@@ -313,8 +313,6 @@ def test_prowler_image_assesses_open_and_repaired_account(tmp_path, scenario, ou
 
 
 def test_tls_scanner_image_inspects_local_connect_fixtures(tmp_path):
-    import json
-
     image = os.environ.get("MOONMIND_TLS_ASSESSMENT_IMAGE")
     assert image, "dedicated qualification must supply the candidate TLS scanner image"
     outputs = tmp_path / "tls-outputs"

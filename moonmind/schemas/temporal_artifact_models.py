@@ -13,7 +13,6 @@ from moonmind.core.artifacts import (
     TemporalArtifactRetentionClass,
     TemporalArtifactStatus,
     TemporalArtifactStorageBackend,
-    TemporalArtifactUploadMode,
     assert_model_agnostic_metadata,
 )
 from moonmind.schemas._validation import require_non_blank

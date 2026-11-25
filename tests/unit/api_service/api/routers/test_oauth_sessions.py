@@ -41,7 +41,6 @@ from moonmind.workflows.temporal.runtime.terminal_bridge import (
 @pytest.fixture(scope="module")
 def _module_db(tmp_path_factory):
     """Create a single SQLite engine and schema for the module."""
-    import asyncio
 
     tmp = tmp_path_factory.mktemp("integration_db_oauth")
     db_url = f"sqlite+aiosqlite:///{tmp}/shared.db"

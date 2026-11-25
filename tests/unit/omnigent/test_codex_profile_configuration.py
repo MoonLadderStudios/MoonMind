@@ -286,7 +286,6 @@ def test_invalid_session_preferences_never_reach_shared_materialization(settings
 async def test_custom_configuration_uses_the_existing_private_credential_volume(
     tmp_path,
 ):
-    import json
     from tests.unit.omnigent.test_codex_api_key_provider_config import _KEY, _provision
 
     selected = vars(private_file_profile())
@@ -338,7 +337,6 @@ async def test_custom_configuration_uses_the_existing_private_credential_volume(
     },
 ])
 def test_installed_launch_shim_preserves_native_generated_configuration(tmp_path, session_settings):
-    import json
     import os
     import subprocess
     import sys

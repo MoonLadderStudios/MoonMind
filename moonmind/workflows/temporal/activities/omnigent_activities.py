@@ -852,8 +852,6 @@ async def _try_generic_realizer_dispatch(
                 raise
             # The dispatch failure projection must carry the underlying cause;
             # a bare integration_error string makes operator triage impossible.
-            import logging
-
             logging.getLogger(__name__).warning(
                 "Omnigent execution-plan dispatch failed: %s",
                 exc,

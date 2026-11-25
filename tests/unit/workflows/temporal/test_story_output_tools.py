@@ -2477,8 +2477,6 @@ async def test_create_jira_issues_resolves_issue_type_name_from_story_breakdown_
     }
 
     async def fetcher(_repo: str, _ref: str, _path: str) -> str:
-        import json
-
         return json.dumps(breakdown)
 
     result = await create_jira_issues_from_stories(
@@ -3422,8 +3420,6 @@ async def test_create_jira_issues_uses_source_document_as_breakdown_fallback_pat
     }
 
     async def fetcher(_repo: str, _ref: str, _path: str) -> str:
-        import json
-
         return json.dumps(breakdown)
 
     result = await create_jira_issues_from_stories(

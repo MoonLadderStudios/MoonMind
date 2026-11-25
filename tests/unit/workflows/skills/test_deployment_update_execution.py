@@ -85,8 +85,6 @@ class RecordingRunner:
         self._before_event = None
         self._release_event = None
         if block_on_before:
-            import asyncio
-
             self._before_event = asyncio.Event()
             self._release_event = asyncio.Event()
 
@@ -420,8 +418,6 @@ class VerificationEvidenceFailureWriter(RecordingEvidenceWriter):
 
 @pytest.mark.asyncio
 async def test_same_stack_lock_contention_fails_before_side_effects() -> None:
-    import asyncio
-
     events: list[str] = []
     lock_manager = DeploymentUpdateLockManager()
     blocking_runner = RecordingRunner(events, block_on_before=True)
