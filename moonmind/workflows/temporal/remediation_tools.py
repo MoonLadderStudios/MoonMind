@@ -1001,13 +1001,13 @@ class RemediationEvidenceToolService:
             # or approvalBinding is untrusted tool input, not approval authority:
             # no reviewer-issued decision in the authoritative approval store backs
             # it, and _policy_bound only checks that the binding matches the
-            # policy/run, never that a persisted approval exists. Drop both so the
-            # agent cannot self-approve an approval-gated or high-risk mutation at
-            # either the MoonMind authority boundary (below) or the downstream
-            # Omnigent policy boundary. Such actions fail closed to
-            # approval_required and must be routed through the human approval path.
+            # policy/run, never that a persisted approval exists. Drop approvalRef
+            # and never read approvalBinding so the agent cannot self-approve an
+            # approval-gated or high-risk mutation at either the MoonMind authority
+            # boundary (below) or the downstream Omnigent policy boundary. Such
+            # actions fail closed to approval_required and must be routed through
+            # the human approval path.
             approval_ref = None
-            approval_binding = None
             authority = await RemediationActionAuthorityService(
                 session=self._session,
                 lifecycle_publisher=self._lifecycle_publisher,

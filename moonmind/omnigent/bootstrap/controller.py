@@ -369,7 +369,6 @@ class BootstrapController:
             drift.append("provider_profile_default")
         if agent_profile is None or active_version is None:
             drift.append("agent_profile")
-            current_agent_profile_ref = ""
         else:
             current_agent_profile_ref = (
                 f"{agent_profile.profile_id}@{active_version.version}"

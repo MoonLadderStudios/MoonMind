@@ -1188,7 +1188,6 @@ class CheckpointBranchService:
         }
         self._require_launch_replay_matches(turn, launch_values)
 
-        now = datetime.now(UTC)
         turn.context_bundle_ref = context_bundle_ref.strip()
         turn.step_execution_manifest_ref = step_execution_manifest_ref.strip()
         turn.created_step_execution_id = (

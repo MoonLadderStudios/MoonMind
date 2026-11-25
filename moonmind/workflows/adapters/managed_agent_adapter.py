@@ -966,7 +966,6 @@ def _derive_pr_resolver_metadata(
             metadata["latestAttemptRef"] = diagnostics.provenance
         return metadata
 
-    status = _pr_resolver_status(payload)
     reason = str(payload.get("final_reason") or payload.get("reason") or "").strip()
     disposition = _pr_resolver_disposition(
         payload, merge_gate_owned=merge_gate_owned

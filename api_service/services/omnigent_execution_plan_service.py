@@ -1791,12 +1791,13 @@ async def compile_and_persist_execution_plan(
                 "setupSteps": [],
             }
         )
-    omnigent_build_digest = str(
-        getattr(exact_catalog, "omnigentBuildDigest", None) or ""
-    ).strip() or _image_digest(
-        effective_launch.get("serverImageRef"),
-        field_name="effective launch serverImageRef",
-    )
+    # Without a catalog build digest the effective server image must still be
+    # digest-pinned; _image_digest raises otherwise.
+    if not str(getattr(exact_catalog, "omnigentBuildDigest", None) or "").strip():
+        _image_digest(
+            effective_launch.get("serverImageRef"),
+            field_name="effective launch serverImageRef",
+        )
     host_class = OmnigentHostClassSelector().select(
         harness=harness_record,
         omnigent_version=catalog_omnigent_version,

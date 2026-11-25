@@ -239,9 +239,6 @@ def test_new_embedded_admission_rejected_before_proxy_or_facade_errors() -> None
     async def _stale_evidence_proxy():
         raise HTTPException(status_code=503, detail={"code": "stale_evidence"})
 
-    async def _missing_launch_facade():
-        raise HTTPException(status_code=501, detail={"code": "launch_gone"})
-
     app.dependency_overrides[get_instance_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
     app.dependency_overrides[_require_bridge_enabled] = _embedded_config

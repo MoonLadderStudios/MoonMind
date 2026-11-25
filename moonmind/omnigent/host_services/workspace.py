@@ -1679,7 +1679,8 @@ class OmnigentWorkspaceMaterializer:
                 "sandbox workspace preparation needs a GitHub repository and safe branch ref",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
-        rel = candidate.relative_to(self._root)
+        # Raises ValueError if the candidate is outside the validated root.
+        candidate.relative_to(self._root)
         if self._repository_credentials is None or plan is None:
             raise HarnessPlatformError(
                 "sandbox workspace clone requires admitted repository authority",

@@ -6,7 +6,6 @@ import asyncio
 import logging
 import os
 import re
-import time
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from pathlib import Path
@@ -705,18 +704,6 @@ class CodexSessionAdapter(ManagedAgentAdapter):
 
         run_id = _generate_run_id()
         started_at = _current_time()
-        raw_timeout_seconds = request.timeout_policy.get(
-            "timeout_seconds", request.timeout_policy.get("timeoutSeconds")
-        )
-        try:
-            execution_timeout_seconds = float(raw_timeout_seconds)
-        except (TypeError, ValueError):
-            execution_timeout_seconds = 0.0
-        execution_deadline = (
-            time.monotonic() + execution_timeout_seconds
-            if execution_timeout_seconds > 0
-            else None
-        )
         original_instruction_ref = str(request.instruction_ref or "").strip() or None
         original_skillset_ref = str(request.resolved_skillset_ref or "").strip() or None
         workspace_path = self._workspace_path_for_request(

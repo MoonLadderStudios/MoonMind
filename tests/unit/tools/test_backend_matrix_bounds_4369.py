@@ -322,7 +322,6 @@ FAST_RUN_STEPS = (
 
 
 def test_reliability_dependency_start_has_finite_outer_bound() -> None:
-    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     rows = json.loads(select_suites([]).as_outputs()["backend_matrix"])["include"]
     reliability_job_minutes = min(
         row["job_minutes"] for row in rows if row["suite"].startswith("reliability-")

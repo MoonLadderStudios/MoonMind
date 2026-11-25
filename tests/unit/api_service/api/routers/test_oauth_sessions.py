@@ -580,11 +580,6 @@ async def test_create_oauth_session_rejects_profile_owned_by_another_user(
         )
         await session.commit()
 
-    async def _unexpected_start(_session_model):
-        raise AssertionError(
-            "workflow start should not be called for another user's profile"
-        )
-
     async def _capture_start(_session_model):
         return None
 
@@ -1914,9 +1909,6 @@ async def test_finalize_oauth_session_rejects_other_users_claude_session_before_
         )
         await session.commit()
 
-    async def _unexpected_verify(**_kwargs):
-        raise AssertionError("unauthorized finalize must not verify volume")
-
     async def _failed_verify(**_kwargs):
         return {"verified": False, "reason": "test-verification-failed"}
 
@@ -1968,9 +1960,6 @@ async def test_create_claude_oauth_session_rejects_other_users_profile_id(
         )
         await session.commit()
 
-    async def _unexpected_start(_session_model):
-        raise AssertionError("unauthorized create must not start workflow")
-
     async def _capture_start(_session_model):
         return None
 
@@ -2014,9 +2003,6 @@ async def test_cancel_oauth_session_rejects_other_users_claude_session(
             )
         )
         await session.commit()
-
-    async def _unexpected_cancel(_session_id: str) -> None:
-        raise AssertionError("unauthorized cancel must not signal workflow")
 
     cancelled = {}
 
@@ -2063,9 +2049,6 @@ async def test_reconnect_oauth_session_rejects_other_users_claude_session(
             )
         )
         await session.commit()
-
-    async def _unexpected_start(_session_model) -> None:
-        raise AssertionError("unauthorized reconnect must not start workflow")
 
     async def _capture_start(_session_model) -> None:
         return None

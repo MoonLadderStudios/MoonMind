@@ -1929,7 +1929,6 @@ async def omnigent_resolve_intent_activity(
     if resolved.request is not None:
         # Replay-only decode for Activity inputs already persisted in Temporal.
         request = AgentExecutionRequest.model_validate(resolved.request)
-        plan_binding = request.omnigent_execution_plan
     else:
         plan_binding = resolved.omnigent_execution_plan
         if plan_binding is None:
@@ -4587,7 +4586,7 @@ async def omnigent_persist_failure_activity(
                     "cleanupFailedActivity": request.failed_activity,
                 },
             )
-            current = await repos.sessions.update_lifecycle(
+            await repos.sessions.update_lifecycle(
                 request.session_id,
                 expected_revision=current.revision,
                 expected_fencing_generation=current.fencing_generation,
@@ -4614,7 +4613,7 @@ async def omnigent_persist_failure_activity(
                     expected_revision=current.revision,
                     expected_fencing_generation=current.fencing_generation,
                 )
-            current = await repos.sessions.bind_runtime_authority(
+            await repos.sessions.bind_runtime_authority(
                 request.session_id,
                 expected_revision=current.revision,
                 expected_fencing_generation=current.fencing_generation,

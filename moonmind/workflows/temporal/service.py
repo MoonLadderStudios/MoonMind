@@ -3810,9 +3810,6 @@ class TemporalExecutionService:
                 "Create a new workflow to explicitly re-resolve Skill authority."
             )
 
-        principal = str(getattr(source_record, "owner_id", None) or "").strip()
-        if not principal:
-            principal = "service:temporal-execution-rerun-admission"
         try:
             artifact_service = TemporalArtifactService(
                 TemporalArtifactRepository(self._session),

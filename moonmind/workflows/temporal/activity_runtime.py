@@ -8873,8 +8873,8 @@ class TemporalAgentRuntimeActivities:
                 )
 
         env_overrides = dict(profile.env_overrides) if profile.env_overrides else {}
-        ref = env_overrides.pop("MANAGED_API_KEY_REF", None)
-        target_raw = env_overrides.pop("MANAGED_API_KEY_TARGET_ENV", None)
+        env_overrides.pop("MANAGED_API_KEY_REF", None)
+        env_overrides.pop("MANAGED_API_KEY_TARGET_ENV", None)
         # We no longer process MANAGED_API_KEY_REF here. It's handled by secret_refs in the launcher.
 
         profile = profile.model_copy(update={"env_overrides": env_overrides})
@@ -8933,7 +8933,7 @@ class TemporalAgentRuntimeActivities:
 
         async def _supervise_and_publish():
             try:
-                record = await self._run_supervisor.supervise(
+                await self._run_supervisor.supervise(
                     run_id=run_id,
                     process=process,
                     budget=budget,
@@ -12451,7 +12451,7 @@ class TemporalAgentRuntimeActivities:
         workspace = _string_or_none_for_activity(parameters.get("repository"))
         if workspace is None:
             workspace = _string_or_none_for_activity(parameters.get("workspace"))
-        row = await store.get_or_create(
+        await store.get_or_create(
             request=request,
             endpoint_ref="direct-codex-compat",
             agent_id=request.agent_id,
@@ -12464,7 +12464,7 @@ class TemporalAgentRuntimeActivities:
                 "temporaryMigrationPath": True,
             },
         )
-        row = await store.attach_session(
+        await store.attach_session(
             request.idempotency_key,
             locator.session_id,
         )

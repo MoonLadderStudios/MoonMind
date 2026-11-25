@@ -346,8 +346,6 @@ async def test_global_recurring_workflow_action_permissions_require_operator() -
         scope_type=RecurringWorkflowScopeType.GLOBAL,
         owner_user_id=None,
     )
-    operator = SimpleNamespace(id=uuid4(), is_superuser=True)
-    viewer = SimpleNamespace(id=uuid4(), is_superuser=False)
 
     operator_permissions = recurring_router._action_permissions_for_definition(
         definition,
