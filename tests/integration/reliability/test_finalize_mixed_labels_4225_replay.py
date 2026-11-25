@@ -36,7 +36,6 @@ from tests.integration.reliability.helpers import load_replay
 from tests.unit.workflows.temporal.test_github_issue_lifecycle import (
     _install,
     _LifecycleFakeService,
-    _LifecycleHttpClient,
 )
 
 pytestmark = [

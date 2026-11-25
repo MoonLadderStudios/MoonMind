@@ -997,8 +997,6 @@ class BootstrapController:
                 },
             )
         except Exception as guard_exc:
-            import logging
-
             logging.getLogger(__name__).warning(
                 f"bootstrap: maintenance guard unavailable, using fallback validation: {guard_exc}"
             )

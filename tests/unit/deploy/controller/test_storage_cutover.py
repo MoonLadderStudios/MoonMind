@@ -42,8 +42,6 @@ def test_storage_helper_failure_refuses_application_recreation(controller_path, 
 
 
 def test_rollback_uses_retained_capable_helper(controller_path, tmp_path, monkeypatch):
-    import json
-
     server, record = load("server"), load("record")
     store = record.OperationStore(tmp_path)
     operation = store.begin(stack="test", desired_image="old-app", source_revision="", target={"services": ["minio"]})

@@ -6,7 +6,6 @@ import os
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, patch
 
 import pytest
 

@@ -673,9 +673,7 @@ async def test_github_issue_finalize_failed_attempt_requires_issue_identity() ->
         await TemporalIntegrationActivities.github_issue_finalize_failed_attempt(
             object(), {"executionEvent": "failed"}
         )
-from moonmind.workflows.temporal.report_artifacts import validate_report_bundle_result
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
-from moonmind.workloads.registry import RunnerProfileRegistry
 
 pytestmark = [pytest.mark.asyncio]
 

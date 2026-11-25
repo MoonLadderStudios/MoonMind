@@ -900,7 +900,6 @@ def _publish_deployment_evidence(
     actually hits when a qualification is not refreshed.
     """
 
-    import json
     from datetime import timedelta
 
     from moonmind.omnigent.bootstrap.evidence import write_deployment_evidence

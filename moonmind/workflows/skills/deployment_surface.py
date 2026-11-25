@@ -206,7 +206,6 @@ def verify_surface(
 
 if __name__ == "__main__":
     import argparse
-    import json
     import signal
 
     parser = argparse.ArgumentParser(description=__doc__)

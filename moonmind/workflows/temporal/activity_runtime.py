@@ -17050,7 +17050,6 @@ class TemporalAgentRuntimeActivities:
     @staticmethod
     def _detect_repo_from_workspace(workspace: str) -> str:
         """Extract the GitHub owner/repo from the workspace remote URL."""
-        import re
         import subprocess
 
         result = subprocess.run(
@@ -17071,7 +17070,6 @@ class TemporalAgentRuntimeActivities:
     @staticmethod
     def _pr_number_from_run_id(run_id: str | None) -> int | None:
         """Extract a resolver PR number from stable run ids when present."""
-        import re
 
         match = re.search(r"(?:^|:)pr:(\d+)(?::|$)", str(run_id or ""))
         if match is None:

@@ -4849,7 +4849,6 @@ def _postgres_text(value: Any) -> Any:
 
 def _event_deduplication_key(event: dict[str, Any]) -> str:
     """Prefer explicit/provider identity, otherwise bind content to its cursor."""
-    import json
 
     explicit = _string_or_none(event.get("deduplicationKey"))
     if explicit:

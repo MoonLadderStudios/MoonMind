@@ -10,7 +10,6 @@ from temporalio import workflow
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, Worker, UnsandboxedWorkflowRunner
 from temporalio.client import WorkflowFailureError
-from temporalio.service import RPCError
 from moonmind.schemas.agent_runtime_models import (
     MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
     AgentExecutionRequest,

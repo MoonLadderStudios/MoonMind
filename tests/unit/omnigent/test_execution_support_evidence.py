@@ -7,23 +7,11 @@ from types import SimpleNamespace
 import pytest
 
 from moonmind.omnigent.execution_support_evidence import (
-    EXECUTION_SUPPORT_EVIDENCE_ISSUER,
-    EXECUTION_SUPPORT_EVIDENCE_VERSION,
     assert_protected_evidence_matches_plan,
     load_protected_execution_support_evidence,
     validate_protected_execution_support_evidence,
 )
-from moonmind.omnigent.harness_platform.support import (
-    SupportKeyPayload,
-    compute_support_combination_key,
-)
-from moonmind.omnigent.session_supervisor_rollback import (
-    SUPERVISOR_ROLLBACK_POLICY_VERSION,
-)
-from moonmind.schemas.omnigent_session_models import (
-    OMNIGENT_SESSION_COMPATIBILITY_VERSION,
-    OMNIGENT_SESSION_FEATURE_GENERATION,
-)
+from moonmind.omnigent.harness_platform.support import SupportKeyPayload
 from tests.unit.omnigent.support_evidence_fixtures import (
     concurrency_record,
     support_identity,

@@ -312,7 +312,6 @@ def test_tool_without_a_durable_identity_is_refused(
 def test_workflow_controller_update_converges_the_selected_omnigent_release(
     controller_factory, tmp_path, monkeypatch, configured_env
 ):
-    import json
     from types import SimpleNamespace
 
     from moonmind.omnigent import settings as omnigent_settings

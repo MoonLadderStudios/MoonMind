@@ -1087,8 +1087,6 @@ async def test_async_branch_lookup_keeps_event_loop_responsive(
 ) -> None:
     """A delayed upstream lookup must not block unrelated async work."""
 
-    import asyncio
-
     ticks: list[int] = []
 
     async def ticker() -> None:

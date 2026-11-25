@@ -1256,8 +1256,6 @@ async def test_search_skips_in_progress_issues_and_revalidates_fresh_detail(
 
 
 def test_compact_issue_context_preserves_search_evidence():
-    import json
-
     evidence = {"fallbackScanning": True, "pagesExamined": 5, "candidatesExamined": 499}
     context = {
         "trustedSource": "moonmind.github.get_issue",

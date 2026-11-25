@@ -126,7 +126,6 @@ def _verification_tool(
     return {"type": tool_type, "name": name, "inputs": inputs}
 
 def _mock_plan_payload(nodes: list[dict[str, Any]], edges: list[dict[str, Any]] | None = None) -> bytes:
-    import json
     return json.dumps({
         "plan_version": "1.0",
         "metadata": {
@@ -886,8 +885,6 @@ async def test_run_execution_stage_uses_user_max_attempts_for_skill_retry_policy
                 else getattr(payload, "artifact_ref", None)
             )
             if artifact_ref == "art:sha256:456":
-                import json
-
                 return json.dumps(
                     {
                         "skills": [
@@ -987,8 +984,6 @@ async def test_run_execution_stage_hands_controlling_verification_to_finalizer(
                 else getattr(payload, "artifact_ref", None)
             )
             if artifact_ref == "art:sha256:456":
-                import json
-
                 return json.dumps(
                     {
                         "skills": [
@@ -1125,8 +1120,6 @@ async def test_run_execution_stage_routes_generic_container_tool_to_durable_job(
                 else getattr(payload, "artifact_ref", None)
             )
             if artifact_ref == "art:sha256:456":
-                import json
-
                 return json.dumps(
                     {
                         "skills": [
@@ -2912,8 +2905,6 @@ async def test_auto_publish_evidence_ref_is_loaded_before_recording(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import json
-
     captured: list[tuple[str, Any]] = []
 
     async def fake_execute_typed_activity(
@@ -2979,7 +2970,6 @@ async def test_pr_resolver_top_level_publish_evidence_ref_prevents_false_failure
     ) -> bytes:
         assert activity_type == "artifact.read"
         assert getattr(payload, "artifact_ref", None) == "artifact://resolver-publish"
-        import json
 
         return json.dumps(evidence).encode()
 

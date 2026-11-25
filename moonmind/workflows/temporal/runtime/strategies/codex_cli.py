@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
