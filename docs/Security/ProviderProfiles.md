@@ -311,11 +311,12 @@ read-only unless the native runtime may renew and must persist rotated tokens.
 Results are fenced on generation, grant, and attempt
 before access and before persistence; failures change only observation state.
 
-Settings → Providers & Secrets renders the weekly reading in each row's Weekly
-usage column, the account and every reported window in that row's details, and
-all of it in a read-only **Account & usage** editor section, never in the profile
-draft. The provider-reported email and organization name are attribution from
-the provider, separate from the operator's `account_label`. Only the general
+Settings → Providers & Secrets renders the account email with each row's
+identity, the weekly reading in its Weekly usage column, the rest of the account
+and every reported window in that row's details, and all of it in a read-only
+**Account & usage** editor section, never in the profile draft. The
+provider-reported email and organization name are attribution from the provider,
+separate from the operator's `account_label`. Only the general
 weekly window is the weekly allowance; short, model-scoped, and other windows
 keep their reported labels in separate groups, and a missing weekly window is
 reported as missing. Resets are formatted from the UTC instant in the browser's

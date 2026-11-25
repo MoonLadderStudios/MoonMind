@@ -206,6 +206,48 @@ function latestObservation(usage: ProviderAccountUsage, primary: UsageWindow | n
   return times.length ? Math.max(...times) : parseInstant(usage.account.observed_at);
 }
 
+/** The provider reported at least one window or an account identity. */
+function hasReportedData(usage: ProviderAccountUsage): boolean {
+  const { account } = usage;
+  return (usage.usage.windows ?? []).length > 0 || Boolean(account.email || account.display_name);
+}
+
+/**
+ * Whether a subscription login has an account reading to show: reported data,
+ * or a confirmed empty report. Unsupported, failed and not-yet-checked
+ * projections have none.
+ */
+function showsAccountReading(usage: ProviderAccountUsage | null | undefined, oauth: boolean): usage is ProviderAccountUsage {
+  if (!oauth || !usage || usage.status === 'not_supported') return false;
+  return hasReportedData(usage) || usage.status === 'not_reported';
+}
+
+/**
+ * The provider account email for a saved-profile row. It sits with the
+ * profile's identity because it is how the operator tells which subscription
+ * a profile signs in as; the organization, plan and windows stay in details.
+ */
+export function ProviderAccountEmail({
+  usage,
+  oauth,
+}: {
+  usage: ProviderAccountUsage | null | undefined;
+  oauth: boolean;
+}) {
+  if (!showsAccountReading(usage, oauth)) return null;
+  const { email } = usage.account;
+  return (
+    <div className="min-w-0 text-xs">
+      <span className="sr-only">Provider account: </span>
+      {email ? (
+        <span className="font-medium text-slate-900 dark:text-white [overflow-wrap:anywhere]">{email}</span>
+      ) : (
+        <span className="text-slate-500 dark:text-slate-400">Email unavailable</span>
+      )}
+    </div>
+  );
+}
+
 function WindowList({ label, windows, nowMs }: { label: string; windows: UsageWindow[]; nowMs: number }) {
   if (windows.length === 0) return null;
   return (
@@ -289,12 +331,12 @@ export function ProviderProfileAccountUsage({
     (w) => w !== primary && !modelWeekly.includes(w) && !shortWindows.includes(w),
   );
   const account = usage.account;
-  const hasData = windows.length > 0 || Boolean(account.email || account.display_name);
+  const hasData = hasReportedData(usage);
   const backendChecking = IN_FLIGHT_STATES.has(usage.refresh.state);
   const checking = Boolean(refresh?.checking) || backendChecking;
   const initial = !hasData && (usage.status === 'unknown' || checking);
   // Without any reading, only a confirmed empty report can say "not reported".
-  const showReading = hasData || usage.status === 'not_reported';
+  const showReading = showsAccountReading(usage, oauth);
   const observedMs = latestObservation(usage, primary);
   const stale = usage.status === 'stale' || usage.status === 'unavailable' || (primary !== null && isLastKnown(primary, nowMs));
   const primaryPassed = primary !== null && resetPassed(primary, nowMs);
@@ -494,7 +536,8 @@ export function ProviderProfileAccountUsage({
 
   if (summary) {
     // The row reading: allowance, reset and anything needing attention. The
-    // account and every other reported window live in the row's details.
+    // account email sits with the row's identity (ProviderAccountEmail); the
+    // rest of the account and every other window live in the row's details.
     return (
       <div role="group" aria-label={label} className={`${frameClass} flex items-start gap-2`}>
         <div className="min-w-0 flex-1 space-y-1">

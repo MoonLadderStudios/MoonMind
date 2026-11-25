@@ -32,6 +32,7 @@ import {
 } from '../../utils/providerProfileTiers';
 import { useSettingsDraftGuard, useSettingsDraftRegistration } from './SettingsDraftGuard';
 import {
+  ProviderAccountEmail,
   ProviderProfileAccountUsage,
   type AccountUsageReconnectAction,
   type ProviderAccountUsage,
@@ -4442,11 +4443,12 @@ export function ProviderProfilesManager({
       ? { label: 'Reconnect OAuth', onSelect: connect.onSelect, disabledReason: connect.disabledReason }
       : null;
   };
+  const usesOAuth = (profile: ProviderProfile) => credentialMethodLabel(profile) === 'OAuth';
   const renderAccountUsage = (profile: ProviderProfile, variant: 'summary' | 'details' | 'full') => (
     <ProviderProfileAccountUsage
       subject={profile.profile_id}
       usage={profile.account_usage}
-      oauth={credentialMethodLabel(profile) === 'OAuth'}
+      oauth={usesOAuth(profile)}
       variant={variant}
       refresh={accountUsageRefresh.viewFor(profile)}
       onRefresh={() => accountUsageRefresh.requestManualRefresh(profile.profile_id)}
@@ -4670,6 +4672,7 @@ export function ProviderProfilesManager({
                             </span>
                           ) : null}
                         </div>
+                        <ProviderAccountEmail usage={profile.account_usage} oauth={usesOAuth(profile)} />
                         <div className="text-xs text-slate-600 dark:text-slate-400">
                           <span title={profile.runtime_id} data-profile-harness="">
                             {profile.runtime_id ? formatHarnessLabel(profile.runtime_id) : '—'}
