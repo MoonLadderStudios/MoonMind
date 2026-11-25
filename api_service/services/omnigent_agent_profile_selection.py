@@ -701,6 +701,7 @@ async def resolve_default_agent_profile_snapshot(
     consumer_id: str,
     user: OperatorAdmission | None,
     _allow_drift_recovery: bool = True,
+    replace_existing_usage: bool = False,
 ) -> dict[str, Any]:
     """Resolve the deployment-managed default into explicit launch authority.
 
@@ -712,7 +713,13 @@ async def resolve_default_agent_profile_snapshot(
     bounded catalog recovery is attempted before failing: upstream bumps the
     exact pinned version frequently, and the background sync may not have
     advanced ``active_version`` yet. Explicit pins never take this path.
+
+    ``replace_existing_usage`` moves a consumer that reselects its account
+    onto the new snapshot. It is forwarded only when set, so an ordinary
+    admission still conflicts with usage it did not expect to find.
     """
+
+    usage = {"replace_existing_usage": True} if replace_existing_usage else {}
 
     if provider_profile_ref:
         from api_service.services.profile_execution_selection import (
@@ -747,7 +754,7 @@ async def resolve_default_agent_profile_snapshot(
         try:
             return await resolve_agent_profile_snapshot(
                 session, selection=selection, consumer_type=consumer_type,
-                consumer_id=consumer_id, user=user,
+                consumer_id=consumer_id, user=user, **usage,
             )
         except HTTPException as exc:
             if exc.status_code != status.HTTP_409_CONFLICT or not _allow_drift_recovery:
@@ -787,6 +794,7 @@ async def resolve_default_agent_profile_snapshot(
                 consumer_id=consumer_id,
                 user=user,
                 _allow_drift_recovery=False,
+                **usage,
             )
 
     profile = await session.scalar(
@@ -902,7 +910,7 @@ async def resolve_default_agent_profile_snapshot(
     return await resolve_default_agent_profile_snapshot(
         session, provider_profile_ref=selected_provider_ref,
         launch_policy_ref=launch_policy_ref, consumer_type=consumer_type,
-        consumer_id=consumer_id, user=user,
+        consumer_id=consumer_id, user=user, **usage,
     )
 
 

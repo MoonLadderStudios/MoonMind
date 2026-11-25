@@ -11954,6 +11954,24 @@ export interface components {
             promotionState?: string | null;
         };
         /**
+         * RecurringAgentSelectionModel
+         * @description Agent selection that replaces the one a schedule was authored with.
+         *
+         *     Field presence is the intent: ``modelTier`` follows a profile tier, a
+         *     ``model``/``effort`` pair is Custom (null means Runtime default), and an
+         *     omitted part keeps what the schedule saved.
+         */
+        RecurringAgentSelectionModel: {
+            /** Profileid */
+            profileId?: string | null;
+            /** Modeltier */
+            modelTier?: number | null;
+            /** Model */
+            model?: string | null;
+            /** Effort */
+            effort?: string | null;
+        };
+        /**
          * RecurringWorkflowActionPermissionsModel
          * @description Action availability for a recurring schedule visible to the caller.
          */
@@ -14332,6 +14350,7 @@ export interface components {
             target?: {
                 [key: string]: unknown;
             } | null;
+            runtime?: components["schemas"]["RecurringAgentSelectionModel"] | null;
             /** Policy */
             policy?: {
                 [key: string]: unknown;

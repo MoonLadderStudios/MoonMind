@@ -3,7 +3,7 @@
 **Status:** Current
 **Document Class:** System / Feature Design View
 **Owners:** MoonMind Product and Platform
-**Updated:** 2026-10-16
+**Updated:** 2026-11-25
 **Authority:** Product terminology, ordinary agent selection, advanced Backend disclosure, and identity presentation across authoring and workflow views. Existing admission, credential, persistence, and lifecycle owners remain authoritative for their mechanisms.
 **Related:** [Create Page](CreatePage.md), [Workflows List](WorkflowsListPage.md), [Workflow Model Selection](WorkflowModelSelection.md), [Provider Profiles](../Security/ProviderProfiles.md), [Execution Configurations](../Omnigent/AgentProfiles.md), [Primary Backend Strategy](../Omnigent/PrimaryRuntimeProviderStrategy.md), [Selection and Transition](../Omnigent/RuntimeProviderRollout.md), [Model and Effort Tiers](../Security/ProviderProfileModelEffortTiers.md).
 
@@ -49,7 +49,7 @@ Model               <selected tier value or Custom input>
 Effort              <selected tier value or Custom input>
 ```
 
-Settings offers one **Default for new work** picker. A profile choice saves that profile and its compatible harness; a harness's preferred-profile choice or OpenCode basic clears the profile. Existing mismatched pairs remain readable and unchanged until an intentional Save aligns them. Instance retains both low-level settings and reset, without audit-history controls. UI, API/CLI Create (including raw requests), and recurring creation share the instance defaults. Each submission snapshots them before preset expansion and classifies the expanded workflow before applying agent-account defaults. Accepted retries, schedule updates and refresh retain recorded authority. Saving applies to the next submission without a process restart.
+Settings offers one **Default for new work** picker. A profile choice saves that profile and its compatible harness; a harness's preferred-profile choice or OpenCode basic clears the profile. Existing mismatched pairs remain readable and unchanged until an intentional Save aligns them. Instance retains both low-level settings and reset, without audit-history controls. UI, API/CLI Create (including raw requests), and recurring creation share the instance defaults. Each submission snapshots them before preset expansion and classifies the expanded workflow before applying agent-account defaults. Accepted retries, schedule refresh, and schedule updates that leave the agent selection alone retain recorded authority; a schedule edit that selects another Provider Profile or model is [admitted again](RecurringScheduleDetailsPage.md#agent-selection) like new work. Saving applies to the next submission without a process restart.
 
 Known tool-only work with omitted selections uses the installed tool worker without an agent account or plan. Its saved runtime is passive provenance, so an unavailable model default does not block tools. Create omits automatic account/configuration/model fields for these workflows with Publish None; an untouched runtime preview is not an authored selection. Report output does not turn a tool into an agent. Explicit runtime, profile, model or configuration choices, opaque inputs, recorded plans and publication or finishing authority retain their admission owners, including review-only finishing. Mixed workflows and implicit fix/merge resolvers still require agent accounts. Unattended agent submissions retain missing, disabled, or unready saved accounts instead of silently choosing another account.
 

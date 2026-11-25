@@ -4,7 +4,7 @@ Status: **Implemented workflow and step authoring contract.**
 
 Owners: MoonMind Engineering
 
-Last updated: 2026-10-02
+Last updated: 2026-11-25
 
 Canonical for: model selection while creating or editing workflows and their steps, including preset, rerun, and schedule round trips.
 
@@ -28,7 +28,7 @@ Tier selection chooses reusable profile policy. Custom selects explicit model/ef
 
 ## 2. Current Implementation Boundary
 
-`frontend/src/components/workflows/ModelSelectionFields.tsx` owns the shared workflow and advanced-step interaction. `frontend/src/lib/modelSelection.ts` owns presence-preserving transitions, and `workflow-start.tsx` keeps authored selection separate from profile/default previews. Draft editing, reruns, presets, and remediation imports reconstruct the raw saved fields rather than resolved attempt diagnostics.
+`frontend/src/components/workflows/ModelSelectionFields.tsx` owns the shared workflow and advanced-step interaction. `frontend/src/lib/modelSelection.ts` owns presence-preserving transitions, and `workflow-start.tsx` keeps authored selection separate from profile/default previews. Draft editing, reruns, presets, and remediation imports reconstruct the raw saved fields rather than resolved attempt diagnostics. The schedule edit form reuses the selector: `frontend/src/lib/scheduleAgentSelection.ts` reads a saved schedule's authored selection and sends only an explicit change, which `moonmind/workflows/recurring/agent_selection.py` applies before the schedule is admitted again.
 
 `moonmind/runtime_intent.py` validates authored presence and replaces tier/Custom selection atomically during inheritance. The canonical resolver in `moonmind/workflows/executions/model_resolver.py` receives that raw intent: complete nullable Custom pairs and null tier fields use compatible runtime defaults without legacy profile scalar fallback. Saved partial/mixed selections retain their existing semantics until explicitly replaced. Advisory previews include per-field sources so a legacy companion is displayed only when its current meaning is known.
 
