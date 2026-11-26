@@ -182,6 +182,11 @@ function usageGroup(profileId: string): HTMLElement {
   return screen.getAllByRole('group', { name: `Account and usage for ${profileId}` })[0]!;
 }
 
+/** The row's always-visible Profile cell. */
+function profileCell(profileId: string): HTMLElement {
+  return document.querySelector<HTMLElement>(`[id="provider-profile-${profileId}"] td[data-label="Profile"]`)!;
+}
+
 /** The account and every reported window, in the row's collapsed details. */
 function usageDetails(profileId: string): HTMLElement {
   return document.querySelector<HTMLElement>(
@@ -209,20 +214,22 @@ afterEach(() => {
 });
 
 describe('Provider Profile account usage in Settings', () => {
-  it('gives the weekly reading its own column and keeps the account in the row details', async () => {
+  it('shows the account email with the profile identity and the weekly reading in its own column', async () => {
     const harness = renderLiveManager([oauthProfile('codex-oauth', {})]);
     await advance(10);
 
     expect(screen.getAllByRole('columnheader')).toHaveLength(4);
+    // The account email identifies the profile without opening its details.
+    expect(text(profileCell('codex-oauth'))).toContain('personal@example.com');
     const usageCell = document.querySelector('#provider-profile-codex-oauth td[data-label="Weekly usage"]')!;
     const group = within(usageCell as HTMLElement).getByRole('group', {
       name: 'Account and usage for codex-oauth',
     });
     expect(within(group).getByText('36% remaining')).toBeTruthy();
-    expect(text(group)).not.toContain('personal@example.com');
     const details = document.getElementById('provider-profile-details-codex-oauth')!;
     expect(details.hidden).toBe(true);
     expect(text(details)).toContain('personal@example.com');
+    expect(text(details)).toContain('Personal workspace');
     // Observation status sits beside, not instead of, connection and readiness.
     const statusCell = document.querySelector('#provider-profile-codex-oauth td[data-label="Status"]')!;
     expect(text(statusCell)).toBe('Ready');
@@ -644,6 +651,7 @@ describe('two-provider account usage delivery contract', () => {
     for (const profile of refreshed) {
       const group = usageGroup(profile.profile_id);
       const usage = profile.account_usage!;
+      expect(text(profileCell(profile.profile_id))).toContain(usage.account.email!);
       expect(text(usageDetails(profile.profile_id))).toContain(usage.account.email!);
       expect(text(usageDetails(profile.profile_id))).toContain(usage.account.display_name!);
       const primary = (usage.usage.windows ?? []).find((window) => window.key === usage.usage.primary_window_key)!;
@@ -681,6 +689,9 @@ describe('two-provider account usage delivery contract', () => {
     });
     await advance(10_000);
     const replacement = rebound.find((profile) => profile.profile_id === 'codex-a')!.account_usage!;
+    const replaced = refreshed.find((profile) => profile.profile_id === 'codex-a')!.account_usage!;
+    expect(text(profileCell('codex-a'))).toContain(replacement.account.email!);
+    expect(text(profileCell('codex-a'))).not.toContain(replaced.account.email!);
     expect(text(usageDetails('codex-a'))).toContain(replacement.account.email!);
     expect(within(usageGroup('codex-a')).queryByRole('status')).toBeNull();
     expect(harness.listFetches()).toBe(0);

@@ -6,6 +6,7 @@ import {
   formatRemainingPercent,
   formatResetTime,
   primaryWeeklyWindow,
+  ProviderAccountEmail,
   ProviderProfileAccountUsage,
   type AccountUsageRefreshView,
 } from './ProviderProfileAccountUsage';
@@ -476,6 +477,51 @@ describe('ProviderProfileAccountUsage', () => {
 
   it('renders nothing when the backend did not project account usage', () => {
     const { container } = renderUsage(undefined);
+    expect(container.textContent).toBe('');
+  });
+});
+
+describe('ProviderAccountEmail', () => {
+  function renderEmail(usage: Projection | null | undefined, oauth = true) {
+    return render(<ProviderAccountEmail usage={usage} oauth={oauth} />);
+  }
+
+  it('shows the provider-reported account email for a subscription login', () => {
+    const { container } = renderEmail(projection());
+
+    const email = screen.getByText('personal@example.com');
+    expect(email.className).toContain('[overflow-wrap:anywhere]');
+    expect(container.textContent).toBe('Provider account: personal@example.com');
+  });
+
+  it('keeps showing the last-known email while sign-in must be renewed', () => {
+    renderEmail(projection({ status: 'reconnect_required' }));
+    expect(screen.getByText('personal@example.com')).toBeTruthy();
+  });
+
+  it('says the email is unavailable when the provider reported the account without one', () => {
+    const { container } = renderEmail(
+      projection({ status: 'not_reported', windows: [], account: { email: null, display_name: null } }),
+    );
+    expect(container.textContent).toBe('Provider account: Email unavailable');
+  });
+
+  it.each([
+    ['an API-key profile', projection({ status: 'not_supported', windows: [] }), false],
+    ['an unsupported provider', projection({ status: 'not_supported', windows: [], account: { email: null } }), true],
+    [
+      'a profile not yet checked',
+      projection({
+        status: 'unknown',
+        windows: [],
+        account: { status: 'unknown', email: null, display_name: null, plan: null, observed_at: null },
+      }),
+      true,
+    ],
+    ['a failed projection', null, true],
+    ['a profile without a projection', undefined, true],
+  ])('renders nothing for %s', (_label, usage, oauth) => {
+    const { container } = renderEmail(usage, oauth);
     expect(container.textContent).toBe('');
   });
 });
