@@ -68,3 +68,22 @@ summary. The validation step rejects a draft that omits or relabels a
 requirement, changes the subject type, standards or pack identity, selects a
 method a requirement does not allow, names a target outside the saved
 environment or drops a saved exclusion, or contains secret material.
+
+## Running a planned job
+
+A plan run launches each planned job through its existing assessment step and
+names `securityPlanJobPath`. Collect and interpret the job as usual, then write
+one `security-plan-job/v1` record there before finishing:
+
+```json
+{"schemaVersion": "security-plan-job/v1", "planIdentity": "<64 hex>",
+ "jobId": "<planned job ID>", "state": "completed", "reason": "...",
+ "containerJobIds": ["..."], "reportRefs": ["art_..."], "reviewRef": "art_..."}
+```
+
+`state` is `completed`, `partial`, `failed`, `blocked_admission`,
+`blocked_readiness` or `cancelled`. `reportRefs` are the job's retained report
+summary artifacts, at most 8; `reviewRef` is the saved interpretation, if any.
+Record a refused admission or failed readiness as blocked with its diagnostic.
+The concluding `security.assess` reads each cited report itself, so a claimed
+completion without readable native evidence is reported as failed.

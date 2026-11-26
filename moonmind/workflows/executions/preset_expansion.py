@@ -61,8 +61,13 @@ async def expand_preset_for_child_run(
     session: Any,
     initial_parameters: Mapping[str, Any] | None,
     allow_goal_schedule: bool = True,
+    artifact_access: Any = None,
 ) -> dict[str, Any]:
-    """Expand stored preset provenance into executable workflow steps."""
+    """Expand stored preset provenance into executable workflow steps.
+
+    ``artifact_access`` is the caller's artifact read authority, needed only by
+    a preset that reads a retained artifact (a security plan run).
+    """
 
     parameters = _coerce_mapping(initial_parameters)
     workflow_payload = _coerce_mapping(parameters.get("workflow"))
@@ -169,7 +174,9 @@ async def expand_preset_for_child_run(
         "slug": template_slug,
         "inputs": template_inputs,
         "context": template_context,
-        "options": ExpandOptions(should_enforce_step_limit=True),
+        "options": ExpandOptions(
+            should_enforce_step_limit=True, artifact_access=artifact_access
+        ),
     }
     try:
         expanded = await catalog.expand_template(**expand_kwargs)

@@ -17,7 +17,9 @@ steps and stop on cancellation; do not launch another provider or reset a budget
 
 For a planning request (`mode: plan`), follow [the planning procedure](references/plan.md):
 draft a `security-plan/v1` from the repository and the trusted planning context,
-reusing the threat model below, and run no job.
+reusing the threat model below, and run no job. When a request names
+`securityPlanJobPath`, it is a planned job of a plan run: finish by writing its
+[outcome record](references/plan.md#running-a-planned-job) there.
 
 For selected web/API objectives, retain the edition-specific
 [procedure plan and coverage](references/report.md) before executing tests.

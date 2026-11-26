@@ -10801,7 +10801,7 @@ export interface components {
          */
         PresetStepBlueprintSchema: {
             /** Kind */
-            kind?: ("step" | "include") | null;
+            kind?: ("step" | "include" | "security-plan-run") | null;
             /** Type */
             type?: ("tool" | "skill") | null;
             /** Slug */
@@ -10822,6 +10822,18 @@ export interface components {
             annotations?: {
                 [key: string]: unknown;
             };
+            /** Planref */
+            planRef?: string | null;
+            /** Assessmentref */
+            assessmentRef?: string | null;
+            /** Launchbindings */
+            launchBindings?: string | {
+                [key: string]: unknown;
+            } | null;
+            /** Excludedjobs */
+            excludedJobs?: string | unknown[] | null;
+            /** Previousassessmentref */
+            previousAssessmentRef?: string | null;
         };
         /**
          * PresetStepSkillSchema

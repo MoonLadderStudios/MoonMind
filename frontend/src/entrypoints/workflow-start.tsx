@@ -2021,6 +2021,28 @@ function RuntimeCommandPreviewMessage({
   );
 }
 
+/** Declared preset inputs named by `?presetInputs=`; anything else is dropped. */
+function requestedPresetInputs(
+  raw: string | null,
+  inputSchema: unknown,
+): Record<string, unknown> | null {
+  if (!raw) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const properties = recordValue(recordValue(inputSchema).properties);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const values = Object.fromEntries(
+    Object.entries(parsed as Record<string, unknown>).filter(([name]) =>
+      Object.prototype.hasOwnProperty.call(properties, name),
+    ),
+  );
+  return Object.keys(values).length ? values : null;
+}
+
 function presetInputValuesFromPayload(
   inputValues: Record<string, unknown> | undefined,
 ): Record<string, unknown> {
@@ -6643,16 +6665,23 @@ function WorkflowStartPageContent({
   const templateItems = templateOptionsQuery.data || [];
   // `?preset=<slug>` (for example the Security workspace's start action)
   // selects that preset in an untouched first step once the catalog loads.
+  // `?presetInputs=<JSON object>` prefills that preset's declared inputs, such
+  // as the retained plan a "Run this plan" link names. Values stay editable
+  // and are checked by the preset compiler; they grant nothing.
   const requestedPresetAppliedRef = useRef(false);
   useEffect(() => {
     if (pageMode.mode !== "create" || requestedPresetAppliedRef.current) return;
-    const slug = String(new URLSearchParams(window.location.search).get("preset") || "").trim();
-    if (!slug || !templateItems.some((item) => item.key === slug)) return;
+    const params = new URLSearchParams(window.location.search);
+    const slug = String(params.get("preset") || "").trim();
+    const preset = templateItems.find((item) => item.key === slug);
+    if (!slug || !preset) return;
     requestedPresetAppliedRef.current = true;
     const [first, ...rest] = stepsRef.current;
     if (!first || rest.length || first.instructions.trim() || first.presetKey) return;
     handleStepTypeChange(first.localId, "preset");
     void handleStepPresetSelectionChange(first.localId, slug);
+    const requested = requestedPresetInputs(params.get("presetInputs"), preset.inputSchema);
+    if (requested) updateStep(first.localId, { presetInputValues: requested });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageMode.mode, templateItems]);
   const hasAssessmentStep = steps.some((step) => {

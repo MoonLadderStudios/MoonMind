@@ -315,6 +315,16 @@ def build_assessment_proposal(
         ]))
     if realtime_operations:
         sections.insert(3, ("Real-time operations", realtime_operations))
+    from moonmind.security.security_plan_run import review_items
+
+    # Named before launch: planned work this run does not launch, and scoped
+    # job steps the selected authorization would refuse.
+    not_covered = review_items(plan, scope)
+    if not_covered is not None:
+        sections.insert(
+            sections.index(("Targets", targets)) + 1,
+            ("Not covered by this authorization", not_covered),
+        )
     return {
         "schemaVersion": "assessment-engagement/v1",
         "authorizationRef": record.ref,

@@ -1,5 +1,6 @@
 """Exact organisational artifact inputs for the existing execution admission owner."""
 
+import re
 from collections.abc import Mapping
 
 from moonmind.security.frameworks import (
@@ -41,7 +42,11 @@ def _profile_refs(selection: Mapping) -> list[str]:
 
 
 def organisational_evidence_refs(task: Mapping) -> list[str]:
-    """No artifact-string discovery: only current revisions of explicit security.assess tools."""
+    """No artifact-string discovery: only explicit security.assess tool inputs.
+
+    Current organisational evidence revisions, plus a plan run's retained plan
+    and the earlier conclusion it compares with.
+    """
     refs = []
     steps = task.get("steps") or []
     if not isinstance(steps, list):
@@ -106,6 +111,22 @@ def organisational_evidence_refs(task: Mapping) -> list[str]:
             ]
         for pack in packs:
             refs.extend(_profile_refs(pack))
+        plan_run = inputs.get("planRun", inputs.get("plan_run"))
+        if plan_run is not None:
+            # A plan run's conclusion reads the retained plan, and on a rerun
+            # the earlier conclusion it compares with, from other runs.
+            if not isinstance(plan_run, Mapping):
+                raise TypeError("invalid planRun")
+            previous = inputs.get(
+                "previousAssessmentRef", inputs.get("previous_assessment_ref")
+            )
+            for ref in (plan_run.get("planRef", plan_run.get("plan_ref")), previous):
+                if ref is not None and not (
+                    isinstance(ref, str) and re.fullmatch(r"art_[A-Za-z0-9_-]+", ref)
+                ):
+                    raise ValueError("invalid plan run reference")
+                if ref:
+                    refs.append(ref)
         for row in [*selected_rows, *builtin_rows]:
             if not isinstance(row, Mapping):
                 raise TypeError("invalid assessment requirement")

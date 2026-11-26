@@ -48,6 +48,8 @@ from moonmind.security.web_api_methodology import (
 )
 
 MAX_RETAINED_REPORT_BYTES = 8 * 1024 * 1024
+#: Retained reports one assessment evaluates.
+MAX_REPORT_REFS = 32
 
 Text = AssessmentText
 Items = Annotated[list[Text], Field(max_length=4096)]
@@ -1003,6 +1005,31 @@ class SecurityPlanInput(Contract):
     ) = Field(default=None, exclude_if=lambda value: value is None)
 
 
+class ExcludedPlanJob(Contract):
+    """A planned job a plan run does not launch, and why."""
+
+    job_id: Annotated[
+        str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+    ]
+    kind: Text
+    reason: Text
+
+
+class PlanRunInput(Contract):
+    """A run of a retained ``security-plan/v1``, concluded by this assessment.
+
+    ``planIdentity`` is the content identity the derived run was reviewed
+    with; ``excluded`` names the planned jobs the run does not launch. The
+    plan and the jobs' outcome records grant nothing.
+    """
+
+    plan_ref: Annotated[str, StringConstraints(pattern=r"^art_[A-Za-z0-9_-]+$")]
+    plan_identity: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+    excluded: Annotated[list[ExcludedPlanJob], Field(max_length=32)] = Field(
+        default_factory=list
+    )
+
+
 class AssessmentRequest(Contract):
     model_config = {
         **Contract.model_config,
@@ -1029,12 +1056,17 @@ class AssessmentRequest(Contract):
     network_refs: Items
     inventory_ref: Text | None = None
     feed_ref: Text | None = None
-    report_refs: Annotated[Items, Field(max_length=32)] = Field(default_factory=list)
+    report_refs: Annotated[Items, Field(max_length=MAX_REPORT_REFS)] = Field(
+        default_factory=list
+    )
     baseline_ref: Text | None = None
     decisions_ref: Text | None = None
     review_ref: Text | None = None
     methodology: MethodologyInput | None = None
     security_plan: SecurityPlanInput | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    plan_run: PlanRunInput | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     github_alerts: GitHubAlertImport | None = None
@@ -1087,6 +1119,11 @@ class AssessmentRequest(Contract):
         if packs and self.control_assessment is not None:
             raise AssessmentInputError(
                 "frameworkPack cannot also supply controlAssessment"
+            )
+        if self.plan_run is not None and (not packs or self.report_refs):
+            raise AssessmentInputError(
+                "planRun concludes the plan's frameworkPacks over its jobs' "
+                "retained reports; omit reportRefs"
             )
         if (
             not self.tools

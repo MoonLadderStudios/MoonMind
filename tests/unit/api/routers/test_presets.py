@@ -13,8 +13,9 @@ from api_service.api.routers.presets import (
     _get_save_service,
     router,
 )
-from api_service.auth_providers import get_instance_access
+from api_service.auth_providers import get_artifact_access, get_instance_access
 from moonmind.config.settings import settings
+from tests.artifact_access import access_for_test
 
 
 def _build_app() -> tuple[TestClient, AsyncMock, AsyncMock]:
@@ -25,6 +26,7 @@ def _build_app() -> tuple[TestClient, AsyncMock, AsyncMock]:
     app.dependency_overrides[_get_catalog_service] = lambda: catalog
     app.dependency_overrides[_get_save_service] = lambda: saver
     app.dependency_overrides[get_instance_access] = lambda: None
+    app.dependency_overrides[get_artifact_access] = lambda: access_for_test("operator")
     settings.feature_flags.preset_catalog = True
     return TestClient(app, client=("127.0.0.1", 50000)), catalog, saver
 
@@ -153,6 +155,73 @@ def test_expand_template_success() -> None:
             "finishMode": "fix_only",
         },
     }
+
+
+PLAN_RUN_STEP = {
+    "kind": "security-plan-run",
+    "planRef": "{{ inputs.plan_ref }}",
+    "assessmentRef": "{{ inputs.assessment_ref }}",
+    "launchBindings": "{{ inputs.launch_bindings }}",
+    "excludedJobs": "{{ inputs.excluded_jobs }}",
+    "previousAssessmentRef": "{{ inputs.previous_assessment_ref }}",
+}
+
+
+def _plan_run_preset(steps: list[dict]) -> dict:
+    return {
+        "slug": "plan-run",
+        "title": "Plan run",
+        "description": "Runs a retained plan.",
+        "releaseStatus": "draft",
+        "steps": steps,
+    }
+
+
+def test_a_plan_run_step_keeps_its_selection_through_create_and_detail() -> None:
+    client, catalog, _ = _build_app()
+    stored = [PLAN_RUN_STEP, {"instructions": "run"}]
+    catalog.create_template.return_value = _plan_run_preset(stored)
+    catalog.get_template.return_value = _plan_run_preset(stored)
+
+    response = client.post(
+        "/api/presets",
+        json={
+            "title": "Plan run",
+            "description": "Runs a retained plan.",
+            "steps": stored,
+        },
+    )
+
+    assert response.status_code == 201
+    # The catalog receives exactly the keys a plan-run step names, so its
+    # validation sees the selected plan rather than a step without planRef.
+    sent = catalog.create_template.await_args.kwargs["steps"]
+    assert sent[0] == PLAN_RUN_STEP
+    assert "planRef" not in sent[1] and sent[1]["instructions"] == "run"
+    for payload in (response.json(), client.get("/api/presets/plan-run").json()):
+        plan_run, step = payload["steps"]
+        assert {key: plan_run[key] for key in PLAN_RUN_STEP} == PLAN_RUN_STEP
+        assert "planRef" not in step
+
+
+def test_expand_reads_a_plan_with_the_callers_artifact_authority() -> None:
+    client, catalog, _ = _build_app()
+    catalog.expand_template.return_value = {
+        "steps": [],
+        "composition": {"slug": "plan-run", "stepIds": [], "includes": []},
+        "appliedTemplate": {
+            "slug": "plan-run",
+            "inputs": {},
+            "stepIds": [],
+            "appliedAt": "2026-02-18T00:00:00+00:00",
+        },
+    }
+
+    response = client.post("/api/presets/plan-run:expand", json={"inputs": {}})
+
+    assert response.status_code == 200
+    options = catalog.expand_template.await_args.kwargs["options"]
+    assert options.artifact_access is not None
 
 
 def test_save_from_workflow_success() -> None:
