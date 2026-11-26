@@ -156,8 +156,9 @@ async def test_existing_pr_adoption_preserves_explicit_merge_method(tmp_path) ->
 
 
 @pytest.mark.parametrize("payload_key", ["task", "workflow"])
-async def test_batch_adoption_disables_review_and_preserves_resolver_budget(
-    tmp_path, payload_key
+@pytest.mark.parametrize("review_override", [None, "none"])
+async def test_batch_adoption_forwards_review_and_preserves_resolver_budget(
+    tmp_path, payload_key, review_override
 ):
     import runpy
 
@@ -184,13 +185,15 @@ async def test_batch_adoption_disables_review_and_preserves_resolver_budget(
         priority=0,
         max_attempts=3,
         child_instructions="ALL Tactics CI workflows must use self-hosted runners.",
+        **({"review_provider": review_override} if review_override else {}),
     )
     task = request["payload"]["task"]
     assert task["taskTemplate"] == {"slug": "pr-review-resolve"}
     expanded = await _expand(tmp_path, task["inputs"])
     policy = expanded["publish"]["mergeAutomation"]
-    assert policy["automatedReview"] == "disabled"
-    assert policy["reviewLoop"]["enabled"] is False
+    review_required = review_override is None
+    assert policy["automatedReview"] == ("required" if review_required else "disabled")
+    assert policy["reviewLoop"]["enabled"] is review_required
     assert policy["finishMode"] == "merge"
     workflow = MoonMindRunWorkflow()
     workflow._workflow_patch_enabled = lambda _patch: True
@@ -218,6 +221,7 @@ async def test_batch_adoption_disables_review_and_preserves_resolver_budget(
         jira_issue_key=None,
         merge_method=payload["mergeAutomationConfig"]["resolver"]["mergeMethod"],
         resolver_template=payload["resolverTemplate"],
+        review_loop=payload["mergeAutomationConfig"]["reviewLoop"],
         finish_mode="merge",
     )
     inputs = child["initial_parameters"]["task"]["skill"]["args"]
@@ -225,10 +229,9 @@ async def test_batch_adoption_disables_review_and_preserves_resolver_budget(
     assert inputs["maxIterations"] == 7
     assert inputs["returnToGate"] is True
     assert inputs["finishMode"] == "merge"
-    # A disabled review loop says so explicitly rather than leaving the child to
-    # infer a review requirement from task prose (#4751).
-    assert inputs["reviewProvider"] == "none"
-    assert inputs["requireFreshReview"] is False
+    # Always carry the actual coordinator policy rather than inferring from prose.
+    assert inputs["reviewProvider"] == ("codex" if review_required else "none")
+    assert inputs["requireFreshReview"] is review_required
     runtime = child["initial_parameters"]["task"]["runtime"]
     assert runtime["executionProfileRef"] == "chosen-profile"
     assert runtime["model"] == "chosen-model"

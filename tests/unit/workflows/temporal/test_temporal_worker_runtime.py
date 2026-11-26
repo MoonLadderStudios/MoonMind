@@ -102,11 +102,13 @@ def test_publish_mode_agent_instructions_distinguish_auto_none_and_managed() -> 
 @pytest.mark.parametrize("runtime", ["codex_cli", "claude_code", "omnigent"])
 @pytest.mark.parametrize("step_count", [1, 2])
 @pytest.mark.parametrize("publish", [{}, {"mode": "none"}])
+@pytest.mark.parametrize("review_override", [None, "none"])
 @pytest.mark.asyncio
 async def test_batch_coordinator_publish_scope_survives_parent_and_child_planning(
     runtime,
     step_count,
     publish,
+    review_override,
     tmp_path,
 ) -> None:
     """Replay the incident through normalization, planning, and portable child authoring."""
@@ -169,6 +171,7 @@ async def test_batch_coordinator_publish_scope_survives_parent_and_child_plannin
             merge_method="squash", max_iterations=5, priority=0, max_attempts=3,
             batch_scope=incident["incidentWorkflowId"],
             inherit_runtime_from_caller=True,
+            **({"review_provider": review_override} if review_override else {}),
         )
         async with _template_db(tmp_path) as session_maker:
             async with session_maker() as session:
@@ -206,16 +209,24 @@ async def test_batch_coordinator_publish_scope_survives_parent_and_child_plannin
             parent_run_id="adoption-run",
         )
         assert gate is not None
+        review_required = review_override is None
         assert (
             gate["mergeAutomationConfig"]["gate"]["github"]["automatedReview"]
-            == "disabled"
+            == ("required" if review_required else "disabled")
         )
+        review_loop = gate["mergeAutomationConfig"]["reviewLoop"]
+        assert review_loop["enabled"] is review_required
+        if review_required:
+            assert review_loop["provider"] == "codex"
+            assert review_loop["requireFreshReviewForEveryHead"] is True
         resolver_request = build_resolver_run_request(
             parent_workflow_id="durable-gate",
             pull_request=gate["pullRequest"],
             jira_issue_key=None,
             merge_method=gate["mergeAutomationConfig"]["resolver"]["mergeMethod"],
             resolver_template=gate["resolverTemplate"],
+            review_loop=review_loop,
+            finish_mode=gate["mergeAutomationConfig"]["finishMode"],
         )
         resolver_plan = planner(
             inputs=resolver_request["initial_parameters"],
@@ -238,6 +249,11 @@ async def test_batch_coordinator_publish_scope_survives_parent_and_child_plannin
         }
         assert resolver_inputs["inputs"]["maxIterations"] == 5
         assert resolver_inputs["inputs"]["mergeMethod"] == "squash"
+        assert resolver_inputs["inputs"]["finishMode"] == "merge"
+        assert resolver_inputs["inputs"]["reviewProvider"] == (
+            "codex" if review_required else "none"
+        )
+        assert resolver_inputs["inputs"]["requireFreshReview"] is review_required
         assert (
             "commit, push, or merge only when required by the selected skill"
             in resolver_inputs["instructions"]

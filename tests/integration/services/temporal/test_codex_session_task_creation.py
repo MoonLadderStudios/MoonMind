@@ -240,11 +240,13 @@ def _expected_child_idempotency_key(
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return f"batch-pr-resolver:pr:{pr_number}:sha256:{digest}"
 
+@pytest.mark.parametrize("review_override", [None, "none"])
 @pytest.mark.asyncio
 async def test_codex_session_launch_environment_can_create_child_tasks(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     empty_ghcr_credential_store: AsyncMock,
+    review_override: str | None,
 ) -> None:
     monkeypatch.setenv("MOONMIND_MANAGED_SESSION_DOCKER_MODE", "disabled")
     monkeypatch.setenv("MOONMIND_WORKFLOW_DOCKER_MODE", "disabled")
@@ -349,6 +351,7 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
                 priority=0,
                 max_attempts=3,
                 batch_scope="task-parent",
+                **({"review_provider": review_override} if review_override else {}),
             ),
             pr_number=1337,
             branch="codex/session-child-task",
@@ -389,7 +392,7 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
         assert body["payload"]["task"]["inputs"] == {
             "repository": "MoonLadderStudios/MoonMind",
             "pull_request": "1337",
-            "review_provider": "none",
+            "review_provider": review_override or "codex",
             "finish_with_pr_resolver": True,
             "merge_method": "squash",
             "max_iterations": 3,

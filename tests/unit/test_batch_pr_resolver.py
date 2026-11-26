@@ -265,6 +265,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
                 "executionProfileRef": "codex_openai_oauth",
             }
             assert payload["task"]["taskTemplate"]["slug"] == "pr-review-resolve"
+            assert payload["task"]["inputs"]["review_provider"] == "codex"
             expected = child_instructions_override or child_instructions
             assert payload["task"]["instructions"].endswith("\n\n" + expected)
             if child_instructions_override is not None:
@@ -314,7 +315,7 @@ def test_batch_children_adopt_existing_prs_with_durable_merge_ownership():
     assert task["inputs"] == {
         "repository": "owner/repo",
         "pull_request": "42",
-        "review_provider": "none",
+        "review_provider": "codex",
         "finish_with_pr_resolver": True,
         "merge_method": "rebase",
         "max_iterations": 7,
@@ -324,6 +325,41 @@ def test_batch_children_adopt_existing_prs_with_durable_merge_ownership():
     assert "publish" not in task  # The resolved coordinator policy owns this.
     assert payload["runtimeInheritance"] == "caller"
     assert task["runtime"]["executionProfileRef"] == "chosen-profile"
+
+
+@pytest.mark.parametrize(
+    ("saved_provider", "cli_provider", "expected"),
+    [
+        (None, None, "codex"),
+        ("none", None, "none"),
+        ("none", "codex", "codex"),
+        ("codex", "none", "none"),
+    ],
+)
+def test_batch_adopts_explicit_review_override(
+    saved_provider, cli_provider, expected, tmp_path, monkeypatch
+):
+    module = _load_module()
+    context = tmp_path / "task_context.json"
+    context.write_text(json.dumps({
+        "skill": {"inputs": {"reviewProvider": saved_provider}},
+    }))
+    monkeypatch.setattr(
+        sys, "argv",
+        ["batch_pr_resolver.py", "--task-context-path", str(context)]
+        + (["--review-provider", cli_provider] if cli_provider else []),
+    )
+    args = module["_parse_args"]()
+    requests, skipped = module["_build_request_records"](
+        "owner/repo",
+        [{"number": 42, "headRefName": "existing-pr-head",
+          "headRepository": {"nameWithOwner": "owner/repo"}}],
+        args, module["RuntimeSelection"](),
+    )
+    assert skipped == []
+    assert requests[0].queue_request["payload"]["task"]["inputs"][
+        "review_provider"
+    ] == expected
 
 
 def test_discovery_failure_replaces_previous_success_evidence(tmp_path, monkeypatch):

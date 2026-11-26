@@ -530,6 +530,18 @@ def _resolve_pull_request_selection(args: argparse.Namespace) -> str | None:
     return _inherited_skill_arg(args, "pullRequests")
 
 
+def _resolve_review_provider(args: argparse.Namespace) -> str:
+    explicit = getattr(args, "review_provider", None)
+    provider = (
+        explicit if explicit is not None else _inherited_skill_arg(args, "reviewProvider")
+    )
+    if provider is None:
+        return "codex"
+    if provider not in {"codex", "none"}:
+        raise ValueError("reviewProvider must be codex or none")
+    return provider
+
+
 def _parse_pull_request_selection(spec: str) -> list[tuple[int, int]]:
     """Parse ``4724-4746, #4765`` into inclusive ``(low, high)`` number ranges."""
 
@@ -590,6 +602,7 @@ def _build_queue_request(
     inherit_runtime_from_caller: bool = False,
     child_instructions: str | None = None,
     repository_connection_ref: str | None = None,
+    review_provider: str = "codex",
 ) -> dict[str, Any]:
     runtime_payload: dict[str, Any] = {}
     if runtime.mode:
@@ -618,12 +631,12 @@ def _build_queue_request(
             "instructions": f"Resolve PR #{pr_number} on branch `{branch}`.",
             # Reuse existing-PR adoption: the trusted tool qualifies the target,
             # Temporal owns external waits, and ordinary Skill children own
-            # repairs and merge effects. A batch does not add a review policy.
+            # repairs and merge effects. The adopted preset owns review.
             "taskTemplate": {"slug": "pr-review-resolve"},
             "inputs": {
                 "repository": repo,
                 "pull_request": str(pr_number),
-                "review_provider": "none",
+                "review_provider": review_provider,
                 "finish_with_pr_resolver": True,
                 "merge_method": merge_method,
                 "max_iterations": max_iterations,
@@ -728,6 +741,11 @@ def _parse_args() -> argparse.Namespace:
             "'4724-4746, 4765' (default: inherit pullRequests from task "
             "context, else every open PR)."
         ),
+    )
+    parser.add_argument(
+        "--review-provider",
+        choices=("codex", "none"),
+        help="Automated reviewer (default: inherit reviewProvider, otherwise codex).",
     )
     parser.add_argument("--merge-method", default="squash")
     parser.add_argument("--max-iterations", type=int, default=5)
@@ -935,6 +953,7 @@ def _build_request_records(
     batch_scope = _parent_run_scope(args.task_context_path)
     inherit_from_caller = _task_workflow_id_from_env() is not None
     child_instructions = _resolve_child_instructions(args)
+    review_provider = _resolve_review_provider(args)
     repository_connection_ref = (
         _runtime_text(getattr(args, "repository_connection_ref", None))
         or _load_repository_connection_ref(_repo_context_candidates(args.task_context_path))
@@ -961,6 +980,7 @@ def _build_request_records(
             inherit_runtime_from_caller=inherit_from_caller,
             child_instructions=child_instructions,
             repository_connection_ref=repository_connection_ref,
+            review_provider=review_provider,
         )
         queue_requests.append(
             JobSubmission(
@@ -1088,6 +1108,7 @@ async def main() -> int:
 
     selection = _resolve_pull_request_selection(args)
     try:
+        args.review_provider = _resolve_review_provider(args)
         selected_ranges = (
             _parse_pull_request_selection(selection) if selection is not None else None
         )
