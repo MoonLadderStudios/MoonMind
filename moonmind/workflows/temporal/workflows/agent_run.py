@@ -171,6 +171,9 @@ TEMPORAL_PARENT_ARTIFACT_HANDOFF_PATCH_ID = (
 TERMINAL_EVIDENCE_CONTROL_QUEUE_PATCH_ID = (
     "agent-run-terminal-evidence-control-queue-v1"
 )
+OMNIGENT_ADMISSION_CONTROL_QUEUE_PATCH_ID = (
+    "agent-run-omnigent-admission-control-queue-v1"
+)
 _MAX_TERMINAL_CONTRACT_CONTINUATIONS = 2
 _MAX_MANAGED_PROCESS_LOSS_RECOVERIES = 1
 _RETRYABLE_TERMINAL_CONTRACT_FAILURE_CODES = frozenset(
@@ -1497,6 +1500,17 @@ class MoonMindAgentRun:
         if reconcile_progress and activity_name != "agent_runtime.status":
             raise ValueError("Only managed status can reconcile execution progress")
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(activity_name)
+        if (
+            activity_name == "omnigent.evaluate_session_admission"
+            and not self._workflow_patch_enabled(
+                OMNIGENT_ADMISSION_CONTROL_QUEUE_PATCH_ID
+            )
+        ):
+            # Replays keep the old execution lane, including its publication
+            # suffix. The same worker fleet still polls both lanes.
+            route = replace(
+                route, task_queue=settings.temporal.activity_agent_runtime_task_queue
+            )
         kwargs = self._execute_kwargs_for_route(route)
         if (
             activity_name == "agent_runtime.evaluate_terminal_evidence"

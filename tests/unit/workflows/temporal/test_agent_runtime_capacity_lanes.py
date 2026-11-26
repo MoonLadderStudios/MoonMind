@@ -31,7 +31,8 @@ from moonmind.workflows.temporal.activity_catalog import (
 CONTROL_LANE_ACTIVITIES = (
     # Cancellation that queues behind the run it cancels is not cancellation.
     "agent_runtime.cancel",
-    # Capacity admission the AgentRun workflow polls while it waits.
+    # Admission authority and the capacity read that uses it.
+    "omnigent.evaluate_session_admission",
     "omnigent.admit_generic_host_capacity",
     # Liveness: a starved heartbeat expires a lease whose host is still alive.
     "omnigent.heartbeat_host_lease",

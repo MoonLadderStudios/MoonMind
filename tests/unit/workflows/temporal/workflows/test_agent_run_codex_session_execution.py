@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -106,6 +107,52 @@ async def test_terminal_evidence_queue_preserves_replay_route(
         else agent_run_module.settings.temporal.activity_agent_runtime_task_queue
     )
     assert captured["task_queue"] == expected_queue
+
+
+@pytest.mark.parametrize("control_queue_patch_enabled", [False, True])
+@pytest.mark.parametrize("suffix", ["", ".publication-v1"])
+async def test_omnigent_admission_preserves_the_replay_route_and_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    control_queue_patch_enabled: bool,
+    suffix: str,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "info",
+        lambda: SimpleNamespace(task_queue=f"mm.workflow.user.v2{suffix}"),
+    )
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "patched",
+        lambda patch_id: (
+            control_queue_patch_enabled
+            if patch_id == "agent-run-omnigent-admission-control-queue-v1"
+            else True
+        ),
+    )
+    captured: dict[str, Any] = {}
+
+    async def fake_execute_typed_activity(activity_name, args, **kwargs):
+        captured.update(kwargs)
+        return args
+
+    monkeypatch.setattr(
+        agent_run_module, "execute_typed_activity", fake_execute_typed_activity
+    )
+    await MoonMindAgentRun()._execute_routed_activity(
+        "omnigent.evaluate_session_admission", {"stepExecutionId": "step"}
+    )
+
+    temporal = agent_run_module.settings.temporal
+    base_queue = (
+        temporal.activity_agent_runtime_control_task_queue
+        if control_queue_patch_enabled
+        else temporal.activity_agent_runtime_task_queue
+    )
+    assert captured["task_queue"] == base_queue + suffix
+    assert captured["start_to_close_timeout"].total_seconds() == 30
+    assert captured["schedule_to_close_timeout"].total_seconds() == 60
 
 def _managed_session_request(
     *,

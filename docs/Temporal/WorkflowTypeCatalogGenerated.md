@@ -210,7 +210,7 @@ with deterministic workflow code, not Temporal Local Activities.
 | `omnigent.ensure_host` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `omnigent.ensure_provider_profile_lease` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `omnigent.ensure_provider_session` | `agent_runtime` | `mm.activity.agent_runtime` |
-| `omnigent.evaluate_session_admission` | `agent_runtime` | `mm.activity.agent_runtime` |
+| `omnigent.evaluate_session_admission` | `agent_runtime` | `mm.activity.agent_runtime.control` |
 | `omnigent.harvest_evidence` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `omnigent.heartbeat_host_lease` | `agent_runtime` | `mm.activity.agent_runtime.control` |
 | `omnigent.load_failure_authority` | `agent_runtime` | `mm.activity.agent_runtime` |
