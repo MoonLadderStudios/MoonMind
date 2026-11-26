@@ -143,10 +143,12 @@ def _runner_environment_args(runtime_id: str, volume_mount_path: str) -> list[st
         )
     return args
 
-def _docker_command_error(stderr: bytes, returncode: int) -> RuntimeError:
+def _docker_command_error(
+    stderr: bytes, returncode: int, *, action: str = "start auth container"
+) -> RuntimeError:
     error_output = _redact_startup_output(stderr)
     detail = f": {error_output}" if error_output else ""
-    return RuntimeError(f"Failed to start auth container with exit code {returncode}{detail}")
+    return RuntimeError(f"Failed to {action} with exit code {returncode}{detail}")
 
 
 async def _create_docker_subprocess(*args: str) -> asyncio.subprocess.Process:
@@ -162,6 +164,38 @@ async def _create_docker_subprocess(*args: str) -> asyncio.subprocess.Process:
             "Docker CLI is not available on this worker. "
             "Ensure Docker is installed and 'docker' is on the PATH before using OAuth terminal sessions."
         ) from exc
+
+
+async def _give_volume_root_to_runner_user(
+    runner_image: str, volume_mount: str, volume_mount_path: str
+) -> None:
+    """Let the non-root auth runner write into the credential volume.
+
+    A new per-profile volume starts root-owned unless the runner image ships
+    an owned directory at the mount path, and only the Compose default volumes
+    have an init container. The CLI could then finish a browser sign-in but
+    not save it. Only the volume root changes owner; existing files keep theirs.
+    """
+    owner = shlex.quote(_oauth_runner_user())
+    proc = await _create_docker_subprocess(
+        "run", "--rm", "--network", "none",
+        "--user", "0:0",
+        "--mount", volume_mount,
+        runner_image,
+        "/bin/sh",
+        "-c",
+        f"chown {owner} {shlex.quote(volume_mount_path)}",
+    )
+    try:
+        _stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        raise TimeoutError("Timed out while preparing the auth volume")
+    if proc.returncode != 0:
+        raise _docker_command_error(
+            stderr, proc.returncode, action="prepare the auth volume"
+        )
 
 
 async def _stop_docker_container(container_name: str) -> None:
@@ -497,6 +531,9 @@ async def start_terminal_bridge_container(
         f"|| {{ echo 'OAuth runner image does not contain {executable}' >&2; exit 127; }}; "
         f"sleep {int(session_ttl)}"
     )
+    await _give_volume_root_to_runner_user(
+        runner_image, volume_mount, volume_mount_path
+    )
     proc = await _create_docker_subprocess(
         "run", "-d", "--init", "-i", "-t", "--rm",
         "--name", container_name,
@@ -552,6 +589,9 @@ async def start_tmate_auth_runner_container(
         f"command -v {executable} >/dev/null 2>&1 "
         f"|| {{ echo 'OAuth runner image does not contain {executable}' >&2; exit 127; }}; "
         f"sleep {int(session_ttl)}"
+    )
+    await _give_volume_root_to_runner_user(
+        runner_image, volume_mount, volume_mount_path
     )
     proc = await _create_docker_subprocess(
         "run", "-d", "--init", "-i", "-t", "--rm",

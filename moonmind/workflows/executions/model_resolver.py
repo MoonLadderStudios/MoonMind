@@ -607,10 +607,12 @@ def resolve_profile_family(
     """Resolve one automatic family tier against the profile's catalog evidence.
 
     Admission, previews and the tier editor share this rule. Evidence taken
-    under a replaced credential describes another account, so it counts as
-    unobserved. An expired observation cannot prove a family is gone: the
-    tier resolves as unobserved, so its launch's exact-host read refreshes
-    the catalog, and the host still refuses a model it does not serve.
+    under a replaced credential may describe another account, so it counts as
+    unobserved; it can still raise the starting release, because signing in
+    again usually keeps the account. An expired observation cannot prove a
+    family is gone: the tier resolves as unobserved, so its launch's
+    exact-host read refreshes the catalog, and the host still refuses a model
+    it does not serve.
     """
     from moonmind.provider_profiles.model_families import (
         catalog_lists_family,
@@ -621,14 +623,16 @@ def resolve_profile_family(
     evidence = _profile_value(
         profile, "model_catalog_evidence_json", "modelCatalogEvidence"
     )
-    catalog_rows = (
-        None
-        if _evidence_generation_replaced(evidence, profile)
-        else catalog_rows_from_evidence(evidence)
-    )
+    observed_rows = catalog_rows_from_evidence(evidence)
+    replaced = _evidence_generation_replaced(evidence, profile)
+    catalog_rows = None if replaced else observed_rows
     provider_id = _profile_provider_id(profile)
     resolution = resolve_family_model(
-        family, provider_id=provider_id, catalog_rows=catalog_rows, effort=effort
+        family,
+        provider_id=provider_id,
+        catalog_rows=catalog_rows,
+        effort=effort,
+        starting_rows=observed_rows if replaced else None,
     )
     if (
         not resolution.usable

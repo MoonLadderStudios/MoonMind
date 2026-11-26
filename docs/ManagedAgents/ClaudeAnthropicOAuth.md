@@ -192,6 +192,12 @@ interactive login writes into the mounted auth volume:
 and credential location (`CLAUDE_HOME` is ignored by current CLI releases and
 is retained only as MoonMind-internal mount plumbing).
 
+The runner runs as `MOONMIND_OAUTH_RUNNER_USER` (default `1000:1000`), so before
+starting it MoonMind gives that user the volume root. A guided profile's own
+volume starts root-owned, and only the Compose default volumes have an init
+container; without that step the CLI completes the browser sign-in but cannot
+save it, and finalization fails with `no_credentials_found`.
+
 The runner should clear competing API-key environment variables during OAuth
 enrollment so the login state comes from the account-auth flow, not an ambient
 key:

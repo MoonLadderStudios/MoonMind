@@ -429,6 +429,78 @@ def test_oauth_runner_follows_installed_host_updates(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "runner", [start_terminal_bridge_container, start_tmate_auth_runner_container]
+)
+async def test_auth_runner_gives_the_volume_root_to_the_runner_user(
+    monkeypatch, runner
+):
+    # A new per-profile volume is root-owned, so the non-root runner could
+    # finish a browser sign-in but not save the credentials it received.
+    calls = []
+
+    async def docker(*args):
+        calls.append(args)
+        return _FakeProcess(stdout=b"https://tmate.invalid/session\nssh session\n")
+
+    monkeypatch.setenv("MOONMIND_OAUTH_RUNNER_USER", "2001:2001")
+    monkeypatch.setenv("MOONMIND_OAUTH_RUNNER_IMAGE", "registry.invalid/oauth:custom")
+    monkeypatch.setattr(terminal_bridge, "_create_docker_subprocess", docker)
+
+    await runner(
+        session_id="oas_new_profile_volume",
+        runtime_id="claude_code",
+        volume_ref="moonmind_oauth_0123456789abcdef01234567",
+        volume_mount_path="/home/app/.claude",
+        session_ttl=60,
+        bootstrap_command=("claude", "auth", "login"),
+    )
+
+    prepare, start = calls[0], calls[1]
+    assert prepare[:2] == ("run", "--rm")
+    assert prepare[prepare.index("--user") + 1] == "0:0"
+    assert (
+        "type=volume,source=moonmind_oauth_0123456789abcdef01234567,"
+        "target=/home/app/.claude"
+    ) in prepare
+    assert prepare[-4:] == (
+        "registry.invalid/oauth:custom",
+        "/bin/sh",
+        "-c",
+        "chown 2001:2001 /home/app/.claude",
+    )
+    assert start[:2] == ("run", "-d")
+    assert start[start.index("--user") + 1] == "2001:2001"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "runner", [start_terminal_bridge_container, start_tmate_auth_runner_container]
+)
+async def test_auth_runner_does_not_start_when_the_volume_cannot_be_prepared(
+    monkeypatch, runner
+):
+    calls = []
+
+    async def docker(*args):
+        calls.append(args)
+        return _FakeProcess(returncode=1, stderr=b"chown: Operation not permitted")
+
+    monkeypatch.setattr(terminal_bridge, "_create_docker_subprocess", docker)
+
+    with pytest.raises(RuntimeError, match="prepare the auth volume.*not permitted"):
+        await runner(
+            session_id="oas_unprepared_volume",
+            runtime_id="claude_code",
+            volume_ref="moonmind_oauth_0123456789abcdef01234567",
+            volume_mount_path="/home/app/.claude",
+            session_ttl=60,
+            bootstrap_command=("claude", "auth", "login"),
+        )
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_start_terminal_bridge_container_uses_provider_bootstrap_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -505,13 +577,14 @@ async def test_start_tmate_auth_runner_container_returns_connection_refs(
         "terminal_bridge_id": "ssh tmate.io/t/oas_terminal_tmate",
         "session_transport": "tmate",
     }
-    assert len(calls) == 2
-    assert calls[0][:3] == ("docker", "run", "-d")
-    assert "moonmind.oauth_session_transport=tmate" in calls[0]
-    assert "command -v tmate" in calls[0][-1]
-    assert calls[1][:4] == ("docker", "exec", "moonmind_auth_oas_terminal_tmate", "/bin/sh")
-    assert "tmate -S" in calls[1][-1]
-    assert "codex login --device-auth" in calls[1][-1]
+    assert len(calls) == 3
+    assert calls[0][:3] == ("docker", "run", "--rm")
+    assert calls[1][:3] == ("docker", "run", "-d")
+    assert "moonmind.oauth_session_transport=tmate" in calls[1]
+    assert "command -v tmate" in calls[1][-1]
+    assert calls[2][:4] == ("docker", "exec", "moonmind_auth_oas_terminal_tmate", "/bin/sh")
+    assert "tmate -S" in calls[2][-1]
+    assert "codex login --device-auth" in calls[2][-1]
 
 @pytest.mark.asyncio
 async def test_start_tmate_auth_runner_container_stops_container_when_tmate_start_fails(

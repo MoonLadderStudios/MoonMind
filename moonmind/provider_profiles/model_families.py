@@ -13,8 +13,9 @@ into a concrete model for one profile route:
 * which observed catalog rows the selected route can actually use.
 
 Catalog rows come from the selected profile's persisted observations. Without
-usable observations a built-in family resolves to its cold-start placeholder,
-which is reported as unverified rather than as an observed release.
+usable observations a built-in family resolves, unverified, to its cold-start
+placeholder, or to a newer release the same profile observed under a replaced
+credential, so signing in again never moves a profile back to an older model.
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ STATUS_UNAVAILABLE = "unavailable"
 
 SOURCE_PROFILE_CATALOG = "profile_catalog"
 SOURCE_COLD_START = "cold_start_placeholder"
+SOURCE_PREVIOUS_CREDENTIAL = "previous_credential_catalog"
 
 _FIRST_PARTY_EFFORT = "medium"
 _FIRST_PARTY_DEFAULT_TIER = 2
@@ -106,7 +108,7 @@ _BUILT_IN_FAMILIES: tuple[ModelFamily, ...] = (
     ModelFamily("sol", "openai", "Sol", "gpt-6.1-sol"),
     ModelFamily("terra", "openai", "Terra", "gpt-6.1-terra"),
     ModelFamily("luna", "openai", "Luna", "gpt-6-luna"),
-    ModelFamily("fable", "anthropic", "Fable", "claude-fable-5-1"),
+    ModelFamily("fable", "anthropic", "Fable", "claude-fable-5-2"),
     ModelFamily("opus", "anthropic", "Opus", "claude-opus-5-5"),
     ModelFamily("sonnet", "anthropic", "Sonnet", "claude-sonnet-5-5"),
     ModelFamily("haiku", "anthropic", "Haiku", "claude-haiku-5-5"),
@@ -357,11 +359,14 @@ def resolve_family_model(
     provider_id: Any,
     catalog_rows: Sequence[Mapping[str, Any]] | None,
     effort: str | None = None,
+    starting_rows: Sequence[Mapping[str, Any]] | None = None,
 ) -> FamilyResolution:
     """Resolve an automatic family tier against one profile's catalog.
 
     Picks the newest eligible release of exactly this family. Never crosses
     into another family or provider, and never orders by timestamp alone.
+    ``starting_rows`` (the same profile's catalog from a replaced credential)
+    can only raise an unobserved family's starting release; it never refuses.
     """
 
     family = built_in_family(family_id)
@@ -398,6 +403,22 @@ def resolve_family_model(
                 source=None,
                 reason="This profile has not reported a model catalog yet.",
             )
+        previous, _ = _eligible_releases(family, starting_rows or (), effort=effort)
+        starting = _parse_release(family.cold_start_model, family)
+        if previous and starting is not None:
+            release, model_id = max(previous, key=lambda pair: pair[0])
+            if release > starting:
+                return FamilyResolution(
+                    family=family.family_id,
+                    model=model_id,
+                    status=STATUS_UNVERIFIED,
+                    source=SOURCE_PREVIOUS_CREDENTIAL,
+                    reason=(
+                        "This profile has not reported a model catalog since its "
+                        "credential changed; using the newest release it reported "
+                        "before until it does."
+                    ),
+                )
         return FamilyResolution(
             family=family.family_id,
             model=family.cold_start_model,
