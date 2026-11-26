@@ -10,6 +10,15 @@ metadata:
     terminalSchemaVersion: moonmind.batch-pr-resolver-result.v1
   required-capabilities:
     - gh
+inputSchema:
+  type: object
+  properties:
+    reviewProvider:
+      type: string
+      title: Automated review provider
+      enum: [codex, none]
+defaults:
+  reviewProvider: codex
 ---
 
 # Batch PR Resolver Skill
@@ -33,6 +42,7 @@ on child publishing; do not infer one from the coordinator's local mode.
 - `pullRequests` (string, optional): Only queue these PRs, as numbers or inclusive ranges such as `4724-4746, 4765`. The helper inherits this field from the parent task context when its CLI override is omitted. When omitted everywhere, every open PR is queued.
 - `maxAttempts` (number, optional): Queue job `maxAttempts` for each created task. Default `3`.
 - `priority` (number, optional): Queue job priority. Default `0`.
+- `reviewProvider` (string, optional): Automated reviewer for every head. Default `codex`; explicitly choose `none` to disable fresh review requests for this batch.
 - `mergeMethod` (string, optional): Merge method passed to `pr-resolver`. Default `squash`.
 - `maxIterations` (number, optional): `pr-resolver` loop cap. Default `5`.
 - `childInstructions` (string, optional): Additional requirements appended to every queued resolver's instructions. The helper inherits this field from the parent task context when its CLI override is omitted.
@@ -72,6 +82,7 @@ python3 "$BATCH_PR_RESOLVER_SKILL_DIR/bin/batch_pr_resolver.py" \
   --state <open|merged|closed> \
   --max-attempts 3 \
   --priority 0 \
+  --review-provider codex \
   --merge-method squash \
   --max-iterations 5 \
   --runtime-mode <runtime_mode> \
@@ -87,6 +98,7 @@ python3 "$BATCH_PR_RESOLVER_SKILL_DIR/bin/batch_pr_resolver.py" \
    - `pullRequests` -> `--pull-requests`
    - `maxAttempts` -> `--max-attempts`
    - `priority` -> `--priority`
+   - `reviewProvider` -> `--review-provider` (otherwise inherit the saved input)
    - `mergeMethod` -> `--merge-method`
    - `maxIterations` -> `--max-iterations`
    - `childInstructions` -> `--child-instructions`
@@ -115,7 +127,7 @@ python3 "$BATCH_PR_RESOLVER_SKILL_DIR/bin/batch_pr_resolver.py" \
      - `payload.idempotencyKey`: stable per parent batch run and PR, hash-backed and capped to the execution persistence limit, so rerunning the same batch task does not create duplicate resolver workflows.
      - `payload.repository`: `{ provider: "git", connectionRef, repository: { name: repo }, branch: { name: headRefName } }` when an existing connection selector is available; otherwise the target repo string for admission to resolve. Each target uses its discovered PR head branch, never the parent's shared branch. Existing-PR adoption resolves the PR's base/head and publication scope.
      - `payload.task.taskTemplate.slug`: `pr-review-resolve`
-     - `payload.task.taskTemplate.inputs`: `{ repository: repo, pull_request: pr_number, review_provider: "none", finish_with_pr_resolver: true, merge_method: mergeMethod, max_iterations: maxIterations }`
+     - `payload.task.taskTemplate.inputs`: `{ repository: repo, pull_request: pr_number, review_provider: reviewProvider, finish_with_pr_resolver: true, merge_method: mergeMethod, max_iterations: maxIterations }`
      - inherited runtime, model, effort, and Provider Profile fields.
    - Trusted preset expansion resolves the existing PR branch and publication scope. The coordinator publishes nothing itself; its ordinary `pr-resolver` children own fixes and merge. CI/provider waits return to that enclosing durable gate so queued self-hosted Tactics checks do not consume an agent slot. Preserve all Tactics CI on self-hosted runners.
    - Submit via the internal Temporal execution API (`POST /api/executions`),
