@@ -1047,7 +1047,7 @@ def build_default_activity_catalog(
             activity_type="omnigent.evaluate_session_admission",
             family="integration",
             capability_class="agent_runtime",
-            task_queue=cfg.activity_agent_runtime_task_queue,
+            task_queue=agent_runtime_control_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
             timeouts=TemporalActivityTimeouts(30, 60),
             retries=_activity_retries(max_attempts=3, max_interval_seconds=10),

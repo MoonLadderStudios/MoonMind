@@ -484,7 +484,7 @@ Representative capability classes include:
 
 ## 10.2 Route selection
 
-Use the [generated route table](./WorkflowTypeCatalogGenerated.md#activity-catalog-routes) for exact dispatch. In particular, terminal-evidence evaluation uses the independent agent-runtime control queue so long-lived fan-out execution cannot starve the authority handoff. Both queues share a service; this adds bounded scheduling capacity, not another always-on container or a separate credential boundary.
+Use the [generated route table](./WorkflowTypeCatalogGenerated.md#activity-catalog-routes) for exact dispatch. In particular, Omnigent session admission and terminal-evidence evaluation use the independent agent-runtime control queue so long-lived fan-out execution cannot consume the slots for these authority reads. Both queues share a service; this adds bounded scheduling capacity, not another always-on container or a separate credential boundary.
 
 ## 10.3 No workflow-side route probing
 
