@@ -311,6 +311,8 @@ async def test_native_finalization_must_settle_before_fast_path(monkeypatch):
         ("child-idle", "completed", False),
         ("injection-completed", "completed", False),
         ("interrupted-then-idle", "canceled", False),
+        ("repaint-then-correlated", "completed", True),
+        ("repaint-then-interrupted", "canceled", False),
         ("stream-closed", "ambiguous", False),
         ("active-child", "completed", False),
         ("interrupted-child", "completed", False),
@@ -442,7 +444,11 @@ async def test_execution_requires_live_same_turn_lifecycle_edges(
                 raise OmnigentClientError("stream interrupted") from httpx.ReadError(
                     "closed"
                 )
-            if scenario == "interrupted-then-idle":
+            if scenario.startswith("repaint-then-"):
+                # A TUI repaint can sit ahead of queued lifecycle edges; its
+                # budget observation must not consume or pre-empt them.
+                yield {"type": "session.terminal.activity", "session_id": "session-1"}
+            if scenario in {"interrupted-then-idle", "repaint-then-interrupted"}:
                 yield {
                     "type": "session.interrupted",
                     "conversation_id": "session-1",

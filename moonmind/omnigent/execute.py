@@ -140,16 +140,16 @@ _TERMINAL_RECONCILIATION_INTERVAL_SECONDS = 30.0
 # Frames that only show the session is alive. Omnigent sends heartbeats only on
 # an idle stream, and a native TUI repainting behind a prompt keeps the stream
 # busy with terminal activity instead, so all of these drive the periodic
-# snapshot read that the turn's budgets depend on. Lifecycle frames such as
+# snapshot read that the turn's budgets depend on. Only heartbeats may also
+# reconcile an inactive turn: that poll stops reading the stream, and on a busy
+# stream it would pre-empt lifecycle frames queued behind a repaint, such as an
+# interruption or a correlated idle edge. Lifecycle frames such as
 # ``session.status`` are turn edges with their own handling.
-_LIVENESS_FRAME_TYPES = frozenset(
-    {
-        "response.heartbeat",
-        "session.heartbeat",
-        "session.terminal.activity",
-        "response.elicitation_request",
-    }
-)
+_HEARTBEAT_FRAME_TYPES = frozenset({"response.heartbeat", "session.heartbeat"})
+_LIVENESS_FRAME_TYPES = _HEARTBEAT_FRAME_TYPES | {
+    "session.terminal.activity",
+    "response.elicitation_request",
+}
 # Live journals persist in bounded chunks: a flush rewrites only the open
 # chunk, so per-event durable work never grows with the journal length.
 _JOURNAL_CHUNK_MAX_EVENTS = 256
@@ -3930,13 +3930,17 @@ async def run_omnigent_execution(
                 or pre_dispatch_item_ids != frozenset()
             )
 
-            async def observe_marked_turn(source: str) -> bool:
+            async def observe_marked_turn(
+                source: str, *, reconcile: bool = True
+            ) -> bool:
                 """Read the provider snapshot and evaluate the marked turn once.
 
-                Owned by the post-dispatch path and run on provider heartbeats
-                and on idle stream ticks alike, so the turn-start budget and
-                inactive-turn reconciliation never depend on an SSE frame
-                arriving. Returns ``True`` when a terminal turn was reconciled.
+                Owned by the post-dispatch path and run on liveness frames and
+                on idle stream ticks alike, so the turn's budgets and
+                inactive-turn reconciliation never depend on a terminal SSE
+                frame arriving. ``reconcile=False`` evaluates only the budgets,
+                for frames that can have lifecycle edges queued behind them.
+                Returns ``True`` when a terminal turn was reconciled.
                 """
 
                 nonlocal terminal_status, terminal_snapshot_override
@@ -3949,18 +3953,31 @@ async def run_omnigent_execution(
                 )
                 observed_snapshot = await client.get_session(session_id)
                 observed_completed_at = asyncio.get_running_loop().time()
-                reconciled = await _reconcile_inactive_marked_turn(
-                    client=client,
-                    session_id=session_id,
-                    marker=marker,
-                    baseline_item_ids=pre_dispatch_item_ids,
-                    event_count=event_count["value"],
-                    snapshot=observed_snapshot,
-                    snapshot_observed_at=observed_at,
-                    snapshot_completed_at=observed_completed_at,
-                    timeout_seconds=marked_turn_timeout_seconds,
-                    start_watchdog=start_watchdog,
-                )
+                if reconcile:
+                    reconciled = await _reconcile_inactive_marked_turn(
+                        client=client,
+                        session_id=session_id,
+                        marker=marker,
+                        baseline_item_ids=pre_dispatch_item_ids,
+                        event_count=event_count["value"],
+                        snapshot=observed_snapshot,
+                        snapshot_observed_at=observed_at,
+                        snapshot_completed_at=observed_completed_at,
+                        timeout_seconds=marked_turn_timeout_seconds,
+                        start_watchdog=start_watchdog,
+                    )
+                else:
+                    start_watchdog.observe(
+                        observed_snapshot,
+                        _marked_turn_item_state(
+                            observed_snapshot,
+                            marker=marker,
+                            baseline_item_ids=pre_dispatch_item_ids,
+                        ),
+                        observation_started_at=observed_at,
+                        observation_completed_at=observed_completed_at,
+                    )
+                    reconciled = None
                 observed_status = normalize_omnigent_observation(observed_snapshot)
                 _safe_heartbeat(
                     {
@@ -4087,10 +4104,11 @@ async def run_omnigent_execution(
                     ):
                         # Liveness frames are the only stream evidence while a
                         # native harness works, waits on a prompt, or never
-                        # starts; evaluate the turn's budgets and inactive-turn
-                        # reconciliation without waiting for a terminal frame.
+                        # starts; evaluate the turn's budgets without waiting
+                        # for a terminal frame.
                         if await observe_marked_turn(
-                            frame_type.replace(".", "_") + "_snapshot"
+                            frame_type.replace(".", "_") + "_snapshot",
+                            reconcile=frame_type in _HEARTBEAT_FRAME_TYPES,
                         ):
                             break
                     if normalized in {"awaiting_approval", "intervention_requested"}:
