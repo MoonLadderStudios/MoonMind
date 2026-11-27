@@ -4,6 +4,7 @@ import { page, userEvent } from 'vitest/browser';
 import type { BootPayload } from '../boot/parseBootPayload';
 import { DashboardApp } from '../entrypoints/dashboard-app';
 import { renderWithClient, screen, waitFor, within } from '../utils/test-utils';
+import { revealSubmitBar } from './submitBar';
 import '../styles/dashboard.css';
 
 // Real-browser Create journey for Harness and Provider Profile authoring
@@ -166,6 +167,7 @@ describe('Create Harness and Provider Profile authoring', () => {
       await userEvent.selectOptions(harness, 'codex_cli');
       expect(profile.value).toBe('codex-shared');
       await waitFor(() => expect(start).not.toBeDisabled());
+      await revealSubmitBar();
       await userEvent.click(start);
       await waitFor(() => expect(createRequests).toHaveLength(1));
       const task = (createRequests[0]?.payload as { task: { runtime: Record<string, unknown> } }).task;

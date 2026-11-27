@@ -97,6 +97,8 @@ export default defineConfig({
           await input.pressSequentially(text);
         },
         pointerButton: async ({ page }, action: 'down' | 'up') => page.mouse[action](),
+        emulateReducedMotion: async ({ page }, reducedMotion: 'reduce' | 'no-preference' | null) =>
+          page.emulateMedia({ reducedMotion }),
         touchTreatment: async ({ context, page }, markup: string, css: string) => {
           const touchContext = await context.browser()!.newContext({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
           try {

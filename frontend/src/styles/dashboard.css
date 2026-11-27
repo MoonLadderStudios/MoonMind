@@ -8435,6 +8435,91 @@ td {
   width: min(var(--workflow-start-primary-available-width), 70rem);
 }
 
+/* Create submit bar placement. While a field is edited the bar slides below
+   the viewport, out of the tab order, so it never sits between the field and
+   a software keyboard. `translate` animates separately from the centring
+   `transform`, so docking never slides the bar sideways. */
+.queue-floating-bar {
+  transition:
+    translate 180ms ease,
+    opacity 180ms ease,
+    visibility 0s;
+}
+
+.queue-floating-bar[data-placement="hidden"] {
+  translate: 0 calc(100% + 1.1rem);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    translate 180ms ease,
+    opacity 180ms ease,
+    visibility 0s linear 180ms;
+}
+
+/* At the end of the form the bar takes its slot in the page flow, below the
+   last fields, keeping its glass styling. */
+.queue-floating-bar[data-placement="docked"],
+.workflow-start-workspace .queue-floating-bar[data-placement="docked"] {
+  position: relative;
+  left: auto;
+  bottom: auto;
+  transform: none;
+  width: auto;
+}
+
+/* Phones: one line of repository · publish mode plus Start; the summary
+   expands the full Repository, Branch and Publish Mode controls. */
+.queue-floating-bar[data-compact="collapsed"] .queue-floating-bar-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.queue-floating-bar[data-compact="collapsed"] .queue-inline-selector {
+  display: none;
+}
+
+.queue-floating-bar[data-compact="expanded"] .queue-floating-bar-summary {
+  grid-column: 1 / -1;
+}
+
+.queue-floating-bar .queue-floating-bar-summary {
+  --mm-button-fill: var(--mm-input-well);
+  --mm-button-stroke: var(--mm-glass-edge);
+  width: 100%;
+  min-width: 0;
+  min-height: 2.35rem;
+  justify-content: flex-start;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 0.85rem;
+}
+
+.queue-floating-bar-summary-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-floating-bar-summary svg {
+  flex: none;
+  width: 1.15rem;
+  height: 1.15rem;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  fill: none;
+  color: rgb(var(--mm-muted));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .queue-floating-bar,
+  .queue-floating-bar[data-placement] {
+    transition: none;
+  }
+}
+
 .workflow-workspace-sidebar {
   position: sticky;
   top: 0;
