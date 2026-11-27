@@ -19,6 +19,7 @@ from typing import Annotated, Any, Literal, Mapping
 
 from pydantic import Field, StringConstraints, ValidationError
 
+from moonmind.schemas.repository_scanner_models import NetworkExport
 from moonmind.security.assessment_projects import AssessmentProjectSnapshot
 from moonmind.security.frameworks import FrameworkContract
 from moonmind.security.security_plan import (
@@ -33,6 +34,7 @@ from moonmind.security.security_plan_drafting import (
     context_key,
     diagnostics_document,
     inline_context,
+    parse_network_exports,
     parse_standards,
     plan_from_draft,
     plan_period,
@@ -70,6 +72,9 @@ class SecurityPlanToolInput(FrameworkContract):
     phase: Literal["context", "retain"]
     subject_type: str
     standards: Annotated[list[dict[str, Any]], Field(min_length=1, max_length=16)]
+    # A network plan's exports and their stated provenance; artifacts of the
+    # saved environment only. Validated against the snapshot, not here.
+    network_exports: list[dict[str, Any]] | None = Field(default=None, max_length=32)
     # API callers may name a retained draft; a planning run carries the
     # planner's published draft in the previous step's outputs.
     draft_ref: ArtifactRef | None = None
@@ -216,9 +221,11 @@ async def _resolve_standards(execution, selections, period, now, retained=None):
     return standards, packs, refs
 
 
-async def _context(execution, request, snapshot, subject_type, selections, now):
+async def _context(
+    execution, request, snapshot, subject_type, selections, now, exports=()
+):
     """The retained planning context; later steps and retries reuse it exactly."""
-    key = context_key(snapshot, subject_type, selections)
+    key = context_key(snapshot, subject_type, selections, exports)
     saved = await execution.saved(kind="security.plan-context", key=key)
     period = plan_period(snapshot, now)
     if saved:
@@ -232,7 +239,10 @@ async def _context(execution, request, snapshot, subject_type, selections, now):
     if saved:
         return saved[0], saved[1], standards, packs, pack_refs
     document = planning_context(
-        snapshot, subject_type, [(s, packs[(s.pack_id, s.edition)]) for s in standards]
+        snapshot,
+        subject_type,
+        [(s, packs[(s.pack_id, s.edition)]) for s in standards],
+        exports,
     )
     ref = await execution.write(_json(document), kind="security.plan-context", key=key)
     project_ref = await execution.project_snapshot_ref(snapshot)
@@ -268,6 +278,7 @@ async def _retain(
     packs,
     pack_refs,
     now,
+    exports=(),
 ):
     draft_ref = _draft_ref(request)
     if draft_ref is None:
@@ -294,6 +305,7 @@ async def _retain(
             packs=packs,
             snapshot=snapshot,
             now=now,
+            network_exports=exports,
         )
     except SecurityPlanError as exc:
         await _retain_rejection(execution, exc.diagnostics, draft_ref, raw)
@@ -473,8 +485,13 @@ async def security_plan_handler(
     try:
         subject_type = require_subject_type(request.subject_type)
         selections = parse_standards(request.standards)
+        exports: list[NetworkExport] = (
+            parse_network_exports(request.network_exports, snapshot)
+            if subject_type == "network"
+            else []
+        )
         context_ref, document, standards, packs, pack_refs = await _context(
-            execution, request, snapshot, subject_type, selections, now
+            execution, request, snapshot, subject_type, selections, now, exports
         )
     except SecurityPlanError as exc:
         raise _failure(exc.diagnostics) from None
@@ -503,6 +520,7 @@ async def security_plan_handler(
         packs,
         pack_refs,
         now,
+        exports,
     )
     return ToolResult(status="COMPLETED", outputs=outputs)
 

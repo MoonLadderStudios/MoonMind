@@ -6706,6 +6706,7 @@ export interface components {
             tlsAssessment?: components["schemas"]["TLSAssessment"] | null;
             webAssessment?: components["schemas"]["WebAssessment"] | null;
             cloudAssessment?: components["schemas"]["CloudAssessment"] | null;
+            networkConfigAssessment?: components["schemas"]["NetworkConfigAssessment"] | null;
             workloadProfile?: components["schemas"]["WorkloadProfileSelection"] | null;
             /** Image */
             image?: string | null;
@@ -10027,6 +10028,84 @@ export interface components {
             targetNetworkRef?: string | null;
             /** Targetcontainerref */
             targetContainerRef?: string | null;
+        };
+        /**
+         * NetworkConfigAssessment
+         * @description Offline analysis of retained network configuration exports.
+         *
+         *     The analyzer job reads captured artifacts with no network, credential or
+         *     target authority. Flows are questions to the exported rules, not traffic.
+         */
+        NetworkConfigAssessment: {
+            /** Exports */
+            exports: components["schemas"]["NetworkExport"][];
+            /** Flows */
+            flows?: components["schemas"]["NetworkFlow"][];
+            /**
+             * Maxexportagedays
+             * @default 90
+             */
+            maxExportAgeDays: number;
+            /**
+             * Maxinputbytes
+             * @default 8388608
+             */
+            maxInputBytes: number;
+            /**
+             * Timeoutseconds
+             * @default 600
+             */
+            timeoutSeconds: number;
+            /**
+             * Outputdirectory
+             * @default network-config
+             */
+            outputDirectory: string;
+        };
+        /**
+         * NetworkExport
+         * @description One operator-supplied export: what was supplied, by whom, as of when.
+         *
+         *     MoonMind did not observe the running device. The export time, device
+         *     identity and supplier are the operator's statement and travel with every
+         *     finding derived from the export.
+         */
+        NetworkExport: {
+            /** Artifactref */
+            artifactRef: string;
+            /** Filename */
+            fileName: string;
+            /** Device */
+            device: string;
+            /**
+             * Exportedat
+             * Format: date-time
+             */
+            exportedAt: string;
+            /** Supplier */
+            supplier: string;
+            /**
+             * Kind
+             * @default device_config
+             * @enum {string}
+             */
+            kind: "device_config" | "cloud_network" | "topology";
+        };
+        /**
+         * NetworkFlow
+         * @description A destination the exported rules are asked about, never a probe.
+         */
+        NetworkFlow: {
+            /** Host */
+            host: string;
+            /** Port */
+            port: number;
+            /**
+             * Protocol
+             * @default tcp
+             * @enum {string}
+             */
+            protocol: "tcp" | "udp";
         };
         /** NetworkPolicy */
         NetworkPolicy: {

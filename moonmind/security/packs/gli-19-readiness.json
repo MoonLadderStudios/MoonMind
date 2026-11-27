@@ -1704,7 +1704,8 @@
         "Assessed business must identify its duties and any partner-owned duties for this requirement."
       ],
       "subjectTypes": [
-        "gaming_system"
+        "gaming_system",
+        "network"
       ],
       "objectiveBasis": "Recorded readiness evidence; this requirement declares no executable objective checks."
     },
@@ -1782,7 +1783,8 @@
         "Assessed business must identify its duties and any partner-owned duties for this requirement."
       ],
       "subjectTypes": [
-        "gaming_system"
+        "gaming_system",
+        "network"
       ],
       "objectiveBasis": "Recorded readiness evidence; this requirement declares no executable objective checks."
     },

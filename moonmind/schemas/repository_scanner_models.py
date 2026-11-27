@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from typing import Annotated, Literal
 
 from pydantic import (
+    AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
@@ -689,4 +691,78 @@ class TLSAssessment(Contract):
                 "execution": "execution.json",
                 "summary": "summary.json",
             }.items()
+        ]
+
+
+NetworkExportKind = Literal["device_config", "cloud_network", "topology"]
+#: Exports an analyzer job reads; each is bounded on its own.
+MAX_NETWORK_EXPORTS = 32
+MAX_NETWORK_FLOWS = 64
+
+
+class NetworkExport(Contract):
+    """One operator-supplied export: what was supplied, by whom, as of when.
+
+    MoonMind did not observe the running device. The export time, device
+    identity and supplier are the operator's statement and travel with every
+    finding derived from the export.
+    """
+
+    artifact_ref: str = Field(pattern=r"^art_[0-9A-Za-z]{1,64}$")
+    file_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+    device: Text
+    exported_at: AwareDatetime
+    supplier: Text
+    kind: NetworkExportKind = "device_config"
+
+
+class NetworkFlow(Contract):
+    """A destination the exported rules are asked about, never a probe."""
+
+    host: str
+    port: int = Field(ge=1, le=65535)
+    protocol: Literal["tcp", "udp"] = "tcp"
+
+    @field_validator("host")
+    @classmethod
+    def ip_literal(cls, value):
+        try:
+            return str(ipaddress.ip_address(value))
+        except ValueError:
+            raise ValueError("flows name an IP address literal") from None
+
+
+class NetworkConfigAssessment(Contract):
+    """Offline analysis of retained network configuration exports.
+
+    The analyzer job reads captured artifacts with no network, credential or
+    target authority. Flows are questions to the exported rules, not traffic.
+    """
+
+    exports: list[NetworkExport] = Field(min_length=1, max_length=MAX_NETWORK_EXPORTS)
+    flows: list[NetworkFlow] = Field(default_factory=list, max_length=MAX_NETWORK_FLOWS)
+    max_export_age_days: int = Field(90, ge=1, le=3650)
+    max_input_bytes: int = Field(8 * 1024 * 1024, ge=1, le=64 * 1024 * 1024)
+    timeout_seconds: int = Field(600, ge=60, le=3600)
+    output_directory: str = "network-config"
+
+    @field_validator("output_directory")
+    @classmethod
+    def output_relative(cls, value):
+        return relative_path(value)
+
+    @model_validator(mode="after")
+    def distinct(self):
+        if len({e.artifact_ref for e in self.exports}) != len(self.exports):
+            raise ValueError("duplicate export artifact")
+        if len({e.file_name for e in self.exports}) != len(self.exports):
+            raise ValueError("duplicate export file name")
+        keys = [(f.host, f.port, f.protocol) for f in self.flows]
+        if len(set(keys)) != len(keys):
+            raise ValueError("duplicate flow")
+        return self
+
+    def outputs(self) -> list[dict]:
+        return [
+            {"name": "native", "relativePath": f"{self.output_directory}/native.json"}
         ]

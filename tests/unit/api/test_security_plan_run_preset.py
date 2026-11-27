@@ -369,3 +369,67 @@ async def test_planned_job_nodes_carry_their_record_path_and_scope_hint(
     assert conclusion["tool"]["name"] == "security.assess"
     assert conclusion["inputs"]["planRun"]["planRef"] == ref
     assert conclusion["inputs"]["assessmentProject"]["digest"] == project.digest
+
+
+async def test_network_plan_expands_its_analyzer_as_an_agent_free_tool_step(
+    tmp_path, artifact_root
+):
+    """A network-config job is its typed container job, with no agent step (#5441)."""
+    raw = plan_document()
+    export = {
+        "artifactRef": "art_openapi",
+        "fileName": "edge.cfg",
+        "device": "edge-rtr-1",
+        "exportedAt": "2026-11-27T08:00:00Z",
+        "supplier": "Network team",
+    }
+    raw["jobs"] = [
+        {
+            "id": "edge-config",
+            "kind": "network-config",
+            "input": {"exports": [export]},
+            "assets": ["shop-app"],
+            "sources": source("operator_input", "Create: network exports"),
+        }
+    ]
+    for row in raw["requirements"]:
+        row.pop("jobIds", None)
+        if row.get("methods") == ["deterministic_check"]:
+            row["methods"] = []
+            row["gaps"] = [{"kind": "missing_input", "detail": "Fixture."}]
+    async with template_db(tmp_path) as maker, maker() as session:
+        ref = await retain(session, raw)
+        identity = plan_identity(parse_security_plan(json.dumps(raw)))
+        service = await seeded(session, tmp_path)
+        expanded = await expand(service, {"plan_ref": ref})
+    job, conclusion = expanded["steps"]
+    assert job["type"] == "tool" and job["tool"]["id"] == "container.run_job"
+    spec = job["tool"]["inputs"]["spec"]
+    assert spec["networkMode"] == "none" and "egressPolicyRef" not in spec
+    assert spec["networkConfigAssessment"]["exports"][0]["device"] == "edge-rtr-1"
+    assert "skill" not in job or not job["skill"]
+    assert job["annotations"]["securityPlanJob"] == {
+        "jobId": "edge-config",
+        "planIdentity": identity,
+    }
+    assert conclusion["tool"]["id"] == "security.assess"
+    assert conclusion["tool"]["inputs"]["planRun"]["excluded"] == []
+    assert conclusion["tool"]["inputs"]["reportRefs"] == []
+    # No agent: an evidence-processing policy that disables model delivery
+    # still admits the run, so the deterministic checks run.
+    from api_service.services.assessment_model_delivery import (
+        require_execution_model_delivery,
+    )
+    from moonmind.workflows.executions.execution_contract import (
+        workflow_requires_agent,
+    )
+    from tests.unit.services.test_assessment_model_delivery import (
+        source as processing,
+    )
+
+    parameters = {
+        "workflow": {"steps": expanded["steps"]},
+        **processing({"modelDelivery": "disabled"}).parameters,
+    }
+    assert not workflow_requires_agent(parameters["workflow"], parameters)
+    require_execution_model_delivery(parameters, profile_ref=None)

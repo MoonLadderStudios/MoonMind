@@ -164,6 +164,25 @@ def test_compose_admits_upstream_prowler_image_and_operator_override(service, ov
     assert source.pull_policy == "always"
 
 
+@pytest.mark.parametrize("service", _DECLARING_SERVICES)
+@pytest.mark.parametrize("override", [None, "registry.example/batfish:operator-choice"])
+def test_compose_admits_network_config_analyzer_image_and_operator_override(
+    service, override
+):
+    environment = _service_environment(service)
+    overrides = {"MOONMIND_NETWORK_CONFIG_IMAGE": override} if override else {}
+    settings = resolve_container_backend_settings(
+        {
+            IMAGE_SOURCES_ENV_KEY: _interpolate(
+                environment[IMAGE_SOURCES_ENV_KEY], overrides
+            )
+        }
+    )
+    source = settings.image_source("network-config")
+    assert source.image == (override or "batfish/allinone:latest")
+    assert source.pull_policy == "always"
+
+
 _TACTICS_CACHES = [
     {"cacheRef": "unreal-ccache", "target": "/home/ue4/.ccache", "readOnly": False},
     {

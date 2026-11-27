@@ -29,6 +29,7 @@ from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
 
+from moonmind.schemas.repository_scanner_models import NetworkExport
 from moonmind.security.assessment_projects import (
     AssessmentFramework,
     AssessmentProjectSnapshot,
@@ -52,13 +53,14 @@ from moonmind.security.security_plan import (
     derive_security_plan,
     parse_security_plan,
     requirement_evidence,
+    selected_for_subject,
     validate_security_plan,
 )
 
 CONTEXT_SCHEMA = "security-plan-context/v1"
-# Subjects an installed planning journey honours. Endpoint and network join
-# when their assessment owners land.
-SUBJECT_TYPES = ("application",)
+# Subjects an installed planning journey honours. Endpoint joins when its
+# assessment owner lands.
+SUBJECT_TYPES = ("application", "network")
 DRAFT_PATH = "artifacts/security-plan/draft.json"
 WEB_API_PACK_ID = "web-api-methodology"
 
@@ -114,6 +116,45 @@ def require_subject_type(value: Any) -> str:
             ]
         )
     return value
+
+
+_EXPORTS = TypeAdapter(list[NetworkExport])
+
+
+def parse_network_exports(
+    values: Any, snapshot: AssessmentProjectSnapshot
+) -> list[NetworkExport]:
+    """The exports the operator stated for this run, with their provenance.
+
+    Each names an artifact of the saved environment; device, export time and
+    supplier are the operator's statement, never read from repository content.
+    """
+    if values in (None, []):
+        return []
+    try:
+        exports = _EXPORTS.validate_python(values)
+    except ValidationError:
+        raise SecurityPlanError(
+            [
+                "networkExports: name each export's artifactRef, fileName, device, "
+                "exportedAt with its time zone, supplier and kind"
+            ]
+        ) from None
+    errors = []
+    allowed = set(snapshot.configuration.artifact_refs)
+    for index, export in enumerate(exports):
+        if export.artifact_ref not in allowed:
+            errors.append(
+                f"networkExports[{index}].artifactRef: not an artifact of the saved "
+                "environment"
+            )
+    if len({e.artifact_ref for e in exports}) != len(exports) or len(
+        {e.file_name for e in exports}
+    ) != len(exports):
+        errors.append("networkExports: repeats an export artifact or file name")
+    if errors:
+        raise SecurityPlanError(errors)
+    return exports
 
 
 def plan_period(snapshot: AssessmentProjectSnapshot, now: datetime) -> EvidencePeriod:
@@ -188,6 +229,7 @@ def planning_context(
     snapshot: AssessmentProjectSnapshot,
     subject_type: str,
     standards: Sequence[tuple[PlanStandard, VersionedFrameworkPack]],
+    network_exports: Sequence[NetworkExport] = (),
 ) -> dict[str, Any]:
     """What the planner needs and nothing more; restricted packs omit titles."""
     rows = []
@@ -205,6 +247,20 @@ def planning_context(
                     **(
                         {"notAssessedReason": requirement.not_assessed_reason}
                         if requirement.not_assessed_reason
+                        else {}
+                    ),
+                    **(
+                        {"subjectTypes": list(requirement.subject_types)}
+                        if requirement.subject_types
+                        else {}
+                    ),
+                    **(
+                        {
+                            "selectedForSubject": selected_for_subject(
+                                requirement, subject_type
+                            )
+                        }
+                        if subject_type != "application"
                         else {}
                     ),
                 }
@@ -229,7 +285,7 @@ def planning_context(
                 "requirements": requirements,
             }
         )
-    return {
+    document = {
         "schemaVersion": CONTEXT_SCHEMA,
         "subjectType": subject_type,
         "project": {
@@ -247,6 +303,24 @@ def planning_context(
         "jobKinds": list(JOB_KINDS),
         "draftPath": DRAFT_PATH,
     }
+    if subject_type == "network":
+        from moonmind.security.network_configs import (
+            REQUIRED_INPUTS,
+            REVIEW_PROCEDURES,
+            RULES,
+        )
+
+        document["network"] = {
+            "exports": [
+                export.model_dump(mode="json", by_alias=True)
+                for export in network_exports
+            ],
+            "jobKind": "network-config",
+            "checks": dict(RULES),
+            "reviewProcedures": dict(REVIEW_PROCEDURES),
+            "requiredInputs": list(REQUIRED_INPUTS),
+        }
+    return document
 
 
 # Inline context rides workflow history and the planner's instructions; the
@@ -267,19 +341,24 @@ def inline_context(document: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def context_key(
-    snapshot: AssessmentProjectSnapshot, subject_type: str, selections: Sequence
+    snapshot: AssessmentProjectSnapshot,
+    subject_type: str,
+    selections: Sequence,
+    network_exports: Sequence[NetworkExport] = (),
 ) -> str:
     """One planning context per environment snapshot, subject and selection."""
-    return content_key(
-        {
-            "snapshot": snapshot.digest,
-            "subjectType": subject_type,
-            "standards": [
-                _SELECTION.dump_python(s, mode="json", by_alias=True)
-                for s in selections
-            ],
-        }
-    )
+    identity = {
+        "snapshot": snapshot.digest,
+        "subjectType": subject_type,
+        "standards": [
+            _SELECTION.dump_python(s, mode="json", by_alias=True) for s in selections
+        ],
+    }
+    if network_exports:
+        identity["networkExports"] = [
+            export.model_dump(mode="json", by_alias=True) for export in network_exports
+        ]
+    return content_key(identity)
 
 
 def _no_choice():
@@ -350,11 +429,43 @@ def _profile_errors(plan: SecurityPlan, packs) -> list[str]:
     return errors
 
 
+def _network_errors(plan: SecurityPlan, exports: Sequence[NetworkExport]) -> list[str]:
+    """Planned exports are exactly ones the operator stated, with provenance."""
+    stated = {e.artifact_ref: e for e in exports}
+    errors = []
+    for index, job in enumerate(plan.jobs):
+        if job.kind != "network-config":
+            continue
+        for item, value in enumerate(job.input.get("exports") or []):
+            try:
+                export = NetworkExport.model_validate(value)
+            except ValidationError:
+                continue
+            if stated.get(export.artifact_ref) != export:
+                errors.append(
+                    f"jobs[{index}].input.exports[{item}]: not an export, device, "
+                    "export time and supplier the operator stated for this plan"
+                )
+    return errors
+
+
 def operator_points(
-    plan: SecurityPlan, snapshot: AssessmentProjectSnapshot
+    plan: SecurityPlan,
+    snapshot: AssessmentProjectSnapshot,
+    network_exports: Sequence[NetworkExport] = (),
 ) -> list[OpenPoint]:
     """Questions only the operator can answer, raised instead of waiting."""
     points = []
+    if plan.subject.type == "network" and not network_exports:
+        points.append(
+            OpenPoint(
+                kind="operator_question",
+                text=(
+                    "Which configuration exports does this plan assess? State each "
+                    "export's artifact, device, export time and supplier in Create."
+                ),
+            )
+        )
     if snapshot.configuration.period is None:
         points.append(
             OpenPoint(
@@ -388,14 +499,21 @@ def plan_from_draft(
     packs: Mapping[tuple[str, str], VersionedFrameworkPack],
     snapshot: AssessmentProjectSnapshot,
     now: datetime,
+    network_exports: Sequence[NetworkExport] = (),
 ) -> SecurityPlan:
     """Derive and validate a drafted plan, or raise field-addressed diagnostics."""
     draft = parse_security_plan(raw)
     errors = _admission_errors(draft, subject_type, standards)
     errors += _profile_errors(draft, packs)
+    errors += _network_errors(draft, network_exports)
     plan = derive_security_plan(draft, packs=packs)
     plan = plan.model_copy(
-        update={"open_points": [*plan.open_points, *operator_points(plan, snapshot)]}
+        update={
+            "open_points": [
+                *plan.open_points,
+                *operator_points(plan, snapshot, network_exports),
+            ]
+        }
     )
     try:
         plan = validate_security_plan(plan, packs=packs, snapshot=snapshot, now=now)

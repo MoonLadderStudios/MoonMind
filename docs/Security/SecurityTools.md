@@ -1,6 +1,6 @@
 # Security Tools and Assessment Workflows
 
-[Passive scans](PassiveRepoScan.md), repository scanners, Trivy feeds, image/SBOM, cloud and web/API jobs, [game math](GameMathAssessment.md), [RNG](RngAssessment.md), [RGS](RgsAssessment.md), [application access](ApplicationAccessAssessment.md), GitHub alerts and [change-control periods](PassiveRepoScan.md#github-change-control-periods), [identity lifecycle evidence](IdentityLifecycleEvidence.md), security Skills, and recurring `security.assess` comparisons are implemented. Conditional tools are not installed.
+[Passive scans](PassiveRepoScan.md), repository scanners, Trivy feeds, image/SBOM, cloud and web/API jobs, [game math](GameMathAssessment.md), [RNG](RngAssessment.md), [RGS](RgsAssessment.md), [application access](ApplicationAccessAssessment.md), GitHub alerts and [change-control periods](PassiveRepoScan.md#github-change-control-periods), [identity lifecycle evidence](IdentityLifecycleEvidence.md), [network configuration exports](NetworkConfigAssessment.md), security Skills, and recurring `security.assess` comparisons are implemented. Conditional tools are not installed.
 
 ## Purpose and ownership
 
@@ -45,7 +45,7 @@ Collection retains sanitized native JSON and a `repository-scanner/v1` summary w
 Feed summary refs into `security.assess` using `retained-report` and explicit file scope. It authorizes native refs and publishes without an LLM. Opengrep coverage uses examined paths, excluding skipped/parser-failed inputs; Trivy needs target/analysis evidence. Exclusions and suppressions must match scope. Comparisons include effective rules/tool version, exclude output destinations, preserve findings outside examined scope and cap deduplicated findings at 4096 with partial coverage. Composed reports retain the summary reference and exact corpus identity.
 #### Image, archive and SBOM jobs
 
-`moonmind container image-assessment --admission image.json` submits one typed `imageAssessment` job, separate from `repositoryScan` so target-image coverage is requested and reported apart from source scanning. `operation` is `assess` (target `registry` or `archive`), `sbom-generate` (`registry`, `archive`, or `source`), or `sbom-reassess` (`sbom`). For example, `{"operation":"assess","target":"registry","imageReference":"registry.example.com/team/app:stable","platform":"linux/arm64","egressPolicyRef":"registry","databaseCacheRef":"scanner-db","databaseDigest":"<snapshot id>"}`. Matching requires a feed snapshot; generation reads none.
+`moonmind container image-assessment --admission image.json` submits one typed `imageAssessment` job, separate from `repositoryScan` so target-image coverage is requested and reported apart from source scanning. `operation` is `assess` (target `registry` or `archive`), `sbom-generate` (`registry`, `archive`, or `source`), or `sbom-reassess` (`sbom`). Matching requires a feed snapshot; generation reads none.
 
 Trivy never consults a Docker, containerd, or Podman daemon: registry images use `--image-src remote`, archives (Docker save or OCI layout tar) use `--input`, and SBOMs (CycloneDX 1.2–1.7 or SPDX 2.2/2.3 JSON) use `trivy sbom`. Archives and SBOMs arrive as `inputArtifactRef` attachments with `networkMode: none`. Registry jobs need an egress policy whose destinations are all `registry-api` traffic and include the target registry. Admission and the worker reject any other mount, environment, network, or image. The scanner image is a deployment image source, so its pull authority stays separate from `targetCredentialRef`. That credential is authorized at admission by the same `MOONMIND_REGISTRY_CREDENTIAL_GRANTS` that govern private job images, matched against the target's registry, repository, tag/digest, and principal. The worker resolves it only under that decision and mounts it read-only as a Docker config in job-owned storage, never in argv, environment, the request, or evidence. It is removed when the container exits and on release. Output containing the credential is withheld (`credential_material_withheld`). Registry failures are classified from private stderr (`target_registry_auth_failed`, `target_registry_access_denied`, `target_not_found`, `target_platform_unavailable`) without retaining its text.
 
@@ -69,7 +69,7 @@ Curated coverage additionally records executed/skipped/failed templates, match/n
 
 The maintained image contains **Opengrep, Gitleaks, Trivy, OpenSSL, Git, CA certificates and assessment runners**.
 
-Cloud/application scanners use maintained upstream images. Jobs contain no agent/model credentials and have no Docker socket, nested Docker, host networking or privilege.
+Cloud, application and network-configuration analyzers use maintained upstream images. Jobs contain no agent/model credentials and have no Docker socket, nested Docker, host networking or privilege.
 
 ### Default capabilities
 
@@ -82,6 +82,7 @@ Cloud/application scanners use maintained upstream images. Jobs contain no agent
 | Web/API | [ZAP](https://www.zaproxy.org/docs/docker/about/), `ghcr.io/zaproxy/zaproxy:stable` | Typed `webAssessment`, rendered [Automation Framework](https://www.zaproxy.org/docs/automate/automation-framework/) plans. |
 | HTTPS TLS | OpenSSL and cryptography in the curated image | [Bounded CONNECT inspection](RestrictedEgress.md#bounded-https-tls-inspection), certificate/trust evidence and explicit protocol coverage gaps. |
 | Native services | Curated Python inventory runner | [Bounded TCP inventory](RestrictedEgress.md#bounded-service-inventory); fixed passive/HEAD probes, explicit uncertainty, no vulnerability inference. |
+| Network configuration | [Batfish](https://github.com/batfish/batfish), `batfish/allinone:latest` | Typed network-none `networkConfigAssessment` over [sanitized exports](NetworkConfigAssessment.md); unparsed or unqualified content is a coverage gap. |
 | Contextual review | Existing Omnigent agent and security Skills | Trust boundaries, authorization, business logic, evidence validation, prioritization and retesting; scanner findings are optional inputs. |
 
 Respect separate engine, rule, template and Skill licenses, including deployment rules and the [Semgrep corpus](https://semgrep.dev/legal/rules-license).
@@ -140,7 +141,7 @@ Tool configuration is part of the evidence: record effective rules, exclusions, 
 
 Container Job `inputAttachments` capture source snapshots and supplied artifacts once and mount them read-only, so later working-copy edits and retries cannot change what a job examines. Reports and temporary data use separate job-owned writable locations. Inputs are logical workspace or artifact references, never host paths. Native reports remain readable through retained artifact references after cleanup.
 
-A bounded, source-free refresh job obtains Trivy's vulnerability databases and checks bundle without repository contents or assessment credentials. Opengrep rules ship in the image, and ZAP and Prowler use the rules in their own images. Scanners read an admitted read-only snapshot, so an untrusted scan cannot poison data later assessments use.
+ZAP and Prowler use the rules in their own images. Scanners read an admitted read-only snapshot, so an untrusted scan cannot poison data later assessments use.
 
 Record data source, resolved identity, acquisition and upstream update times, required components, and whether freshness was met. Missing or stale required data is reported as a coverage limitation or failure, never silently replaced by a clean result. Offline behavior covers every enabled component and remote dependency lookup, rather than only a single database-update switch; see [Trivy's air-gap guidance](https://trivy.dev/docs/latest/advanced/air-gap/).
 
@@ -150,7 +151,7 @@ Workload credentials use the existing [Secrets System](SecretsSystem.md). A prof
 
 Model credentials, source-repository credentials, scanner-image pull credentials, private target-image credentials, cloud assessment credentials, and application authentication are distinct uses. Possession of one does not authorize another. Cloud identity and resource permissions enforce account/resource scope as well as the network policy; access to a cloud API hostname alone cannot confine a scan to an account.
 
-Passive source analysis runs with `networkMode: none`, using prepared rule/data snapshots. Feed refresh, image acquisition, cloud APIs, and live-target assessment receive only their admitted destinations through the existing [restricted-egress owner](RestrictedEgress.md). Docker bridge mode alone is insufficient. Target enforcement addresses DNS resolution, redirects, alternate routes, private destinations, and control-plane/metadata access. Internal applications may be admitted explicitly without opening unrelated private networks.
+Passive source analysis runs with `networkMode: none`, using prepared rule/data snapshots. Feed refresh, image acquisition, cloud APIs, and live-target assessment receive only their admitted destinations through the existing [restricted-egress owner](RestrictedEgress.md). Target enforcement addresses DNS resolution, redirects, alternate routes, private destinations, and control-plane/metadata access. Internal applications may be admitted explicitly without opening unrelated private networks.
 
 Scanner jobs are bounded CLI executions, not persistent browser or proxy endpoints.
 
@@ -184,7 +185,7 @@ Acquisition verifies Opengrep's current and legacy Linux assets with Cosign, acc
 
 The image's `/usr/local/share/repository-security/inventory.json` and `notices/` identify its contents. Job-owned `/tmp` stays executable because Opengrep extracts a child executable there. Actions retains tool/signature assets, Opengrep source, inventory/base identity, image digest, SBOM and qualification evidence for 90 days. Updating scanners does not rebuild the Omnigent host; its CLI follows that host's deployment lifecycle.
 
-`.github/workflows/upstream-assessment-images.yml` qualifies ZAP/Prowler against local application/moto fixtures and TLS against local certificates/CONNECT transport. Native TLS rows build the candidate Dockerfile, dependencies and Python payload with unchanged tools/rules from the published scanner image; they do not reverify fresh upstream releases. Weekly, relevant-change and dispatch runs retain actual image/provenance evidence without pinning future launches.
+`.github/workflows/upstream-assessment-images.yml` qualifies ZAP/Prowler against local application/moto fixtures, Batfish against weakened/corrected exports, and TLS against local certificates/CONNECT transport. Native TLS rows build the candidate Dockerfile, dependencies and Python payload with unchanged tools/rules from the published scanner image; they do not reverify fresh upstream releases. Weekly, relevant-change and dispatch runs retain actual image/provenance evidence without pinning future launches.
 
 Hermetic CI executes the Apache-2.0 corpus in `tests/fixtures/security_review/quality-cases.json`: source, cloud, web, ownership and synthetic gaming cases, separate held-out controls, and clean, vulnerable, repaired, partial, failed-authentication, malformed-output and canceled outcomes. Cloud/ZAP/native-scanner transports and harness responses are controlled. The passive detector and access probes execute code; saved fixture presets use the catalog, admitted CLI/MCP, artifact and report owners.
 

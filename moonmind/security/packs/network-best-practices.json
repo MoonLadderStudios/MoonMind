@@ -1,0 +1,354 @@
+{
+  "schemaVersion": "declared-framework-pack/v1",
+  "id": "network-best-practices",
+  "edition": "2026-11",
+  "revision": "1",
+  "title": "General best practices for networks",
+  "source": {
+    "url": "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/Security/NetworkConfigAssessment.md",
+    "section": "Network best practices",
+    "reviewedOn": "2026-11-27"
+  },
+  "reviewedBy": "MoonMind maintainers",
+  "reviewedOn": "2026-11-27",
+  "publicationStatus": "published",
+  "publishedOn": "2026-11-27",
+  "effectiveFrom": "2026-11-27",
+  "provenance": "Original statements written for MoonMind as a declared checklist of common network hardening practice. No benchmark, standard or vendor guidance text is reproduced or paraphrased line by line.",
+  "license": "Apache-2.0, as part of MoonMind.",
+  "attribution": "MoonMind general best practices for networks: original statements by the MoonMind maintainers, Apache-2.0.",
+  "distribution": "redistributable",
+  "conclusions": "Per-requirement conclusions over exported device configurations as of their export time. Analyzer checks conclude only for parsed exports in qualified formats; review and record requirements stay with the agent review and the operator. MoonMind did not observe the running devices.",
+  "limitations": [
+    "Evidence is the operator's exports at their stated export times, not the running devices.",
+    "Analyzer coverage is qualified on Cisco IOS fixtures only; other formats and real device exports are Unverified until reviewed.",
+    "Intent, permissive rules, management exposure, protocols and credentials need agent review, which an evidence-processing policy of disabled or local-only blocks with no fallback."
+  ],
+  "requirements": [
+    {
+      "id": "NET-1",
+      "title": "Filter lines all take effect",
+      "summary": "Every line of a filter or access list can match some traffic. A line that earlier lines already cover silently does nothing and is removed or reordered.",
+      "category": "Network",
+      "applicability": "Every network device or firewall whose exported configuration is in the plan.",
+      "subjectTypes": [
+        "network"
+      ],
+      "sources": [
+        {
+          "url": "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/Security/NetworkConfigAssessment.md",
+          "section": "Network best practices",
+          "reviewedOn": "2026-11-27"
+        }
+      ],
+      "requiredEvidenceMethods": [
+        "deterministic_check"
+      ],
+      "evidencePrompt": "Supply the device configuration exports that hold the filters.",
+      "objectiveBasis": "The offline analyzer decides this for every parsed export in a qualified format; unparsed or unqualified content leaves it inconclusive.",
+      "evidenceTypes": [
+        "deterministic_check"
+      ],
+      "objectives": [
+        {
+          "id": "acl-line-unreachable",
+          "description": "No filter line is fully covered by earlier lines.",
+          "source": "network-config",
+          "tool": "batfish",
+          "ruleIds": [
+            "acl-line-unreachable"
+          ]
+        }
+      ],
+      "objectivesComplete": true
+    },
+    {
+      "id": "NET-2",
+      "title": "No clear-text protocols through inbound filters",
+      "summary": "Filters on inbound interfaces do not let Telnet, FTP or TFTP through; encrypted alternatives carry management and file transfer.",
+      "category": "Network",
+      "applicability": "Every network device or firewall whose exported configuration is in the plan.",
+      "subjectTypes": [
+        "network"
+      ],
+      "sources": [
+        {
+          "url": "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/Security/NetworkConfigAssessment.md",
+          "section": "Network best practices",
+          "reviewedOn": "2026-11-27"
+        }
+      ],
+      "requiredEvidenceMethods": [
+        "deterministic_check"
+      ],
+      "evidencePrompt": "Supply the device configuration exports that hold the inbound filters.",
+      "objectiveBasis": "The offline analyzer decides this for every parsed export in a qualified format; unparsed or unqualified content leaves it inconclusive.",
+      "evidenceTypes": [
+        "deterministic_check"
+      ],
+      "objectives": [
+        {
+          "id": "cleartext-protocol-permitted",
+          "description": "No inbound interface filter permits Telnet, FTP or TFTP.",
+          "source": "network-config",
+          "tool": "batfish",
+          "ruleIds": [
+            "cleartext-protocol-permitted"
+          ]
+        }
+      ],
+      "objectivesComplete": true
+    },
+    {
+      "id": "NET-3",
+      "title": "Devices keep time from a time source",
+      "summary": "Each device names at least one time source, so its logs and certificates agree with the rest of the estate.",
+      "category": "Network",
+      "applicability": "Every network device or firewall whose exported configuration is in the plan.",
+      "subjectTypes": [
+        "network"
+      ],
+      "sources": [
+        {
+          "url": "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/Security/NetworkConfigAssessment.md",
+          "section": "Network best practices",
+          "reviewedOn": "2026-11-27"
+        }
+      ],
+      "requiredEvidenceMethods": [
+        "deterministic_check"
+      ],
+      "evidencePrompt": "Supply each device's configuration export.",
+      "objectiveBasis": "The offline analyzer decides this for every parsed export in a qualified format; unparsed or unqualified content leaves it inconclusive.",
+      "evidenceTypes": [
+        "deterministic_check"
+      ],
+      "objectives": [
+        {
+          "id": "ntp-not-configured",
+          "description": "Each device names an NTP server.",
+          "source": "network-config",
+          "tool": "batfish",
+          "ruleIds": [
+            "ntp-not-configured"
+          ]
+        }
+      ],
+      "objectivesComplete": true
+    },
+    {
+      "id": "NET-4",
+      "title": "Devices send logs off the device",
+      "summary": "Each device sends its logs to a remote collector, so its events survive the device and can be reviewed.",
+      "category": "Network",
+      "applicability": "Every network device or firewall whose exported configuration is in the plan.",
+      "subjectTypes": [
+        "network"
+      ],
+      "sources": [
+        {
+          "url": "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/Security/NetworkConfigAssessment.md",
+          "section": "Network best practices",
+          "reviewedOn": "2026-11-27"
+        }
+      ],
+      "requiredEvidenceMethods": [
+        "deterministic_check"
+      ],
+      "evidencePrompt": "Supply each device's configuration export.",
+      "objectiveBasis": "The offline analyzer decides this for every parsed export in a qualified format; unparsed or unqualified content leaves it inconclusive.",
+      "evidenceTypes": [
+        "deterministic_check"
+      ],
+      "objectives": [
+        {
+          "id": "remote-logging-not-configured",
+          "description": "Each device names a remote logging host.",
+          "source": "network-config",
+          "tool": "batfish",
+          "ruleIds": [
+            "remote-logging-not-configured"
+          ]
+        }
+      ],
+      "objectivesComplete": true
+    },
+    {
+      "id": "NET-5",
+      "title": "Configurations refer only to what they define",
+      "summary": "A configuration does not apply a filter, policy or other structure it never defines; such a reference leaves the intended control absent.",
+      "category": "Network",
+      "applicability": "Every network device or firewall whose exported configuration is in the plan.",
+      "subjectTypes": [
+        "network"
+      ],
+      "sources": [
+        {
+          "url": "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/Security/NetworkConfigAssessment.md",
+          "section": "Network best practices",
+          "reviewedOn": "2026-11-27"
+        }
+      ],
+      "requiredEvidenceMethods": [
+        "deterministic_check"
+      ],
+      "evidencePrompt": "Supply each device's configuration export.",
+      "objectiveBasis": "The offline analyzer decides this for every parsed export in a qualified format; unparsed or unqualified content leaves it inconclusive.",
+      "evidenceTypes": [
+        "deterministic_check"
+      ],
+      "objectives": [
+        {
+          "id": "undefined-reference",
+          "description": "No configuration refers to an undefined structure.",
+          "source": "network-config",
+          "tool": "batfish",
+          "ruleIds": [
+            "undefined-reference"
+          ]
+        }
+      ],
+      "objectivesComplete": true
+    },
+    {
+      "id": "NET-6",
+      "title": "Rules enforce the intended segmentation",
+      "summary": "The rules between network zones permit what the stated segmentation intends and nothing more.",
+      "category": "Network",
+      "applicability": "Every network device or firewall whose exported configuration is in the plan.",
+      "subjectTypes": [
+        "network"
+      ],
+      "sources": [
+        {
+          "url": "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/Security/NetworkConfigAssessment.md",
+          "section": "Network best practices",
+          "reviewedOn": "2026-11-27"
+        }
+      ],
+      "requiredEvidenceMethods": [
+        "observation"
+      ],
+      "evidencePrompt": "Supply the configuration exports and a topology or segmentation description.",
+      "objectiveBasis": "Agent review of the sanitized exports against the stated intent; no analyzer decides it, so it is never concluded by a check."
+    },
+    {
+      "id": "NET-7",
+      "title": "Permissive rules have a stated purpose",
+      "summary": "Any-to-any and similarly broad rules are rare, and each has a purpose a reviewer can confirm.",
+      "category": "Network",
+      "applicability": "Every network device or firewall whose exported configuration is in the plan.",
+      "subjectTypes": [
+        "network"
+      ],
+      "sources": [
+        {
+          "url": "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/Security/NetworkConfigAssessment.md",
+          "section": "Network best practices",
+          "reviewedOn": "2026-11-27"
+        }
+      ],
+      "requiredEvidenceMethods": [
+        "observation"
+      ],
+      "evidencePrompt": "Supply the configuration exports and the purpose of broad rules.",
+      "objectiveBasis": "Agent review of the sanitized exports against the stated intent; no analyzer decides it, so it is never concluded by a check."
+    },
+    {
+      "id": "NET-8",
+      "title": "Management access is confined to management networks",
+      "summary": "Management services and lines are reachable only from management networks, over encrypted protocols.",
+      "category": "Network",
+      "applicability": "Every network device or firewall whose exported configuration is in the plan.",
+      "subjectTypes": [
+        "network"
+      ],
+      "sources": [
+        {
+          "url": "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/Security/NetworkConfigAssessment.md",
+          "section": "Network best practices",
+          "reviewedOn": "2026-11-27"
+        }
+      ],
+      "requiredEvidenceMethods": [
+        "observation"
+      ],
+      "evidencePrompt": "Supply the configuration exports and the management network ranges.",
+      "objectiveBasis": "Agent review of the sanitized exports against the stated intent; no analyzer decides it, so it is never concluded by a check."
+    },
+    {
+      "id": "NET-9",
+      "title": "Weak protocols and ciphers are off",
+      "summary": "Devices disable protocol versions and ciphers that no longer protect their traffic.",
+      "category": "Network",
+      "applicability": "Every network device or firewall whose exported configuration is in the plan.",
+      "subjectTypes": [
+        "network"
+      ],
+      "sources": [
+        {
+          "url": "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/Security/NetworkConfigAssessment.md",
+          "section": "Network best practices",
+          "reviewedOn": "2026-11-27"
+        }
+      ],
+      "requiredEvidenceMethods": [
+        "observation"
+      ],
+      "evidencePrompt": "Supply the configuration exports.",
+      "objectiveBasis": "Agent review of the sanitized exports against the stated intent; no analyzer decides it, so it is never concluded by a check."
+    },
+    {
+      "id": "NET-10",
+      "title": "No default or shared device credentials",
+      "summary": "Local accounts are named, individual and protected by strong hashes; vendor defaults and reversible storage are absent.",
+      "category": "Network",
+      "applicability": "Every network device or firewall whose exported configuration is in the plan.",
+      "subjectTypes": [
+        "network"
+      ],
+      "sources": [
+        {
+          "url": "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/Security/NetworkConfigAssessment.md",
+          "section": "Network best practices",
+          "reviewedOn": "2026-11-27"
+        }
+      ],
+      "requiredEvidenceMethods": [
+        "observation"
+      ],
+      "evidencePrompt": "Supply the configuration exports; secret values are redacted before review.",
+      "objectiveBasis": "Agent review of the sanitized exports against the stated intent; no analyzer decides it, so it is never concluded by a check."
+    },
+    {
+      "id": "NET-11",
+      "title": "An approved configuration standard exists",
+      "summary": "The organisation keeps an approved configuration standard for its network devices, which the exports are reviewed against.",
+      "category": "Network",
+      "applicability": "Every network device or firewall whose exported configuration is in the plan.",
+      "subjectTypes": [
+        "network"
+      ],
+      "sources": [
+        {
+          "url": "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/Security/NetworkConfigAssessment.md",
+          "section": "Network best practices",
+          "reviewedOn": "2026-11-27"
+        }
+      ],
+      "requiredEvidenceMethods": [
+        "evidence"
+      ],
+      "evidencePrompt": "Supply the approved network device configuration standard.",
+      "objectiveBasis": "Organisational evidence: an approved record, not a check or an interpretation, decides this.",
+      "organisationalEvidence": [
+        {
+          "id": "network-configuration-standard",
+          "category": "policy",
+          "purpose": "design",
+          "description": "The approved configuration standard for the network devices in scope."
+        }
+      ]
+    }
+  ]
+}

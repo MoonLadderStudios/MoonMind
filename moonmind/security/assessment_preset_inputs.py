@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from moonmind.schemas.repository_scanner_models import (
     CloudAssessment,
     ImageAssessment,
+    NetworkConfigAssessment,
     RepositoryScan,
     WebAssessment,
 )
@@ -18,6 +19,7 @@ ASSESSMENT_INPUT_CONTRACTS = {
     "image-assessment": ImageAssessment,
     "cloud-assessment": CloudAssessment,
     "web-assessment": WebAssessment,
+    "network-config": NetworkConfigAssessment,
 }
 
 #: Operator next action for each pre-budget readiness diagnostic. The runtime
@@ -43,6 +45,7 @@ def assessment_job_spec(contract: str, value: dict) -> dict:
     """
     from moonmind.security.cloud_assessments import build_cloud_assessment_job
     from moonmind.security.image_assessments import build_image_assessment_job
+    from moonmind.security.network_configs import build_network_config_job
     from moonmind.security.repository_scanners import build_scanner_job
     from moonmind.security.web_assessments import build_web_assessment_job
 
@@ -51,6 +54,7 @@ def assessment_job_spec(contract: str, value: dict) -> dict:
         "image-assessment": build_image_assessment_job,
         "cloud-assessment": build_cloud_assessment_job,
         "web-assessment": build_web_assessment_job,
+        "network-config": build_network_config_job,
     }
     model = ASSESSMENT_INPUT_CONTRACTS[contract].model_validate(value)
     return builders[contract](model)
@@ -61,6 +65,7 @@ INPUT_HELP = {
     "image-assessment": "Registry targets need imageReference and egressPolicyRef; archives/SBOMs need inputArtifactRef. Vulnerability matching needs databaseCacheRef and databaseDigest; SBOM generation does not.",
     "cloud-assessment": "Select AWS, account, credentialRef, regions and egressPolicyRef, with exactly one nonempty checks or services selection.",
     "web-assessment": "API mode needs apiDefinition; active mode needs activeStrength. Admit all start, authentication and definition endpoint paths in routes, outside exclusions.",
+    "network-config": "Name each export's artifactRef from the saved environment, a fileName, the device, exportedAt with its time zone and the supplier; flows name IP address literals and ports.",
 }
 
 

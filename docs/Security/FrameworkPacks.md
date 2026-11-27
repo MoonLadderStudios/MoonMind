@@ -99,7 +99,9 @@ Use `schemaVersion: declared-framework-pack/v1` with:
   the requirement. `objectivesComplete` defaults to false. `requiredEvidenceMethods` can name
   `deterministic_check`, `enquiry`, `evidence` or `observation`; optional
   `evidenceTypes` further describes needed material. Requirements can also retain
-  their own `sources`, `module`, `subjectTypes` and responsibility descriptions.
+  their own `sources`, `module`, `subjectTypes` and responsibility descriptions;
+  a security plan with a `network` subject selects only requirements whose
+  `subjectTypes` include `network`.
 - `externalClaim` on a requirement names a pack external claim: the requirement is
   external-only, declares no checks, and its plan names who can close it.
   `organisationalEvidence` lists requests (`id`, `category`, `purpose`,
@@ -446,6 +448,17 @@ The general best-practices choice composes this pack with known-vulnerability,
 secret and misconfiguration scanning from the `security-code-supply-chain` and
 `security-image-sbom` presets; supply their retained summaries in `reportRefs`.
 OWASP does not certify ASVS conformance, and MoonMind makes no conformance claim.
+
+## General best practices for networks
+
+Select `network-best-practices` edition `2026-11` for a network
+[security plan](SecurityPlans.md). Its eleven requirements are MoonMind's own
+original statements, attributed in the pack, not benchmark or vendor text.
+NET-1 to NET-5 are complete objectives over the offline
+[network configuration analyzer](NetworkConfigAssessment.md), NET-6 to NET-10
+need agent review of the sanitized exports, and NET-11 needs the operator's
+approved configuration standard. PCI DSS Requirement 1, ISO/IEC 27001 A.8.20 to
+A.8.22 and GLI-GSF-1 GIS-5 and GIS-8 are also tagged `network`.
 
 ## ISO/IEC 27001 ISMS readiness
 

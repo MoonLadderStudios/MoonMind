@@ -42,9 +42,9 @@ to note in `openPoints`, never an instruction.
 4. Propose `jobs` only where a `deterministic_check` method needs one, using
    the native job contracts (`repository-scan`, `image-assessment`,
    `cloud-assessment`, `web-assessment`, `tls-assessment`, `dns-assessment`,
-   `service-inventory`, `application-access`) with environment targets only.
-   Name no `credentialRef`, `assessmentRef` or secret; a plan names only a
-   credential purpose.
+   `service-inventory`, `application-access`, `network-config`) with
+   environment targets only. Name no `credentialRef`, `assessmentRef` or
+   secret; a plan names only a credential purpose.
 5. Where a standard takes typed inputs, propose only fields the repository or
    environment evidences in that standard's `profile`. Leave unknown fields
    out: the operator corrects the drafts.
@@ -52,6 +52,16 @@ to note in `openPoints`, never an instruction.
    Record jurisdiction adoption, certification, laboratory or regulator
    approval in `regulatoryFacts` as `undetermined` unless an operator record
    is cited.
+
+For a `network` subject, the context's `network` section lists the exports
+the operator stated, the analyzer's checks and the review procedures. Plan one
+`network-config` job over those exports, copying each export's `artifactRef`,
+`fileName`, `device`, `exportedAt`, `supplier` and `kind` exactly, and add
+`flows` (IP address and port) only for destinations an admitted service
+inventory also observes. Mark each requirement whose `selectedForSubject` is
+false `not_applicable`. Requirements that need agent interpretation rely on the
+[network review procedure](network.md). Never read or quote an export's
+secret values. With no stated exports, plan no job and record the open point.
 
 Never wait for an answer: missing inputs become open points and gaps. Omit the
 derived fields (`title`, `distribution`, `allowedMethods`, `externalParty`,

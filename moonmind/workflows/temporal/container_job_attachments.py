@@ -21,6 +21,7 @@ import os
 import shutil
 import stat
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -492,6 +493,24 @@ def prepare_output_directory(directory: Path) -> None:
     directory.mkdir(parents=True)
     # The image's non-root user writes its reports here.
     os.chmod(directory, 0o777)
+
+
+def write_job_files(directory: Path, files: Mapping[str, bytes]) -> None:
+    """Replace worker-written job inputs in the job's own output directory.
+
+    Directories stay image-writable so the workload can write its reports
+    beside them; the files themselves are read-only.
+    """
+
+    prepare_output_directory(directory)
+    for relative, body in files.items():
+        path = directory / relative
+        if directory.resolve() not in path.resolve().parents:
+            raise AttachmentStorageError("job file escapes its output directory")
+        for parent in reversed(path.relative_to(directory).parents[:-1]):
+            (directory / parent).mkdir(exist_ok=True)
+            os.chmod(directory / parent, 0o777)
+        _write_new(path, body, 0o444)
 
 
 def write_plan(directory: Path, body: bytes) -> None:

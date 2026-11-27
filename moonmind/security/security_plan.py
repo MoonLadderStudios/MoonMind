@@ -28,6 +28,7 @@ from moonmind.schemas.repository_scanner_models import (
     CLOUD_ACTION_CLASS,
     CloudAssessment,
     ImageAssessment,
+    NetworkConfigAssessment,
     RepositoryScan,
     TLSAssessment,
     WebAssessment,
@@ -120,6 +121,7 @@ JOB_KINDS = (
     "tls-assessment",
     "dns-assessment",
     "service-inventory",
+    "network-config",
 )
 #: Job input fields bound at launch from a saved authorization and its grants.
 #: A plan names credential purposes; references and assessment identities are
@@ -547,6 +549,17 @@ def load_standard_pack(standard: PlanStandard, raw: bytes | None = None):
     )
 
 
+def selected_for_subject(requirement, subject_type: str) -> bool:
+    """Whether a standard's requirement is in scope for the plan's subject.
+
+    An application plan keeps every requirement. Another subject selects the
+    requirements a pack tags with it in ``subjectTypes``.
+    """
+    if subject_type == "application":
+        return True
+    return subject_type in requirement.subject_types
+
+
 _REQUIRED_METHODS = {
     "deterministic_check": "deterministic_check",
     "enquiry": "document_review",
@@ -688,6 +701,7 @@ def native_job(kind: str, value: Mapping):
         "cloud-assessment": CloudAssessment,
         "web-assessment": WebAssessment,
         "tls-assessment": TLSAssessment,
+        "network-config": NetworkConfigAssessment,
     }[kind]
     if kind == "cloud-assessment":
         value.update(
@@ -714,10 +728,13 @@ def _web_target(web):
 def _job_seconds(kind, model) -> int:
     """The job timeout the native builder renders, which admission budgets."""
     from moonmind.security.assessment_preset_inputs import assessment_job_spec
+    from moonmind.security.network_configs import build_network_config_job
     from moonmind.security.tls_assessments import build_tls_assessment_job
 
     if kind == "tls-assessment":
         return build_tls_assessment_job(model)["timeoutSeconds"]
+    if kind == "network-config":
+        return build_network_config_job(model)["timeoutSeconds"]
     return assessment_job_spec(kind, model.model_dump(mode="json", by_alias=True))[
         "timeoutSeconds"
     ]
@@ -729,6 +746,17 @@ def job_authority(kind: str, model, facts, scope=None) -> JobAuthority:
         return JobAuthority(
             scoped=False,
             targets=[AuthorityTarget(kind="workspace_path", ref=model.input_path)],
+            max_job_seconds=_job_seconds(kind, model),
+        )
+    if kind == "network-config":
+        # Captured exports of the saved environment, analyzed with no network:
+        # no profile, action class, credential purpose or egress.
+        return JobAuthority(
+            scoped=False,
+            targets=[
+                AuthorityTarget(kind="artifact", ref=export.artifact_ref)
+                for export in model.exports
+            ],
             max_job_seconds=_job_seconds(kind, model),
         )
     if kind == "image-assessment":
@@ -1201,6 +1229,15 @@ def validate_security_plan(
             errors.append(f"{label}.id: not a requirement of the selected standard")
             continue
         derived = expected.requirements[index]
+        if (
+            plan.subject.type == "network"
+            and not selected_for_subject(requirement, plan.subject.type)
+            and row.applicability != "not_applicable"
+        ):
+            errors.append(
+                f"{label}.applicability: the standard does not tag this requirement "
+                "for a network subject; mark it not applicable"
+            )
         for field, alias in (
             ("title", "title"),
             ("allowed_methods", "allowedMethods"),
@@ -1266,11 +1303,19 @@ def _proposal_errors(plan, row, derived, requirement, label, jobs):
             )
     if row.procedures and plan.methodology is None:
         errors.append(f"{label}.procedures: procedures need the plan's methodology")
+    # A network plan's analyzed exports are reviewed with the security-review
+    # Skill's network procedures, an agent-interpretation evidence path.
+    network_review = (
+        plan.subject.type == "network"
+        and "agent_interpretation" in row.methods
+        and any(job.kind == "network-config" for job in plan.jobs)
+    )
     has_path = bool(
         row.job_ids
         or row.procedures
         or (row.evidence_request_ids and "document_review" in row.methods)
         or "external_only" in row.methods
+        or network_review
     )
     if row.applicability != "not_applicable" and not (
         (row.methods and has_path) or row.gaps
@@ -1378,6 +1423,52 @@ def _authority_text(authority: JobAuthority | None) -> str:
     return "; ".join(parts)
 
 
+def _network_sections(plan: SecurityPlan) -> list[str]:
+    """Planned checks, review procedures and the inputs a network plan needs."""
+    from moonmind.security.network_configs import (
+        PROVENANCE,
+        REQUIRED_INPUTS,
+        REVIEW_PROCEDURES,
+        RULES,
+    )
+
+    jobs = [job for job in plan.jobs if job.kind == "network-config"]
+    lines = ["", "### Planned checks"]
+    if jobs:
+        lines += [
+            f"- {rule}: {text} (job {', '.join(_safe(job.id) for job in jobs)})"
+            for rule, text in RULES.items()
+        ]
+        lines.append(
+            "- Every export's vendor, operating system, version and parse coverage; "
+            "unsupported or unparsed content is a coverage gap, never clean."
+        )
+    else:
+        lines.append("- None: no network-config job is planned.")
+    lines += ["", "### Review procedures"]
+    lines += [f"- {name}: {text}" for name, text in REVIEW_PROCEDURES.items()]
+    lines.append(
+        "- Each review result is an agent interpretation citing file and line; "
+        "it never satisfies a requirement that needs a check or a record."
+    )
+    lines += ["", "### Required inputs"]
+    lines += [f"- {text}" for text in REQUIRED_INPUTS]
+    exports = [
+        export
+        for job in jobs
+        for export in (job.input.get("exports") or [])
+        if isinstance(export, dict)
+    ]
+    lines += [
+        f"- Export {_safe(e.get('fileName'))} ({_safe(e.get('artifactRef'))}): device "
+        f"{_safe(e.get('device'))}, exported {_safe(e.get('exportedAt'))}, supplied by "
+        f"{_safe(e.get('supplier'))}."
+        for e in exports
+    ] or ["- No export is planned yet; see the open points."]
+    lines.append(f"- {PROVENANCE}")
+    return lines
+
+
 def render_security_plan(plan: SecurityPlan, *, plan_ref: str | None = None) -> str:
     """A readable plan and its gap list. It describes work; it grants nothing."""
     subject, project = plan.subject, plan.subject.project
@@ -1448,6 +1539,8 @@ def render_security_plan(plan: SecurityPlan, *, plan_ref: str | None = None) -> 
         )
     if not plan.jobs:
         lines.append("- No planned jobs.")
+    if subject.type == "network":
+        lines += _network_sections(plan)
     lines += ["", "### Open points"]
     lines += [f"- {point.kind}: {_safe(point.text)}" for point in plan.open_points]
     if not plan.open_points:

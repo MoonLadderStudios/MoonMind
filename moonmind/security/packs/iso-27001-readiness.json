@@ -2592,6 +2592,9 @@
           "reviewedOn": "2026-11-09"
         }
       ],
+      "subjectTypes": [
+        "network"
+      ],
       "evidenceTypes": [
         "organisational",
         "technical_context"
@@ -2616,6 +2619,9 @@
           "reviewedOn": "2026-11-09"
         }
       ],
+      "subjectTypes": [
+        "network"
+      ],
       "evidenceTypes": [
         "organisational",
         "technical_context"
@@ -2639,6 +2645,9 @@
           "section": "A.8.22",
           "reviewedOn": "2026-11-09"
         }
+      ],
+      "subjectTypes": [
+        "network"
       ],
       "evidenceTypes": [
         "organisational",

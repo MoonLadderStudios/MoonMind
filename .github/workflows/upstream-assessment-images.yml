@@ -1,8 +1,8 @@
 name: Qualify / Upstream Assessment Images
 
-# Runs the deployment's default ZAP and Prowler images (their `stable` tags,
-# or explicit dispatch overrides) with MoonMind's rendered plan and argv
-# against local fixtures. Nothing is published or pinned: a failure reports
+# Runs the deployment's default ZAP, Prowler and Batfish images (their
+# `stable` or `latest` tags, or explicit dispatch overrides) with MoonMind's
+# rendered plan, argv or runner against local fixtures. Nothing is published or pinned: a failure reports
 # that the current upstream release no longer satisfies MoonMind's adapters.
 
 on:
@@ -17,6 +17,9 @@ on:
       - "moonmind/security/tls_assessment*.py"
       - "moonmind/security/dns_assessment*.py"
       - "moonmind/security/service_inventory*.py"
+      - "moonmind/security/network_config*.py"
+      - "tests/fixtures/security/network_config/**"
+      - "tests/integration/security/test_upstream_network_config_image.py"
       - "moonmind/security/native_tcp_gateway.py"
       - "moonmind/security/egress_policy.py"
       - "services/repository-security/Dockerfile"
@@ -40,6 +43,9 @@ on:
       - "moonmind/security/tls_assessment*.py"
       - "moonmind/security/dns_assessment*.py"
       - "moonmind/security/service_inventory*.py"
+      - "moonmind/security/network_config*.py"
+      - "tests/fixtures/security/network_config/**"
+      - "tests/integration/security/test_upstream_network_config_image.py"
       - "moonmind/security/native_tcp_gateway.py"
       - "moonmind/security/egress_policy.py"
       - "services/repository-security/Dockerfile"
@@ -66,6 +72,9 @@ on:
 
       repository_security_image:
         description: "Published scanner tool/rule base for candidate TLS qualification; omitted uses repository-security:latest"
+        type: string
+      network_config_image:
+        description: "Batfish image override; omitted qualifies batfish/allinone:latest"
         type: string
 
 permissions:
@@ -119,6 +128,33 @@ jobs:
           tests/integration/security/test_upstream_assessment_images.py
           -k "not tls" -m "integration_ci or integration"
 
+
+  qualify-network-config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      MOONMIND_RUN_UPSTREAM_ASSESSMENT_IMAGES: "1"
+      MOONMIND_NETWORK_CONFIG_IMAGE: ${{ inputs.network_config_image || 'batfish/allinone:latest' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install runtime dependencies via uv
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .[tests]
+      - name: Pull the analyzer image
+        run: |
+          set -euo pipefail
+          docker pull --quiet "$MOONMIND_NETWORK_CONFIG_IMAGE"
+          # Evidence of what ran, not a pin for later runs.
+          echo "- \`$MOONMIND_NETWORK_CONFIG_IMAGE\`: $(docker image inspect --format '{{index .RepoDigests 0}}' "$MOONMIND_NETWORK_CONFIG_IMAGE")" >> "$GITHUB_STEP_SUMMARY"
+      - name: Qualify the analyzer against weakened and corrected fixtures
+        run: >-
+          python -m pytest -q -s
+          tests/integration/security/test_upstream_network_config_image.py
+          -m "integration_ci or integration"
 
   qualify-tls:
     runs-on: ${{ matrix.runner }}

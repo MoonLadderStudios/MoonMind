@@ -2822,16 +2822,24 @@ class PresetCatalogService:
             ) from None
         except ValueError as exc:
             raise PresetValidationError(f"Security plan run: {exc}") from None
+        kinds = {job.id: job.kind for job in plan.jobs}
+        # Agent-free jobs are their typed container job as a tool step, so
+        # they run even when the evidence-processing policy keeps evidence
+        # from models; others include their technical preset.
         steps: list[dict[str, Any]] = [
-            {
-                "kind": _INCLUDE_KIND,
-                "slug": preset,
-                "alias": f"plan-job-{job_id}",
-                "inputMapping": {
-                    "goal": f"Planned job {job_id} of security plan {identity}.",
-                    "assessment": value,
-                },
-            }
+            (
+                plan_run.tool_job_step(job_id, identity, kinds[job_id], value)
+                if preset == plan_run.CONTAINER_TOOL
+                else {
+                    "kind": _INCLUDE_KIND,
+                    "slug": preset,
+                    "alias": f"plan-job-{job_id}",
+                    "inputMapping": {
+                        "goal": f"Planned job {job_id} of security plan {identity}.",
+                        "assessment": value,
+                    },
+                }
+            )
             for job_id, preset, value in launch
         ]
         steps.append(
@@ -2845,7 +2853,12 @@ class PresetCatalogService:
         )
         step_variables = {**variables, "securityPlanRun": {"steps": steps}}
         overlays = [
-            plan_run.job_step_overlay(job_id, identity) for job_id, _, _ in launch
+            (
+                None
+                if preset == plan_run.CONTAINER_TOOL
+                else plan_run.job_step_overlay(job_id, identity)
+            )
+            for job_id, preset, _ in launch
         ] + [None]
         return [
             (
