@@ -360,8 +360,11 @@ def qualify_endpoint(image, source, output, scratch, evidence) -> dict:
 
 
 #: The live fixture host: Debian 12 with sshd and Debian's OpenSCAP, the
-#: endpoint fixture's APT settings, and an ``inspector`` login. The ``slow``
-#: variant's evaluation never finishes, for the timeout and stop journeys.
+#: endpoint fixture's APT settings, and an ``inspector`` login. The base
+#: image's own DEB822 sources are removed once packages are installed, since
+#: ``apt_sources_list_official`` also reads them and the offline copy has
+#: none. The ``slow`` variant's evaluation never finishes, for the timeout and
+#: stop journeys.
 ENDPOINT_HOST = "endpoint.qualification.test"
 ENDPOINT_HOST_BASE = "debian:bookworm-slim"
 _FIXTURE_HOST = """\
@@ -370,7 +373,7 @@ RUN apt-get -o Acquire::Retries=3 update \\
     && apt-get install --no-install-recommends -y openssh-server \\
     && {{ apt-get install --no-install-recommends -y openscap-scanner \\
          || apt-get install --no-install-recommends -y libopenscap8; }} \\
-    && rm -rf /var/lib/apt/lists/* \\
+    && rm -rf /var/lib/apt/lists/* /etc/apt/sources.list.d/* \\
     && useradd --create-home --shell /bin/sh inspector \\
     && install -d -m 0700 -o inspector -g inspector /home/inspector/.ssh \\
     && mkdir -p /run/sshd \\
