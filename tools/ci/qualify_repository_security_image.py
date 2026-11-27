@@ -501,8 +501,12 @@ class EndpointHostLab:
         )
         return name
 
-    def gateway(self, label: str, port: int, limits: dict) -> Path:
-        """One lease's gateway admitting only the fixture host and port."""
+    def gateway(self, label: str, port: int, limits: dict, deadline: int) -> Path:
+        """One lease's gateway admitting only the fixture host and port.
+
+        Like a worker lease, it closes at ``deadline``: the native duration
+        from its start, which the runner also receives.
+        """
         state = self.scratch.parent / f"endpoint-gateway-{label}"
         owned_directory(state)
         config = self.scratch.parent / f"endpoint-gateway-{label}.json"
@@ -510,7 +514,7 @@ class EndpointHostLab:
             json.dumps(
                 {
                     "leaseId": f"qualification-{label}",
-                    "deadlineUnix": time.time() + 900,
+                    "deadlineUnix": deadline,
                     "listenHost": f"{self.jobs[1]}.2",
                     "listenPort": 3128,
                     "clientIp": f"{self.jobs[1]}.3",
@@ -607,7 +611,7 @@ class EndpointHostLab:
 
 
 def run_endpoint_host(
-    lab, source, output, label, assessment, key: Path, *, detach=False
+    lab, source, output, label, assessment, key: Path, *, deadline: int, detach=False
 ):
     """The admitted runner in the scanner image, reaching the host via the gateway."""
     result = output / f"endpoint-host-{label}"
@@ -630,6 +634,8 @@ def run_endpoint_host(
             f"{lab.jobs[1]}.3",
             "--env",
             f"MOONMIND_EGRESS_PROXY=http://{lab.jobs[1]}.2:3128",
+            "--env",
+            f"MOONMIND_EGRESS_DEADLINE={deadline}",
             *(("--detach", "--name", f"{lab.prefix}-job-{label}") if detach else ()),
         ),
     )
@@ -724,7 +730,13 @@ def qualify_endpoint_host(image, source, output, scratch, evidence, offline) -> 
             keep_host=False,
         ):
             host = host or lab.host(label, tags[variant])
-            state = lab.gateway(label, port, limits)
+            # The gateway closes when the admitted native duration ends, so a
+            # timed-out evaluation must leave its cleanup inside that window.
+            duration = min(timeout, limits["maxDurationSeconds"])
+            deadline = int(time.time()) + duration
+            state = lab.gateway(
+                label, port, {**limits, "maxDurationSeconds": duration}, deadline
+            )
             pinned = key or host_keys[variant]
             result = run_endpoint_host(
                 lab,
@@ -733,6 +745,7 @@ def qualify_endpoint_host(image, source, output, scratch, evidence, offline) -> 
                 label,
                 assessment(port, pinned, timeout),
                 credential,
+                deadline=deadline,
             )
             execution = endpoint_host_execution(result, evidence, label)
             gateway = json.loads((state / "snapshot.json").read_text())
@@ -809,7 +822,8 @@ def qualify_endpoint_host(image, source, output, scratch, evidence, offline) -> 
             raise ImageError(f"endpoint host timeout: {execution} {seen}")
 
         host = lab.host("stop", tags["slow"])
-        lab.gateway("stop", 22, limits)
+        deadline = int(time.time()) + limits["maxDurationSeconds"]
+        lab.gateway("stop", 22, limits, deadline)
         result = run_endpoint_host(
             lab,
             source,
@@ -817,6 +831,7 @@ def qualify_endpoint_host(image, source, output, scratch, evidence, offline) -> 
             "stop",
             assessment(22, host_keys["slow"], 600),
             client,
+            deadline=deadline,
             detach=True,
         )
         for _ in range(600):

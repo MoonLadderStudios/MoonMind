@@ -3383,11 +3383,12 @@ class DockerContainerJobBackend:
             ))
             for item in scoped.proxy_env():
                 args.extend(("--env", item))
-            if (
-                spec.workload_profile is not None
-                and spec.workload_profile.service_inventory is not None
+            if spec.workload_profile is not None and (
+                spec.workload_profile.service_inventory is not None
+                or spec.workload_profile.endpoint_assessment is not None
             ):
-                # Keep the original lease expiry across retries, never a fresh duration.
+                # Keep the original lease expiry across retries, never a fresh
+                # duration; a live host evaluation reserves cleanup time before it.
                 args.extend((
                     "--env", f"MOONMIND_EGRESS_DEADLINE={scoped_evidence['expiresAt']}"
                 ))

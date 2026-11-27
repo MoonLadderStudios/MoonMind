@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -24,6 +25,7 @@ import stat
 import sys
 import tarfile
 import tempfile
+import time
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -640,6 +642,29 @@ HOST_CREDENTIAL = Path("/run/moonmind-credentials/host")
 HOST_ALIAS = "moonmind-endpoint"
 _REMOTE_DIRECTORY = re.compile(r"/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+){0,8}")
 _CLEANUP_SECONDS = 10
+#: Evaluation stops this long before the gateway closes, so the cleanup
+#: session (plus stopping the interrupted step) still has a route to the host.
+_CLEANUP_RESERVE_SECONDS = _CLEANUP_SECONDS + 5
+
+
+def _evaluation_seconds(assessment: EndpointAssessment, environ) -> float:
+    """Time the evaluation may use while leaving the cleanup reserve.
+
+    The gateway closes at the lease's original deadline, which the worker
+    passes as ``MOONMIND_EGRESS_DEADLINE``, and never later than the host's
+    native duration. Without a usable deadline the native duration is
+    counted from this runner's start.
+    """
+    window = float(
+        min(assessment.timeout_seconds, assessment.host.limits.max_duration_seconds)
+    )
+    try:
+        deadline = float(environ.get("MOONMIND_EGRESS_DEADLINE", "nan"))
+    except ValueError:
+        deadline = math.nan
+    if math.isfinite(deadline):
+        window = min(window, deadline - time.time())
+    return max(0.0, window - _CLEANUP_RESERVE_SECONDS)
 
 
 def _private_copy(source: Path, destination: Path) -> Path:
@@ -786,7 +811,9 @@ def run_live_host_assessment(
     """
     environ = os.environ if environ is None else environ
     output.mkdir(parents=True, exist_ok=True)
-    processes = BoundedProcesses(assessment.timeout_seconds, _MAX_RAW_BYTES)
+    processes = BoundedProcesses(
+        _evaluation_seconds(assessment, environ), _MAX_RAW_BYTES
+    )
     previous = signal.signal(signal.SIGTERM, processes.cancel)
     execution = EndpointExecution(target="host", version="unavailable", state="failed")
     limitations: list[str] = []
@@ -897,8 +924,9 @@ def run_live_host_assessment(
         finally:
             signal.signal(signal.SIGTERM, previous)
             if remote is not None:
-                # A short session of its own: a stop or elapsed budget still
-                # removes what this job placed on the host.
+                # A short session of its own inside the reserved time before
+                # the gateway closes: a stop or elapsed budget still removes
+                # what this job placed on the host.
                 cleanup = BoundedProcesses(_CLEANUP_SECONDS, 1 << 20)
                 try:
                     code, _ = session(

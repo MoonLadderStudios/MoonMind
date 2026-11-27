@@ -9,6 +9,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -80,6 +81,8 @@ class FakeHost:
         self.identity_read = False
         self.uploaded = b""
         self.removed = False
+        #: Each session's remaining time budget when it started.
+        self.budgets: list[tuple[str, float]] = []
 
     def __call__(
         self, processes, argv, *, cwd, env, capture=None, errors=None, stdin=None, **_
@@ -109,6 +112,7 @@ class FakeHost:
         )
         assert step, remote
         self.sessions.append(step)
+        self.budgets.append((step, processes.deadline - time.monotonic()))
         if processes.stopped():
             return None, "canceled" if processes.canceled else "timed_out"
 
@@ -158,7 +162,7 @@ class FakeHost:
         return self
 
 
-def run(tmp_path, content, credential, fake, **changes):
+def run(tmp_path, content, credential, fake, *, environ=None, **changes):
     model = EndpointAssessment.model_validate(assessment(**changes))
     output = tmp_path / "out"
     code = runner.run_live_host_assessment(
@@ -166,7 +170,7 @@ def run(tmp_path, content, credential, fake, **changes):
         output=output,
         content=content,
         credential=credential,
-        environ={"MOONMIND_EGRESS_PROXY": "http://gateway:3128"},
+        environ={"MOONMIND_EGRESS_PROXY": "http://gateway:3128", **(environ or {})},
     )
     execution = EndpointExecution.model_validate_json(
         (output / "execution.json").read_text()
@@ -274,6 +278,67 @@ def test_timeout_and_cancellation_still_remove_remote_files(
     assert host.sessions == ["prepare", "upload", "evaluate", "cleanup"]
     assert host.removed
     assert not (output / "results.xml").exists()
+
+
+def _fits_before_gateway_closes(host: FakeHost, gateway_seconds: float) -> None:
+    """Every evaluation step ends early enough for cleanup to still be routed."""
+    cleanup = [budget for step, budget in host.budgets if step == "cleanup"]
+    assert len(cleanup) == 1 and cleanup[0] > 0
+    for step, budget in host.budgets:
+        if step != "cleanup":
+            assert budget > 0, step
+            assert budget + cleanup[0] <= gateway_seconds + 1, (step, budget)
+
+
+def test_evaluation_leaves_cleanup_time_inside_the_original_lease(
+    tmp_path, monkeypatch, content, credential
+):
+    host = FakeHost().install(monkeypatch)
+    # The lease started earlier; its original deadline is sooner than a fresh
+    # native duration or the evaluation timeout would end.
+    closes = int(time.time()) + 300
+    code, _, execution, _ = run(
+        tmp_path,
+        content,
+        credential,
+        host,
+        environ={"MOONMIND_EGRESS_DEADLINE": str(closes)},
+    )
+    assert code == 0 and execution.state == "succeeded"
+    assert host.sessions == ["prepare", "upload", "evaluate", "fetch", "cleanup"]
+    _fits_before_gateway_closes(host, closes - time.time())
+
+
+def test_without_a_lease_deadline_the_native_duration_still_bounds_evaluation(
+    tmp_path, monkeypatch, content, credential
+):
+    host = FakeHost().install(monkeypatch)
+    limits = {
+        "maxConnections": 8,
+        "maxBytes": 256 * 1024 * 1024,
+        "maxConnectionsPerSecond": 2,
+        "maxConcurrentConnections": 1,
+        "maxDurationSeconds": 120,
+    }
+    started = time.time()
+    code, _, _, _ = run(tmp_path, content, credential, host, host={"limits": limits})
+    assert code == 0
+    _fits_before_gateway_closes(host, started + 120 - time.time())
+
+
+def test_a_lease_without_room_for_cleanup_never_reaches_the_host(
+    tmp_path, monkeypatch, content, credential
+):
+    host = FakeHost().install(monkeypatch)
+    code, _, execution, _ = run(
+        tmp_path,
+        content,
+        credential,
+        host,
+        environ={"MOONMIND_EGRESS_DEADLINE": str(int(time.time()) + 3)},
+    )
+    assert code == 2 and execution.state == "timed_out"
+    assert not host.uploaded and "cleanup" not in host.sessions
 
 
 def test_elevation_is_only_used_when_admitted_and_never_prompts(

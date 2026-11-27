@@ -222,3 +222,55 @@ async def test_completed_host_evidence_survives_a_stop_in_the_offline_shape(
     assert (summary.coverage == "complete") is (state == "succeeded")
     for payload in fixture.published.values():
         assert KEY_VALUE.encode() not in payload
+
+
+@pytest.mark.asyncio
+async def test_host_launch_carries_the_original_lease_deadline_on_each_attempt(
+    tmp_path, monkeypatch
+):
+    """The runner reserves cleanup time before the gateway's actual close."""
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    fixture = Fixture(tmp_path)
+    backend = fixture.backend
+    original_expiry = 1800000000.25
+    scoped = SimpleNamespace(
+        network_ref="native-network",
+        gateway_ref="native-gateway",
+        policy=SimpleNamespace(digest="digest"),
+        prepare=AsyncMock(
+            return_value={
+                "proxyAddress": "172.20.0.2",
+                "clientAddress": "172.20.0.3",
+                "gatewayIdentity": "gateway-id",
+                "snapshotDigest": "digest",
+                "expiresAt": original_expiry,
+            }
+        ),
+        proxy_env=lambda: ["MOONMIND_EGRESS_PROXY=http://native-gateway:3128"],
+    )
+
+    @asynccontextmanager
+    async def guard(*args, **kwargs):
+        yield original_expiry
+
+    monkeypatch.setattr(backend, "_assessment_guard", guard)
+    monkeypatch.setattr(backend, "_scoped_lease", lambda request: scoped)
+    monkeypatch.setattr(backend, "_reject_ownership_collision", AsyncMock())
+    monkeypatch.setattr(backend, "_prepare_attachments", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        backend, "_publish_scoped_egress", AsyncMock(return_value="art_lease")
+    )
+    launch = AsyncMock(return_value=(0, b"", b""))
+    monkeypatch.setattr(backend, "_assessment_launch_command", launch)
+    for _ in range(2):
+        await backend.create_container(fixture.request)
+    assert launch.call_args_list
+    for call in launch.call_args_list:
+        argv = call.args[1]
+        assert [
+            item for item in argv if item.startswith("MOONMIND_EGRESS_DEADLINE=")
+        ] == [f"MOONMIND_EGRESS_DEADLINE={original_expiry}"]
+        assert KEY_VALUE not in " ".join(argv)

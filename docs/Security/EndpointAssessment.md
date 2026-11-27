@@ -104,7 +104,10 @@ argument. Each step is one session: create a private temporary directory,
 copy the selected shipped datastream into it, run `oscap xccdf eval` with the
 admitted profile and skipped rules (through `sudo -n` only when admitted),
 read back the ARF result, and remove the directory, also after a timeout or
-stop. Nothing else runs on the host. A failure records one code:
+stop. The gateway closes at the lease's original deadline (passed to the job as
+`MOONMIND_EGRESS_DEADLINE`, never later than the native duration), so
+evaluation stops a short reserve before it and removal still reaches the host.
+Nothing else runs on the host. A failure records one code:
 `host_identity_unverified`, `host_authentication_failed`,
 `host_credential_invalid`, `host_unreachable`, `host_connection_denied`,
 `host_connect_timed_out`, `remote_scanner_unavailable`, `elevation_refused` or
