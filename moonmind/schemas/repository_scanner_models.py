@@ -275,6 +275,92 @@ class ImageAssessment(Contract):
         ]
 
 
+EndpointTarget = Literal["rootfs", "image", "results"]
+MAX_ENDPOINT_REPORT_BYTES = 32 * 1024 * 1024
+#: XCCDF identifiers stay short, printable and separator-free.
+XCCDF_ID = r"^xccdf_[A-Za-z0-9.-]+_KIND_[A-Za-z0-9_.-]{1,128}$"
+#: Request words an evaluation never accepts; it reads, it does not change.
+_REMEDIATION_WORDS = ("remediat", "fix", "command", "script", "argv", "args")
+
+
+class EndpointAssessment(Contract):
+    """Offline OpenSCAP evaluation of an endpoint, or import of its results.
+
+    ``rootfs`` and ``image`` read a captured root filesystem tar or Docker/OCI
+    image archive and evaluate a ComplianceAsCode profile shipped in the
+    scanner image, with no network. ``results`` imports ARF or XCCDF results
+    the operator produced with OpenSCAP on the endpoint. Neither is MoonMind's
+    own observation of the running device. Evaluation is read-only: the
+    contract has no remediation, fix-generation or command input.
+    """
+
+    target: EndpointTarget
+    # The endpoint's stable name in the assessment scope; findings attach to it.
+    asset: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$")
+    input_artifact_ref: str = Field(pattern=r"^art_[0-9A-Za-z]{1,64}$")
+    datastream: str | None = Field(None, pattern=r"^ssg-[a-z0-9]{2,32}-ds\.xml$")
+    profile: str | None = Field(
+        None, pattern=XCCDF_ID.replace("KIND", "profile"), max_length=176
+    )
+    tailoring_artifact_ref: str | None = Field(None, pattern=r"^art_[0-9A-Za-z]{1,64}$")
+    # Rules this assessment must evaluate. Any the profile leaves unselected, or
+    # that end without pass or fail, leave the run partial.
+    rule_ids: list[
+        Annotated[str, StringConstraints(pattern=XCCDF_ID.replace("KIND", "rule"))]
+    ] = Field(default_factory=list, max_length=256, exclude_if=lambda value: not value)
+    output_directory: str = "endpoint-assessment"
+    max_input_bytes: int = Field(2 * 1024**3, ge=1, le=4 * 1024**3)
+    max_report_bytes: int = Field(
+        MAX_ENDPOINT_REPORT_BYTES, ge=1024, le=MAX_ENDPOINT_REPORT_BYTES
+    )
+    timeout_seconds: int = Field(1800, ge=60, le=3600)
+
+    @model_validator(mode="before")
+    @classmethod
+    def read_only(cls, value):
+        if isinstance(value, dict) and any(
+            word in str(key).lower() for key in value for word in _REMEDIATION_WORDS
+        ):
+            raise ValueError(
+                "endpoint evaluation is read-only; remediation, fix generation and "
+                "commands are refused"
+            )
+        return value
+
+    @field_validator("output_directory")
+    @classmethod
+    def output_relative(cls, value):
+        return relative_path(value)
+
+    @model_validator(mode="after")
+    def admitted_choices(self):
+        evaluate = self.target != "results"
+        if evaluate and (self.datastream is None or self.profile is None):
+            raise ValueError(
+                "offline evaluation names a shipped datastream and profile"
+            )
+        if not evaluate and (self.datastream or self.tailoring_artifact_ref):
+            raise ValueError("imported results already name their content")
+        if len(set(self.rule_ids)) != len(self.rule_ids):
+            raise ValueError("duplicate required rule")
+        if self.tailoring_artifact_ref == self.input_artifact_ref:
+            raise ValueError("tailoring is its own artifact")
+        return self
+
+    def outputs(self) -> list[dict]:
+        return [
+            {"name": "results", "relativePath": f"{self.output_directory}/results.xml"},
+            {
+                "name": "execution",
+                "relativePath": f"{self.output_directory}/execution.json",
+            },
+            {
+                "name": "summary",
+                "relativePath": f"{self.output_directory}/summary.json",
+            },
+        ]
+
+
 WebMode = Literal["baseline", "api", "active", "known-issues"]
 HttpMethod = Literal["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 #: The scope action class each mode needs. Network permission reaches the

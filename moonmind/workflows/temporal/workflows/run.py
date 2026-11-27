@@ -1552,7 +1552,10 @@ RUN_ASSESSMENT_SCOPE_AUTHORITY_PATCH = "run-assessment-scope-authority-v1"
 # scoped work stays refused without the scope, and fan-out stays refused.
 RUN_ASSESSMENT_UNSCOPED_JOB_STEPS_PATCH = "run-assessment-unscoped-job-steps-v1"
 #: Job kinds whose derived plan authority is unscoped (security_plan.job_authority).
-_UNSCOPED_ASSESSMENT_JOB_KINDS = frozenset({"repository-scan", "image-assessment"})
+#: No recorded history names ``endpoint-assessment``: plans could not before.
+_UNSCOPED_ASSESSMENT_JOB_KINDS = frozenset(
+    {"repository-scan", "image-assessment", "endpoint-assessment"}
+)
 # Tool steps receive the run's runtime selection so issue search can check
 # provider capacity before claiming work. Replay-gated so histories that
 # recorded the old tool Activity arguments keep replaying them.

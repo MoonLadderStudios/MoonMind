@@ -15,6 +15,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 
 DEFAULT_BASE = "python:3.12-slim-bookworm"
@@ -24,6 +25,13 @@ REPOSITORIES = {
     "trivy": "aquasecurity/trivy",
 }
 ARCHITECTURES = ("amd64", "arm64")
+#: ComplianceAsCode (SCAP Security Guide) content evaluated by OpenSCAP.
+CONTENT_REPOSITORY = "ComplianceAsCode/content"
+#: Shipped datastreams: dpkg-based distributions, which the image's
+#: Debian-built OpenSCAP evaluates offline. Mirrored by
+#: ``endpoint_assessments.SHIPPED_DATASTREAMS``.
+CONTENT_PRODUCTS = ("debian12", "debian13", "ubuntu2204", "ubuntu2404")
+_MAX_DATASTREAM_BYTES = 256 * 1024 * 1024
 ROOT = Path(__file__).resolve().parents[2]
 # Package the runners' imports, without schema-package reexports or the app.
 RUNNER_FILES = (
@@ -50,6 +58,8 @@ RUNNER_FILES = (
     "security/frameworks.py",
     "security/identity_lifecycle.py",
     "security/oscal_export.py",
+    "security/endpoint_assessments.py",
+    "security/endpoint_assessment_runner.py",
     "schemas/repository_scanner_models.py",
     "schemas/agent_runtime_models.py",
     "schemas/managed_session_models.py",
@@ -123,8 +133,53 @@ def fetch_json(url: str):
         return json.loads(path.read_text())
 
 
+def resolve_content(override: str = "") -> dict:
+    """The newest stable ComplianceAsCode release, or an explicit one."""
+    version = override if override.startswith("v") else "v" + override
+    if override and not re.fullmatch(r"v\d+\.\d+\.\d+", version):
+        raise ImageError("complianceascode: invalid release version")
+    selector = "tags/" + version if override else "latest"
+    release = fetch_json(
+        f"https://api.github.com/repos/{CONTENT_REPOSITORY}/releases/{selector}"
+    )
+    if release.get("draft") or (not override and release.get("prerelease")):
+        raise ImageError("complianceascode: default must be a stable release")
+    tag = release["tag_name"]
+    if not re.fullmatch(r"v\d+\.\d+\.\d+", tag) or (override and tag != version):
+        raise ImageError(f"complianceascode: unexpected release tag {tag!r}")
+    available = {asset["name"]: asset for asset in release["assets"]}
+    selected = {}
+    for role, name in (
+        ("archive", f"scap-security-guide-{tag[1:]}.zip"),
+        ("checksum", f"scap-security-guide-{tag[1:]}.zip.sha512"),
+    ):
+        if name not in available:
+            raise ImageError(
+                f"complianceascode {tag}: required upstream asset missing: {name}"
+            )
+        data = available[name]
+        expected = (
+            f"https://github.com/{CONTENT_REPOSITORY}/releases/download/{tag}/{name}"
+        )
+        if data["browser_download_url"] != expected:
+            raise ImageError(
+                "complianceascode: asset URL is outside the selected release"
+            )
+        selected[role] = {
+            key: data[key]
+            for key in ("name", "id", "browser_download_url", "digest")
+            if key in data
+        }
+    return {
+        "repository": CONTENT_REPOSITORY,
+        "version": tag,
+        "releaseId": release["id"],
+        "assets": selected,
+    }
+
+
 def resolve_inputs(
-    *, opengrep="", gitleaks="", trivy="", base_image=DEFAULT_BASE
+    *, opengrep="", gitleaks="", trivy="", complianceascode="", base_image=DEFAULT_BASE
 ) -> dict:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_./:@-]*", base_image):
         raise ImageError("base image must be a container image reference")
@@ -201,6 +256,7 @@ def resolve_inputs(
             "releaseId": release["id"],
             "assets": selected,
         }
+    inputs["content"] = resolve_content(complianceascode)
     return inputs
 
 
@@ -248,6 +304,83 @@ def verify_checksum(binary: Path, checksums: str) -> None:
     ]
     if matches != [actual]:
         raise ImageError(f"checksum missing or invalid for {binary.name}")
+
+
+def verify_sha512(archive: Path, checksums: str) -> None:
+    with archive.open("rb") as stream:
+        actual = hashlib.file_digest(stream, "sha512").hexdigest()
+    matches = [
+        line.split()[0]
+        for line in checksums.splitlines()
+        if len(line.split()) == 2 and line.split()[1].lstrip("*") == archive.name
+    ]
+    if matches != [actual]:
+        raise ImageError(f"checksum missing or invalid for {archive.name}")
+
+
+def stage_content(release: dict, destination: Path, notices: Path, evidence: Path):
+    """Verify the content release, then stage only the shipped datastreams.
+
+    The release publishes an HTTPS SHA-512 checksum and no signature. Nothing
+    reaches the build context until the archive matches it, and each staged
+    datastream's digest is recorded for the runner to check before use.
+    """
+    downloads = evidence / "complianceascode"
+    downloads.mkdir(parents=True, exist_ok=True)
+    material, identities = {}, {}
+    for role, asset in release["assets"].items():
+        path = downloads / asset["name"]
+        download(asset["browser_download_url"], path)
+        with path.open("rb") as stream:
+            digest = "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
+        if asset.get("digest") and asset["digest"] != digest:
+            raise ImageError(
+                f"complianceascode: upstream asset digest mismatch: {asset['name']}"
+            )
+        material[role], identities[role] = path, {**asset, "resolvedDigest": digest}
+    verify_sha512(material["archive"], material["checksum"].read_text())
+    tag = release["version"]
+    prefix = f"scap-security-guide-{tag[1:]}/"
+    target = destination / "endpoint-content"
+    target.mkdir(parents=True, exist_ok=True)
+    datastreams = {}
+    with zipfile.ZipFile(material["archive"]) as bundle:
+        members = {info.filename: info for info in bundle.infolist()}
+        for name in [f"ssg-{product}-ds.xml" for product in CONTENT_PRODUCTS] + [
+            "LICENSE"
+        ]:
+            info = members.get(prefix + name)
+            if info is None or info.is_dir() or info.file_size > _MAX_DATASTREAM_BYTES:
+                raise ImageError(
+                    f"complianceascode {tag}: required content missing: {name}"
+                )
+            output = (
+                notices / "complianceascode-LICENSE"
+                if name == "LICENSE"
+                else (target / name)
+            )
+            with bundle.open(info) as source, output.open("wb") as stream:
+                shutil.copyfileobj(source, stream)
+            if name != "LICENSE":
+                datastreams[name] = hashlib.sha256(output.read_bytes()).hexdigest()
+    source = f"https://github.com/{CONTENT_REPOSITORY}/archive/refs/tags/{tag}.tar.gz"
+    manifest = {
+        "schemaVersion": 1,
+        "release": tag[1:],
+        "source": source,
+        "license": "BSD-3-Clause",
+        "datastreams": datastreams,
+    }
+    (target / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    return {
+        "version": tag,
+        "releaseId": release["releaseId"],
+        "assets": identities,
+        "verification": "upstream-https-sha512 (upstream publishes no signature)",
+        "source": source,
+        "license": "BSD-3-Clause",
+        "datastreams": datastreams,
+    }
 
 
 def install_binary(tool: str, archive: Path, destination: Path) -> None:
@@ -388,13 +521,15 @@ def prepare(inputs: dict, arch: str, destination: Path, evidence: Path) -> None:
     download(
         inventory["tools"]["opengrep"]["source"], evidence / "opengrep-source.tar.gz"
     )
+    inventory["content"] = stage_content(
+        inputs["content"], destination, notices, evidence
+    )
     inventory["defaultRules"] = stage_default_rules(destination / "rules", notices)
     stage_runner(destination / "python")
     (destination / "inventory.json").write_text(json.dumps(inventory, indent=2) + "\n")
-    (notices / "sources.json").write_text(
-        json.dumps({t: d["source"] for t, d in inventory["tools"].items()}, indent=2)
-        + "\n"
-    )
+    sources = {t: d["source"] for t, d in inventory["tools"].items()}
+    sources["complianceascode"] = inventory["content"]["source"]
+    (notices / "sources.json").write_text(json.dumps(sources, indent=2) + "\n")
 
 
 def verification_negatives(inputs: dict, arch: str, evidence: Path) -> None:
@@ -489,6 +624,7 @@ def main() -> None:
     resolve = commands.add_parser("resolve")
     for tool in REPOSITORIES:
         resolve.add_argument("--" + tool + "-version", default="")
+    resolve.add_argument("--complianceascode-version", default="")
     resolve.add_argument("--base-image", default=DEFAULT_BASE)
     resolve.add_argument("--output", type=Path, required=True)
     stage = commands.add_parser("prepare")
@@ -509,6 +645,7 @@ def main() -> None:
             opengrep=args.opengrep_version,
             gitleaks=args.gitleaks_version,
             trivy=args.trivy_version,
+            complianceascode=args.complianceascode_version,
             base_image=args.base_image,
         )
         args.output.parent.mkdir(parents=True, exist_ok=True)

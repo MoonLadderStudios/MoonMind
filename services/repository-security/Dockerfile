@@ -3,8 +3,14 @@ ARG SECURITY_BASE_IMAGE=python:3.12-slim-bookworm
 FROM ${SECURITY_BASE_IMAGE}
 ARG SECURITY_BASE_IDENTITY=unknown
 
+# OpenSCAP comes from the signed Debian archive with its security updates.
+# Debian 12 ships oscap in libopenscap8; later releases name the package
+# openscap-scanner.
 RUN apt-get -o Acquire::Retries=3 update \
     && apt-get install --no-install-recommends -y git ca-certificates openssl libstdc++6 \
+    && { apt-get install --no-install-recommends -y openscap-scanner \
+         || apt-get install --no-install-recommends -y libopenscap8; } \
+    && oscap --version \
     && rm -rf /var/lib/apt/lists/* \
     && python -m pip install --no-cache-dir 'pydantic>=2.12.5,<2.15.0' 'cryptography>=46.0.7,<50.1.0' 'httpx~=0.28.1' 'dnspython>=2.9.0,<3.0.0' \
     && useradd --uid 1000 --create-home --home-dir /home/scanner scanner \
@@ -15,6 +21,7 @@ COPY services/repository-security/resolved/bin/ /usr/local/bin/
 COPY services/repository-security/resolved/rules/ /opt/moonmind-scanner-rules/default/
 COPY services/repository-security/resolved/python/ /opt/moonmind-scanner-python/
 COPY services/repository-security/resolved/notices/ /usr/local/share/repository-security/notices/
+COPY services/repository-security/resolved/endpoint-content/ /opt/moonmind-endpoint-content/
 COPY services/repository-security/resolved/inventory.json /usr/local/share/repository-security/inventory.json
 COPY LICENSE NOTICE /usr/local/share/repository-security/notices/
 RUN SECURITY_BASE_IDENTITY="${SECURITY_BASE_IDENTITY}" python - <<'PY'
@@ -30,6 +37,9 @@ inventory = json.loads(path.read_text())
 inventory['baseIdentity'] = os.environ['SECURITY_BASE_IDENTITY']
 inventory['pythonPackages'] = {d.metadata['Name']: d.version for d in importlib.metadata.distributions()}
 inventory['systemPackages'] = subprocess.check_output(['dpkg-query', '-W', '-f=${Package}=${Version}\n'], text=True).splitlines()
+inventory['endpointScanner'] = subprocess.check_output(['oscap', '--version'], text=True).splitlines()[0]
+for doc in sorted(Path('/usr/share/doc').glob('*openscap*/copyright')):
+    Path('/usr/local/share/repository-security/notices', doc.parent.name + '-copyright').write_bytes(doc.read_bytes())
 path.write_text(json.dumps(inventory, indent=2) + '\n')
 PY
 

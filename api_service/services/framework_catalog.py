@@ -17,6 +17,7 @@ from moonmind.security.framework_packs import (
 )
 from moonmind.security.framework_registry import (
     evidence_kinds,
+    pack_subjects,
     readiness_catalog,
     subject_availability,
 )
@@ -128,12 +129,9 @@ def _describe(entry, pack, now):
         entry["reason"] = f"{error}. Register an operative edition."
     else:
         entry["available"] = True
-        entry["subjects"] = subject_availability("application")
-        if skill:
-            entry["subjects"]["endpoint"] = {
-                "available": True,
-                "scope": "HTTP(S) interfaces in the retained web/API application plan.",
-            }
+        # An endpoint is a host; the web/API methodology plans an application's
+        # HTTP(S) interfaces, not a host.
+        entry["subjects"] = subject_availability(*pack_subjects(pack))
     return entry
 
 

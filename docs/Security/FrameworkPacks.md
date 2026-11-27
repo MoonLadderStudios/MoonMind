@@ -99,7 +99,8 @@ Use `schemaVersion: declared-framework-pack/v1` with:
   the requirement. `objectivesComplete` defaults to false. `requiredEvidenceMethods` can name
   `deterministic_check`, `enquiry`, `evidence` or `observation`; optional
   `evidenceTypes` further describes needed material. Requirements can also retain
-  their own `sources`, `module`, `subjectTypes` and responsibility descriptions.
+  their own `sources`, `module`, `subjectTypes` and responsibility descriptions;
+  an `endpoint` or `network` plan keeps only rows tagged with its subject.
 - `externalClaim` on a requirement names a pack external claim: the requirement is
   external-only, declares no checks, and its plan names who can close it.
   `organisationalEvidence` lists requests (`id`, `category`, `purpose`,

@@ -45,6 +45,7 @@ RUN_PRESETS = {
     "image-assessment": "security-image-sbom",
     "web-assessment": "security-web-api",
     "cloud-assessment": "security-aws-posture",
+    "endpoint-assessment": "security-endpoint",
 }
 #: Presets whose jobs run inside the admitted assessment scope.
 SCOPED_PRESET_KINDS = frozenset({"web-assessment", "cloud-assessment"})
@@ -63,6 +64,7 @@ NATIVE_SUMMARY_VERSIONS = frozenset(
         "tls-assessment/v1",
         "dns-assessment/v1",
         "service-inventory/v1",
+        "endpoint-assessment/v1",
     }
 )
 
@@ -265,11 +267,39 @@ def job_step_overlay(job_id: str, identity: str) -> dict[str, Any]:
     }
 
 
-def _framework_pack(standard) -> dict:
+def _framework_pack(standard, plan: SecurityPlan) -> dict:
     exclude = {"title", "distribution"}
     if standard.artifact_ref is None:
         exclude.add("sha256")
-    return standard.model_dump(mode="json", by_alias=True, exclude=exclude)
+    selection = standard.model_dump(mode="json", by_alias=True, exclude=exclude)
+    if plan.subject.type != "application" and not selection.get("requirementChoices"):
+        choices = _subject_choices(standard, plan)
+        if choices:
+            selection["requirementChoices"] = choices
+    return selection
+
+
+def _subject_choices(standard, plan: SecurityPlan) -> dict:
+    """A plan run for another subject concludes under the reviewed applicability.
+
+    Its requirements are selected by the standards' own subject tags. Standards
+    with profile inputs keep their readiness rules; only an installed standard
+    without them takes each explicit applicability and reason from the plan.
+    """
+    from moonmind.security.framework_registry import INSTALLED_PACK_IDS, installed_pack
+
+    if (
+        standard.artifact_ref is not None
+        or standard.pack_id not in INSTALLED_PACK_IDS
+        or installed_pack(standard.pack_id)[1].profile is not None
+    ):
+        return {}
+    return {
+        row.id: {"applicability": row.applicability, "applicabilityReason": row.reason}
+        for row in plan.requirements
+        if (row.pack_id, row.edition) == (standard.pack_id, standard.edition)
+        and row.applicability != "undetermined"
+    }
 
 
 def conclusion_step(
@@ -287,7 +317,7 @@ def conclusion_step(
         "budget": dict(CONCLUSION_BUDGET),
         "credentialRefs": [],
         "networkRefs": [],
-        "frameworkPacks": [_framework_pack(s) for s in plan.standards],
+        "frameworkPacks": [_framework_pack(s, plan) for s in plan.standards],
         "planRun": PlanRunInput(
             plan_ref=plan_ref, plan_identity=identity, excluded=excluded
         ).model_dump(mode="json", by_alias=True),

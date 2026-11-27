@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from moonmind.schemas.repository_scanner_models import (
     CloudAssessment,
+    EndpointAssessment,
     ImageAssessment,
     RepositoryScan,
     WebAssessment,
@@ -18,6 +19,7 @@ ASSESSMENT_INPUT_CONTRACTS = {
     "image-assessment": ImageAssessment,
     "cloud-assessment": CloudAssessment,
     "web-assessment": WebAssessment,
+    "endpoint-assessment": EndpointAssessment,
 }
 
 #: Operator next action for each pre-budget readiness diagnostic. The runtime
@@ -42,6 +44,7 @@ def assessment_job_spec(contract: str, value: dict) -> dict:
     shipped CLI stamps its caller context and the API independently admits it.
     """
     from moonmind.security.cloud_assessments import build_cloud_assessment_job
+    from moonmind.security.endpoint_assessments import build_endpoint_assessment_job
     from moonmind.security.image_assessments import build_image_assessment_job
     from moonmind.security.repository_scanners import build_scanner_job
     from moonmind.security.web_assessments import build_web_assessment_job
@@ -51,6 +54,7 @@ def assessment_job_spec(contract: str, value: dict) -> dict:
         "image-assessment": build_image_assessment_job,
         "cloud-assessment": build_cloud_assessment_job,
         "web-assessment": build_web_assessment_job,
+        "endpoint-assessment": build_endpoint_assessment_job,
     }
     model = ASSESSMENT_INPUT_CONTRACTS[contract].model_validate(value)
     return builders[contract](model)
@@ -61,6 +65,7 @@ INPUT_HELP = {
     "image-assessment": "Registry targets need imageReference and egressPolicyRef; archives/SBOMs need inputArtifactRef. Vulnerability matching needs databaseCacheRef and databaseDigest; SBOM generation does not.",
     "cloud-assessment": "Select AWS, account, credentialRef, regions and egressPolicyRef, with exactly one nonempty checks or services selection.",
     "web-assessment": "API mode needs apiDefinition; active mode needs activeStrength. Admit all start, authentication and definition endpoint paths in routes, outside exclusions.",
+    "endpoint-assessment": "Name the endpoint asset and inputArtifactRef. A rootfs or image target also needs a shipped datastream (ssg-<product>-ds.xml) and its XCCDF profile; imported ARF or XCCDF results need neither. No remediation, fix or command input exists.",
 }
 
 

@@ -1,6 +1,6 @@
 # Security Tools and Assessment Workflows
 
-[Passive scans](PassiveRepoScan.md), repository scanners, Trivy feeds, image/SBOM, cloud and web/API jobs, [game math](GameMathAssessment.md), [RNG](RngAssessment.md), [RGS](RgsAssessment.md), [application access](ApplicationAccessAssessment.md), GitHub alerts and [change-control periods](PassiveRepoScan.md#github-change-control-periods), [identity lifecycle evidence](IdentityLifecycleEvidence.md), security Skills, and recurring `security.assess` comparisons are implemented. Conditional tools are not installed.
+[Passive scans](PassiveRepoScan.md), repository scanners, Trivy feeds, image/SBOM, [endpoint](EndpointAssessment.md), cloud and web/API jobs, [game math](GameMathAssessment.md), [RNG](RngAssessment.md), [RGS](RgsAssessment.md), [application access](ApplicationAccessAssessment.md), GitHub alerts and [change-control periods](PassiveRepoScan.md#github-change-control-periods), [identity lifecycle evidence](IdentityLifecycleEvidence.md), security Skills, and recurring `security.assess` comparisons are implemented.
 
 ## Purpose and ownership
 
@@ -18,9 +18,9 @@ Deterministic jobs do not acquire model capacity.
 
 ### Repository scanner jobs
 
-Create offers Code and supply-chain, Image and SBOM, AWS posture and Web and API presets through shared typed forms. The compiler supplies native `job_spec` inputs for the managed host's `moonmind container run --spec <file> --request-id <collection-id>`; retries reuse the collection ID and reconcile uncertain submissions. Explicit source/runtime, budgets, processing and publication survive reruns. Live/cloud goals need reviewed authority; repository/image work stays separate.
+Create offers Code and supply-chain, Image and SBOM, Endpoint configuration, AWS posture and Web and API presets through shared typed forms. The compiler supplies native `job_spec` inputs for the managed host's `moonmind container run --spec <file> --request-id <collection-id>`; retries reuse the collection ID and reconcile uncertain submissions. Explicit source/runtime, budgets, processing and publication survive reruns. Live/cloud goals need reviewed authority; repository/image work stays separate.
 
-`moonmind container repository-scan --scanner gitleaks` (or `opengrep`, `trivy`) selects one scanner. `--admission scan.json` supplies complete explicit choices, without other flags. Settings shows configuration. At the start of a fresh assessment workflow, the container worker checks the selected executable, installed rule bytes and required feed snapshot before planning/provider work or assessment job reservation. It uses normal deployment image preparation, then a bounded source-free, network-none diagnostic with read-only feed mounts. Missing or unavailable prerequisites stop the workflow with actionable diagnostics; launch rechecks current state. Credential checks inspect admitted local active/revision metadata. Registry target Exec/Vault references use the existing resolver after all grants pass, bounded to 15 seconds; only resolution status is retained. Remote validity and target access remain unverified. Cloud/web workload credentials use the managed-secret resolver and reject unsupported backends before collection. Source-dependent requirements, such as Java archives, remain unverified until collection; optional feeds and identities stay optional.
+`moonmind container repository-scan --scanner gitleaks` (or `opengrep`, `trivy`) selects one scanner. `--admission scan.json` supplies complete explicit choices, without other flags. At the start of a fresh assessment workflow, the container worker checks the selected executable, installed rule bytes and required feed snapshot before planning/provider work or assessment job reservation. It prepares the deployment image, then runs a bounded source-free, network-none diagnostic with read-only feed mounts. Missing prerequisites stop the workflow with actionable diagnostics; launch rechecks current state. Credential checks inspect admitted local active/revision metadata. Registry target Exec/Vault references use the existing resolver after all grants pass, bounded to 15 seconds; only resolution status is retained. Remote validity and target access remain unverified. Cloud/web workload credentials use the managed-secret resolver and reject unsupported backends before collection. Source-dependent requirements, such as Java archives, stay unverified until collection.
 
 Compose's `repository-security` image source defaults to `ghcr.io/moonladderstudios/repository-security:latest`, pull policy `always`. Override with `MOONMIND_REPOSITORY_SECURITY_IMAGE`, `MOONMIND_REPOSITORY_SECURITY_IMAGE_PULL_POLICY`, and `MOONMIND_REPOSITORY_SECURITY_REGISTRY_CREDENTIAL_REF`; an explicit `MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES` list replaces defaults. CLI `--image-source` selects another declared alias; `--image` selects an explicit scanner image. Actual image identity is provenance, not a launch compatibility gate.
 
@@ -67,9 +67,9 @@ Curated coverage additionally records executed/skipped/failed templates, match/n
 
 ## Packaging and recommended tools
 
-The maintained image contains **Opengrep, Gitleaks, Trivy, OpenSSL, Git, CA certificates and assessment runners**.
+The maintained image contains **Opengrep, Gitleaks, Trivy, OpenSCAP with ComplianceAsCode content, OpenSSL, Git, CA certificates and assessment runners**.
 
-Cloud/application scanners use maintained upstream images. Jobs contain no agent/model credentials and have no Docker socket, nested Docker, host networking or privilege.
+Cloud/application scanners use maintained upstream images. Jobs hold no agent/model credentials and have no Docker socket, nested Docker, host networking or privilege.
 
 ### Default capabilities
 
@@ -80,15 +80,16 @@ Cloud/application scanners use maintained upstream images. Jobs contain no agent
 | Dependencies, IaC, images, SBOMs | [Trivy](https://trivy.dev/docs/latest/), curated image | Explicit scanner selection; Gitleaks owns default repository secrets. SBOM generation is an explicit operation. |
 | Cloud posture | [Prowler](https://hub.docker.com/r/prowlercloud/prowler), `prowlercloud/prowler:stable` | Typed `cloudAssessment`, native JSON-OCSF; no Prowler server/database/UI/MCP stack. |
 | Web/API | [ZAP](https://www.zaproxy.org/docs/docker/about/), `ghcr.io/zaproxy/zaproxy:stable` | Typed `webAssessment`, rendered [Automation Framework](https://www.zaproxy.org/docs/automate/automation-framework/) plans. |
+| Endpoint configuration | [OpenSCAP](https://www.open-scap.org/) and verified [ComplianceAsCode](https://github.com/ComplianceAsCode/content) content, curated image | Offline [`endpointAssessment`](EndpointAssessment.md) of a captured filesystem, or imported results. |
 | HTTPS TLS | OpenSSL and cryptography in the curated image | [Bounded CONNECT inspection](RestrictedEgress.md#bounded-https-tls-inspection), certificate/trust evidence and explicit protocol coverage gaps. |
 | Native services | Curated Python inventory runner | [Bounded TCP inventory](RestrictedEgress.md#bounded-service-inventory); fixed passive/HEAD probes, explicit uncertainty, no vulnerability inference. |
 | Contextual review | Existing Omnigent agent and security Skills | Trust boundaries, authorization, business logic, evidence validation, prioritization and retesting; scanner findings are optional inputs. |
 
-Respect separate engine, rule, template and Skill licenses, including deployment rules and the [Semgrep corpus](https://semgrep.dev/legal/rules-license).
+Respect each engine, rule, template and Skill license, including the [Semgrep corpus](https://semgrep.dev/legal/rules-license).
 
 ### Conditional additions
 
-These tools are deferred until a measured coverage gap justifies adoption; unassessed capabilities remain coverage limitations.
+Deferred until a measured coverage gap justifies them; unassessed capabilities remain coverage limitations.
 
 | Candidate | Adoption trigger |
 | --- | --- |

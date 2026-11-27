@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<oval_definitions xmlns="http://oval.mitre.org/XMLSchema/oval-definitions-5" xmlns:oval="http://oval.mitre.org/XMLSchema/oval-common-5" xmlns:ind="http://oval.mitre.org/XMLSchema/oval-definitions-5#independent" xmlns:unix="http://oval.mitre.org/XMLSchema/oval-definitions-5#unix">
+  <generator><oval:schema_version>5.11.1</oval:schema_version><oval:timestamp>2026-11-27T00:00:00</oval:timestamp></generator>
+  <definitions>
+    <definition class="compliance" id="oval:org.moonmind.fixture:def:1" version="1"><metadata><title>apt unauthenticated</title><description>d</description></metadata><criteria><criterion test_ref="oval:org.moonmind.fixture:tst:1"/></criteria></definition>
+    <definition class="compliance" id="oval:org.moonmind.fixture:def:2" version="1"><metadata><title>sources official</title><description>d</description></metadata><criteria><criterion test_ref="oval:org.moonmind.fixture:tst:2"/></criteria></definition>
+    <definition class="compliance" id="oval:org.moonmind.fixture:def:3" version="1"><metadata><title>shadow owner</title><description>d</description></metadata><criteria><criterion test_ref="oval:org.moonmind.fixture:tst:3"/></criteria></definition>
+    <definition class="compliance" id="oval:org.moonmind.fixture:def:5" version="1"><metadata><title>process</title><description>d</description></metadata><criteria><criterion test_ref="oval:org.moonmind.fixture:tst:5"/></criteria></definition>
+    <definition class="compliance" id="oval:org.moonmind.fixture:def:6" version="1"><metadata><title>sysctl</title><description>d</description></metadata><criteria><criterion test_ref="oval:org.moonmind.fixture:tst:6"/></criteria></definition>
+    <definition class="inventory" id="oval:org.moonmind.fixture:def:90" version="1"><metadata><title>never</title><description>d</description></metadata><criteria><criterion test_ref="oval:org.moonmind.fixture:tst:90"/></criteria></definition>
+  </definitions>
+  <tests>
+    <ind:textfilecontent54_test id="oval:org.moonmind.fixture:tst:1" version="1" check="all" check_existence="any_exist" comment="apt"><ind:object object_ref="oval:org.moonmind.fixture:obj:1"/><ind:state state_ref="oval:org.moonmind.fixture:ste:1"/></ind:textfilecontent54_test>
+    <ind:textfilecontent54_test id="oval:org.moonmind.fixture:tst:2" version="1" check="all" check_existence="at_least_one_exists" comment="sources"><ind:object object_ref="oval:org.moonmind.fixture:obj:2"/></ind:textfilecontent54_test>
+    <unix:file_test id="oval:org.moonmind.fixture:tst:3" version="1" check="all" check_existence="all_exist" comment="shadow"><unix:object object_ref="oval:org.moonmind.fixture:obj:3"/><unix:state state_ref="oval:org.moonmind.fixture:ste:3"/></unix:file_test>
+    <unix:process58_test id="oval:org.moonmind.fixture:tst:5" version="1" check="all" check_existence="at_least_one_exists" comment="process"><unix:object object_ref="oval:org.moonmind.fixture:obj:5"/></unix:process58_test>
+    <unix:sysctl_test id="oval:org.moonmind.fixture:tst:6" version="1" check="all" check_existence="all_exist" comment="sysctl"><unix:object object_ref="oval:org.moonmind.fixture:obj:6"/><unix:state state_ref="oval:org.moonmind.fixture:ste:6"/></unix:sysctl_test>
+    <unix:file_test id="oval:org.moonmind.fixture:tst:90" version="1" check="all" check_existence="all_exist" comment="never"><unix:object object_ref="oval:org.moonmind.fixture:obj:90"/></unix:file_test>
+  </tests>
+  <objects>
+    <ind:textfilecontent54_object id="oval:org.moonmind.fixture:obj:1" version="1"><ind:filepath operation="pattern match">^/etc/apt/apt.conf(\.d/.*)?$</ind:filepath><ind:pattern operation="pattern match">^[^#]*AllowUnauthenticated(.*)$</ind:pattern><ind:instance datatype="int">1</ind:instance></ind:textfilecontent54_object>
+    <ind:textfilecontent54_object id="oval:org.moonmind.fixture:obj:2" version="1"><ind:filepath>/etc/apt/sources.list</ind:filepath><ind:pattern operation="pattern match">^deb\s+https?://deb\.debian\.org/debian/?\s+bookworm\s+main</ind:pattern><ind:instance datatype="int">1</ind:instance></ind:textfilecontent54_object>
+    <unix:file_object id="oval:org.moonmind.fixture:obj:3" version="1"><unix:filepath>/etc/shadow</unix:filepath></unix:file_object>
+    <unix:process58_object id="oval:org.moonmind.fixture:obj:5" version="1"><unix:command_line operation="pattern match">^sshd</unix:command_line><unix:pid datatype="int" operation="greater than">0</unix:pid></unix:process58_object>
+    <unix:sysctl_object id="oval:org.moonmind.fixture:obj:6" version="1"><unix:name>kernel.randomize_va_space</unix:name></unix:sysctl_object>
+    <unix:file_object id="oval:org.moonmind.fixture:obj:90" version="1"><unix:filepath>/etc/moonmind-never-present</unix:filepath></unix:file_object>
+  </objects>
+  <states>
+    <ind:textfilecontent54_state id="oval:org.moonmind.fixture:ste:1" version="1"><ind:subexpression operation="pattern match">^[\s]+"false"[\s]*;[\s]*$</ind:subexpression></ind:textfilecontent54_state>
+    <unix:file_state id="oval:org.moonmind.fixture:ste:3" version="1"><unix:user_id datatype="int">0</unix:user_id></unix:file_state>
+    <unix:sysctl_state id="oval:org.moonmind.fixture:ste:6" version="1"><unix:value datatype="int">2</unix:value></unix:sysctl_state>
+  </states>
+</oval_definitions>

@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Benchmark xmlns="http://checklists.nist.gov/xccdf/1.2" xmlns:cpe-lang="http://cpe.mitre.org/language/2.0" id="xccdf_org.moonmind.fixture_benchmark_ENDPOINT" resolved="1" xml:lang="en" style="SCAP_1.2">
+  <status>accepted</status>
+  <title>MoonMind endpoint fixture</title>
+  <description>Synthetic rules for the OpenSCAP endpoint job.</description>
+  <cpe-lang:platform-specification>
+    <cpe-lang:platform id="never">
+      <cpe-lang:logical-test operator="AND" negate="false">
+        <cpe-lang:check-fact-ref system="http://oval.mitre.org/XMLSchema/oval-definitions-5" href="fixture-oval.xml" id-ref="oval:org.moonmind.fixture:def:90"/>
+      </cpe-lang:logical-test>
+    </cpe-lang:platform>
+  </cpe-lang:platform-specification>
+  <version>1.0</version>
+  <Profile id="xccdf_org.moonmind.fixture_profile_baseline">
+    <title>Fixture baseline</title>
+    <description>Selects every fixture rule except one.</description>
+    <select idref="xccdf_org.moonmind.fixture_rule_apt_unauthenticated" selected="true"/>
+    <select idref="xccdf_org.moonmind.fixture_rule_sources_official" selected="true"/>
+    <select idref="xccdf_org.moonmind.fixture_rule_shadow_owner" selected="true"/>
+    <select idref="xccdf_org.moonmind.fixture_rule_manual" selected="true"/>
+    <select idref="xccdf_org.moonmind.fixture_rule_never_applicable" selected="true"/>
+    <select idref="xccdf_org.moonmind.fixture_rule_process" selected="true"/>
+    <select idref="xccdf_org.moonmind.fixture_rule_sysctl" selected="true"/>
+    <select idref="xccdf_org.moonmind.fixture_rule_missing_definition" selected="true"/>
+  </Profile>
+  <Rule id="xccdf_org.moonmind.fixture_rule_apt_unauthenticated" selected="false" severity="high">
+    <title>APT refuses unauthenticated repositories</title>
+    <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5"><check-content-ref href="fixture-oval.xml" name="oval:org.moonmind.fixture:def:1"/></check>
+  </Rule>
+  <Rule id="xccdf_org.moonmind.fixture_rule_sources_official" selected="false" severity="medium">
+    <title>APT uses official repositories</title>
+    <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5"><check-content-ref href="fixture-oval.xml" name="oval:org.moonmind.fixture:def:2"/></check>
+  </Rule>
+  <Rule id="xccdf_org.moonmind.fixture_rule_shadow_owner" selected="false" severity="medium">
+    <title>/etc/shadow is owned by root</title>
+    <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5"><check-content-ref href="fixture-oval.xml" name="oval:org.moonmind.fixture:def:3"/></check>
+  </Rule>
+  <Rule id="xccdf_org.moonmind.fixture_rule_manual" selected="false" severity="low">
+    <title>A manual procedure</title>
+  </Rule>
+  <Rule id="xccdf_org.moonmind.fixture_rule_never_applicable" selected="false" severity="low">
+    <title>A rule for another platform</title>
+    <platform idref="#never"/>
+    <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5"><check-content-ref href="fixture-oval.xml" name="oval:org.moonmind.fixture:def:1"/></check>
+  </Rule>
+  <Rule id="xccdf_org.moonmind.fixture_rule_process" selected="false" severity="low">
+    <title>A process runs</title>
+    <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5"><check-content-ref href="fixture-oval.xml" name="oval:org.moonmind.fixture:def:5"/></check>
+  </Rule>
+  <Rule id="xccdf_org.moonmind.fixture_rule_sysctl" selected="false" severity="low">
+    <title>A kernel parameter is set</title>
+    <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5"><check-content-ref href="fixture-oval.xml" name="oval:org.moonmind.fixture:def:6"/></check>
+  </Rule>
+  <Rule id="xccdf_org.moonmind.fixture_rule_missing_definition" selected="false" severity="low">
+    <title>A rule whose check is missing</title>
+    <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5"><check-content-ref href="fixture-oval.xml" name="oval:org.moonmind.fixture:def:404"/></check>
+  </Rule>
+  <Rule id="xccdf_org.moonmind.fixture_rule_unselected" selected="false" severity="low">
+    <title>A rule the profile does not select</title>
+    <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5"><check-content-ref href="fixture-oval.xml" name="oval:org.moonmind.fixture:def:2"/></check>
+  </Rule>
+</Benchmark>

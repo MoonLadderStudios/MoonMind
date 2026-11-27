@@ -52,13 +52,14 @@ from moonmind.security.security_plan import (
     derive_security_plan,
     parse_security_plan,
     requirement_evidence,
+    selected_for_subject,
     validate_security_plan,
 )
 
 CONTEXT_SCHEMA = "security-plan-context/v1"
-# Subjects an installed planning journey honours. Endpoint and network join
-# when their assessment owners land.
-SUBJECT_TYPES = ("application",)
+# Subjects an installed planning journey honours. Network joins when its
+# assessment owner lands.
+SUBJECT_TYPES = ("application", "endpoint")
 DRAFT_PATH = "artifacts/security-plan/draft.json"
 WEB_API_PACK_ID = "web-api-methodology"
 
@@ -207,6 +208,20 @@ def planning_context(
                         if requirement.not_assessed_reason
                         else {}
                     ),
+                    **(
+                        {"subjectTypes": list(requirement.subject_types)}
+                        if requirement.subject_types
+                        else {}
+                    ),
+                    **(
+                        {
+                            "selectedForSubject": selected_for_subject(
+                                requirement, subject_type
+                            )
+                        }
+                        if subject_type != "application"
+                        else {}
+                    ),
                 }
             )
         identity = standard.model_dump(
@@ -229,7 +244,7 @@ def planning_context(
                 "requirements": requirements,
             }
         )
-    return {
+    document = {
         "schemaVersion": CONTEXT_SCHEMA,
         "subjectType": subject_type,
         "project": {
@@ -247,6 +262,23 @@ def planning_context(
         "jobKinds": list(JOB_KINDS),
         "draftPath": DRAFT_PATH,
     }
+    if subject_type == "endpoint":
+        from moonmind.security.endpoint_assessments import (
+            GENERAL_PROFILE,
+            PLAN_REQUIRED_INPUTS,
+            SHIPPED_DATASTREAMS,
+            UNSUPPORTED_PLATFORMS,
+        )
+
+        document["endpoint"] = {
+            "jobKind": "endpoint-assessment",
+            "targets": ["rootfs", "image", "results"],
+            "datastreams": list(SHIPPED_DATASTREAMS),
+            "generalProfile": GENERAL_PROFILE,
+            "unsupportedPlatforms": list(UNSUPPORTED_PLATFORMS),
+            "requiredInputs": list(PLAN_REQUIRED_INPUTS),
+        }
+    return document
 
 
 # Inline context rides workflow history and the planner's instructions; the
@@ -355,6 +387,19 @@ def operator_points(
 ) -> list[OpenPoint]:
     """Questions only the operator can answer, raised instead of waiting."""
     points = []
+    if plan.subject.type == "endpoint" and not any(
+        job.kind == "endpoint-assessment" for job in plan.jobs
+    ):
+        points.append(
+            OpenPoint(
+                kind="operator_question",
+                text=(
+                    "Which root filesystem, image archive or OpenSCAP results does "
+                    "this endpoint plan assess? Upload it as an artifact of the saved "
+                    "environment; MoonMind does not reach live hosts."
+                ),
+            )
+        )
     if snapshot.configuration.period is None:
         points.append(
             OpenPoint(

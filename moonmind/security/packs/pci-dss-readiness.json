@@ -801,6 +801,9 @@
           "reviewedOn": "2026-11-23"
         }
       ],
+      "subjectTypes": [
+        "endpoint"
+      ],
       "evidenceTypes": [
         "technical",
         "organisational"
@@ -825,6 +828,9 @@
           "section": "PCI DSS v4.0.1 2.2.2",
           "reviewedOn": "2026-11-23"
         }
+      ],
+      "subjectTypes": [
+        "endpoint"
       ],
       "evidenceTypes": [
         "technical"
@@ -872,6 +878,9 @@
           "reviewedOn": "2026-11-23"
         }
       ],
+      "subjectTypes": [
+        "endpoint"
+      ],
       "evidenceTypes": [
         "technical"
       ],
@@ -894,6 +903,9 @@
           "section": "PCI DSS v4.0.1 2.2.5",
           "reviewedOn": "2026-11-23"
         }
+      ],
+      "subjectTypes": [
+        "endpoint"
       ],
       "evidenceTypes": [
         "technical",
@@ -920,6 +932,9 @@
           "reviewedOn": "2026-11-23"
         }
       ],
+      "subjectTypes": [
+        "endpoint"
+      ],
       "evidenceTypes": [
         "technical"
       ],
@@ -942,6 +957,9 @@
           "section": "PCI DSS v4.0.1 2.2.7",
           "reviewedOn": "2026-11-23"
         }
+      ],
+      "subjectTypes": [
+        "endpoint"
       ],
       "evidenceTypes": [
         "technical"
@@ -2174,6 +2192,9 @@
           "reviewedOn": "2026-11-23"
         }
       ],
+      "subjectTypes": [
+        "endpoint"
+      ],
       "evidenceTypes": [
         "technical"
       ],
@@ -2727,6 +2748,9 @@
           "section": "PCI DSS v4.0.1 6.3.3",
           "reviewedOn": "2026-11-23"
         }
+      ],
+      "subjectTypes": [
+        "endpoint"
       ],
       "evidenceTypes": [
         "technical"
@@ -3667,6 +3691,9 @@
           "reviewedOn": "2026-11-23"
         }
       ],
+      "subjectTypes": [
+        "endpoint"
+      ],
       "evidenceTypes": [
         "technical"
       ],
@@ -3712,6 +3739,9 @@
           "section": "PCI DSS v4.0.1 8.3.6",
           "reviewedOn": "2026-11-23"
         }
+      ],
+      "subjectTypes": [
+        "endpoint"
       ],
       "evidenceTypes": [
         "technical"
@@ -4993,6 +5023,9 @@
           "reviewedOn": "2026-11-23"
         }
       ],
+      "subjectTypes": [
+        "endpoint"
+      ],
       "evidenceTypes": [
         "technical"
       ],
@@ -5467,6 +5500,9 @@
           "section": "PCI DSS v4.0.1 10.6.1",
           "reviewedOn": "2026-11-23"
         }
+      ],
+      "subjectTypes": [
+        "endpoint"
       ],
       "evidenceTypes": [
         "technical"

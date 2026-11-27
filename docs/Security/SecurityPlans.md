@@ -132,7 +132,8 @@ plan and retained reports.
 
 The `security-plan` preset is the Security workspace's start action, and goals
 that name a security plan select it. The operator picks a subject type
-(`application` until endpoint and network journeys land), a saved environment
+(`application`, or an [`endpoint`](EndpointAssessment.md#planning-an-endpoint)
+assessed offline; network when its journey lands), a saved environment
 through the assessment picker, and standards from the catalog. The run holds
 no assessment scope, credential, egress grant or job reservation, and launches
 no scanner, cloud, web or network job.
@@ -171,8 +172,9 @@ same preset; both expand it through the one preset compiler. Expansion reads
 the retained `security.plan` artifact with the operator's authority and
 derives, in order:
 
-- each `repository-scan`, `image-assessment`, `web-assessment` and
-  `cloud-assessment` job as its existing technical preset's step with the
+- each `repository-scan`, `image-assessment`, `endpoint-assessment`,
+  `web-assessment` and `cloud-assessment` job as its existing technical
+  preset's step with the
   plan's job input, so each keeps its readiness check, budget, admission and
   native evidence;
 - one concluding `security.assess` over the plan's standards as
@@ -191,9 +193,9 @@ review covers the whole run. Its digest covers every derived step, so a
 changed plan or authorization needs a fresh review, and an unchanged rerun or
 schedule keeps the reviewed authority.
 
-In a scoped run, repository and image job steps run without the assessment
-scope, as they do alone, because the container-job owner refuses those scans
-inside one. They can only lose authority, and no step of a scoped run can fan
+In a scoped run, repository, image and endpoint job steps run without the
+assessment scope, as they do alone, because the container-job owner refuses
+those scans inside one. They can only lose authority, and no step of a scoped run can fan
 out.
 
 Each job step writes a `security-plan-job/v1` outcome record that the agent

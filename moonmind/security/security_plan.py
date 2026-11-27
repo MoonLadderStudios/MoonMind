@@ -27,6 +27,7 @@ from moonmind.schemas.container_job_models import WorkloadProfileSelection
 from moonmind.schemas.repository_scanner_models import (
     CLOUD_ACTION_CLASS,
     CloudAssessment,
+    EndpointAssessment,
     ImageAssessment,
     RepositoryScan,
     TLSAssessment,
@@ -120,6 +121,7 @@ JOB_KINDS = (
     "tls-assessment",
     "dns-assessment",
     "service-inventory",
+    "endpoint-assessment",
 )
 #: Job input fields bound at launch from a saved authorization and its grants.
 #: A plan names credential purposes; references and assessment identities are
@@ -547,6 +549,17 @@ def load_standard_pack(standard: PlanStandard, raw: bytes | None = None):
     )
 
 
+def selected_for_subject(requirement, subject_type: str) -> bool:
+    """Whether a standard's requirement is in scope for the plan's subject.
+
+    An application plan keeps every requirement. Another subject selects the
+    requirements a pack tags with it in ``subjectTypes``.
+    """
+    if subject_type == "application":
+        return True
+    return subject_type in requirement.subject_types
+
+
 _REQUIRED_METHODS = {
     "deterministic_check": "deterministic_check",
     "enquiry": "document_review",
@@ -688,6 +701,7 @@ def native_job(kind: str, value: Mapping):
         "cloud-assessment": CloudAssessment,
         "web-assessment": WebAssessment,
         "tls-assessment": TLSAssessment,
+        "endpoint-assessment": EndpointAssessment,
     }[kind]
     if kind == "cloud-assessment":
         value.update(
@@ -729,6 +743,18 @@ def job_authority(kind: str, model, facts, scope=None) -> JobAuthority:
         return JobAuthority(
             scoped=False,
             targets=[AuthorityTarget(kind="workspace_path", ref=model.input_path)],
+            max_job_seconds=_job_seconds(kind, model),
+        )
+    if kind == "endpoint-assessment":
+        # Captured artifacts of the saved environment, evaluated with no
+        # network: no profile, action class, credential purpose or egress.
+        return JobAuthority(
+            scoped=False,
+            targets=[
+                AuthorityTarget(kind="artifact", ref=ref)
+                for ref in (model.input_artifact_ref, model.tailoring_artifact_ref)
+                if ref
+            ],
             max_job_seconds=_job_seconds(kind, model),
         )
     if kind == "image-assessment":
@@ -1201,6 +1227,14 @@ def validate_security_plan(
             errors.append(f"{label}.id: not a requirement of the selected standard")
             continue
         derived = expected.requirements[index]
+        if (
+            not selected_for_subject(requirement, plan.subject.type)
+            and row.applicability != "not_applicable"
+        ):
+            errors.append(
+                f"{label}.applicability: the standard does not tag this requirement "
+                f"for a {plan.subject.type} subject; mark it not applicable"
+            )
         for field, alias in (
             ("title", "title"),
             ("allowed_methods", "allowedMethods"),
@@ -1378,6 +1412,52 @@ def _authority_text(authority: JobAuthority | None) -> str:
     return "; ".join(parts)
 
 
+def _endpoint_sections(plan: SecurityPlan) -> list[str]:
+    """Planned endpoint checks and the inputs an endpoint plan needs."""
+    from moonmind.security.endpoint_assessments import (
+        OBSERVATION_STATEMENTS,
+        PLAN_REQUIRED_INPUTS,
+    )
+
+    lines = ["", "### Planned endpoint checks"]
+    jobs = [job for job in plan.jobs if job.kind == "endpoint-assessment"]
+    for job in jobs:
+        value = job.input
+        rules = value.get("ruleIds") or []
+        if value.get("target") == "results":
+            what = (
+                f"imports operator-produced OpenSCAP results "
+                f"{_safe(value.get('inputArtifactRef'))}"
+            )
+        else:
+            what = (
+                f"evaluates {_safe(value.get('profile'))} from "
+                f"{_safe(value.get('datastream'))} offline against the "
+                f"{_safe(value.get('target'))} {_safe(value.get('inputArtifactRef'))}"
+            )
+        lines.append(
+            f"- Job {_safe(job.id)} {what} for endpoint {_safe(value.get('asset'))}; "
+            + (
+                f"requires {len(rules)} named rules to pass or fail."
+                if rules
+                else "reports every rule the profile selects."
+            )
+        )
+    if not jobs:
+        lines.append("- None: no endpoint-assessment job is planned.")
+    lines += [
+        "- Each rule is reported with its result: pass and fail are evidence; "
+        "every other result is a coverage state with its reason, and errors or "
+        "unevaluated required rules leave the run partial.",
+        f"- {OBSERVATION_STATEMENTS['offline-copy']}",
+        f"- {OBSERVATION_STATEMENTS['operator-supplied']}",
+        "",
+        "### Required inputs",
+    ]
+    lines += [f"- {text}" for text in PLAN_REQUIRED_INPUTS]
+    return lines
+
+
 def render_security_plan(plan: SecurityPlan, *, plan_ref: str | None = None) -> str:
     """A readable plan and its gap list. It describes work; it grants nothing."""
     subject, project = plan.subject, plan.subject.project
@@ -1448,6 +1528,8 @@ def render_security_plan(plan: SecurityPlan, *, plan_ref: str | None = None) -> 
         )
     if not plan.jobs:
         lines.append("- No planned jobs.")
+    if subject.type == "endpoint":
+        lines += _endpoint_sections(plan)
     lines += ["", "### Open points"]
     lines += [f"- {point.kind}: {_safe(point.text)}" for point in plan.open_points]
     if not plan.open_points:

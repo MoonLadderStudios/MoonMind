@@ -12,6 +12,7 @@ on:
       - "moonmind/security/scanner_feeds.py"
       - "moonmind/security/exploitation_data.py"
       - "moonmind/security/image_assessment*.py"
+      - "moonmind/security/endpoint_assessment*.py"
       - "moonmind/security/assessment_projects.py"
       - "moonmind/security/evidence_exports.py"
       - "moonmind/security/tls_assessment*.py"
@@ -35,6 +36,7 @@ on:
       - "moonmind/security/scanner_feeds.py"
       - "moonmind/security/exploitation_data.py"
       - "moonmind/security/image_assessment*.py"
+      - "moonmind/security/endpoint_assessment*.py"
       - "moonmind/security/assessment_projects.py"
       - "moonmind/security/evidence_exports.py"
       - "moonmind/security/tls_assessment*.py"
@@ -55,6 +57,9 @@ on:
         type: string
       trivy_version:
         description: "Trivy release override; omitted selects current stable"
+        type: string
+      complianceascode_version:
+        description: "ComplianceAsCode content release override; omitted selects current stable"
         type: string
       base_image:
         description: "Compatible Python/glibc base override"
@@ -89,11 +94,13 @@ jobs:
           OPENGREP_VERSION: ${{ inputs.opengrep_version }}
           GITLEAKS_VERSION: ${{ inputs.gitleaks_version }}
           TRIVY_VERSION: ${{ inputs.trivy_version }}
+          COMPLIANCEASCODE_VERSION: ${{ inputs.complianceascode_version }}
           BASE_IMAGE: ${{ inputs.base_image || 'python:3.12-slim-bookworm' }}
         run: |
           python -m tools.ci.repository_security_image resolve \
             --opengrep-version "$OPENGREP_VERSION" --gitleaks-version "$GITLEAKS_VERSION" \
-            --trivy-version "$TRIVY_VERSION" --base-image "$BASE_IMAGE" --output evidence/inputs.json
+            --trivy-version "$TRIVY_VERSION" --complianceascode-version "$COMPLIANCEASCODE_VERSION" \
+            --base-image "$BASE_IMAGE" --output evidence/inputs.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

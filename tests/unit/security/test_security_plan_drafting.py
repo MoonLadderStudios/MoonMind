@@ -226,8 +226,9 @@ def test_proposed_inputs_use_only_the_standards_own_fields():
 
 def test_selection_and_subject_type_are_checked_before_planning():
     assert require_subject_type("application") == "application"
+    assert require_subject_type("endpoint") == "endpoint"
     with pytest.raises(SecurityPlanError) as raised:
-        require_subject_type("endpoint")
+        require_subject_type("network")
     assert "no installed journey plans this subject" in str(raised.value)
     with pytest.raises(SecurityPlanError) as raised:
         parse_standards([])
