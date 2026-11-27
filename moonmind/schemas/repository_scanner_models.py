@@ -368,7 +368,8 @@ class EndpointHost(Contract):
     )
     limits: NativeNetworkLimits
 
-    _address = field_validator("address")(lambda value: _live_host_address(value))
+    _address = field_validator("address")(_live_host_address)
+    # A lambda: in this class body ``host_key`` names the field, not the check.
     _key = field_validator("host_key")(lambda value: host_key(value))
 
     @model_validator(mode="after")

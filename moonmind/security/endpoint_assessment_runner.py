@@ -918,7 +918,7 @@ def run_live_host_assessment(
         except InputError as exc:
             limitations.extend([exc.code, "scanner_prerequisite_failed"])
         except _HostStop:
-            pass
+            pass  # The failed step already recorded its state or code.
         except Exception:  # noqa: BLE001
             limitations.append("scanner_prerequisite_failed")
         finally:

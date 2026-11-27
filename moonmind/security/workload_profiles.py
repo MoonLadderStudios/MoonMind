@@ -707,6 +707,7 @@ class EndpointHostTarget(_Model):
 
         return _live_host_address(value)
 
+    # A lambda: in this class body ``host_key`` names the field, not the check.
     _key = field_validator("host_key")(lambda value: host_key(value))
 
     @model_validator(mode="after")
