@@ -1,0 +1,8 @@
+Package: base-files
+Status: install ok installed
+Priority: required
+Section: admin
+Architecture: amd64
+Version: 12.4+deb12u8
+Description: Debian base system miscellaneous files
+

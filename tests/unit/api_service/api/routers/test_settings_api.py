@@ -1450,9 +1450,16 @@ async def test_framework_catalog_lists_installed_readiness_and_skill(settings_ap
         "pci-dss-readiness",
         "ukgc-rts-security",
         "owasp-asvs-l1",
+        "endpoint-best-practices",
         "web-api-methodology",
     }
     assert packs["web-api-methodology"]["requirementCount"] == 6
+    # Endpoints are hosts: the web/API methodology plans an application only,
+    # and general endpoint best practices plan an endpoint only.
+    assert not packs["web-api-methodology"]["subjects"]["endpoint"]["available"]
+    endpoint = packs["endpoint-best-practices"]["subjects"]
+    assert endpoint["endpoint"]["available"]
+    assert not endpoint["application"]["available"]
     # General best practices for applications: ASVS 5.0.0 Level 1 plus the
     # shipped known-CVE, secret and misconfiguration checks. Levels 2 and 3
     # are not offered.

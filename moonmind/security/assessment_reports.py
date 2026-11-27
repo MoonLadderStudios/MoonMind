@@ -247,6 +247,7 @@ def render_native_admission(native_reports):
         "web-assessment/v1": ("admission",),
         "cloud-posture/v1": ("admission",),
         "image-assessment/v1": ("admission",),
+        "endpoint-assessment/v1": ("admission", "content", "subject"),
         "game-math-assessment/v1": ("specDigest", "provenance", "limitations"),
     }
     if not native_reports:

@@ -416,3 +416,51 @@ async def test_cloud_probe_uses_same_offline_command_as_image_qualification(
     assert production[-3:-1] == ["sh", "-c"]
     assert "/home/*/.venv/bin/prowler" in production[-1]
     assert production[-1].endswith('exec "$p" --version')
+
+
+@pytest.mark.asyncio
+async def test_endpoint_readiness_checks_oscap_and_content_offline(tmp_path):
+    calls = []
+    answer = [0, b"OpenSCAP 1.3.7 ready.\n"]
+
+    async def runner(args):
+        calls.append(list(args))
+        if args[0] == "run":
+            return answer[0], answer[1], b""
+        return 0, b"[]", b""
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, settings=configured(), command_runner=runner
+    )
+    backend.acquire_image = AsyncMock(
+        return_value=ContainerJobActivityResult(resolvedImageRef="sha256:" + "b" * 64)
+    )
+    selection = {
+        "target": "rootfs",
+        "asset": "web-01",
+        "inputArtifactRef": "art_rootfs",
+        "datastream": "ssg-debian12-ds.xml",
+        "profile": "xccdf_org.ssgproject.content_profile_standard",
+    }
+    result = await backend.assessment_readiness(
+        request(), kind="endpoint-assessment", selection=selection, caches=[]
+    )
+    assert result["status"] == "ready"
+    assert {(c["component"], c["code"]) for c in result["checks"]} == {
+        ("scanner", "scanner_available"),
+        ("content", "content_available"),
+    }
+    command = next(c for c in calls if c[0] == "run")
+    assert command[command.index("--network") + 1] == "none"
+    assert "--cap-drop=ALL" in command and "--mount" not in command
+    assert command[-3:] == [
+        "moonmind.security.endpoint_assessment_runner",
+        "--readiness",
+        json.dumps(selection, separators=(",", ":")),
+    ]
+    answer[:] = [2, b"The selected ComplianceAsCode datastream is unavailable.\n"]
+    blocked = await backend.assessment_readiness(
+        request(), kind="endpoint-assessment", selection=selection, caches=[]
+    )
+    assert blocked["status"] == "unavailable"
+    assert blocked["diagnostics"][0]["code"] == "scanner_probe_unavailable"

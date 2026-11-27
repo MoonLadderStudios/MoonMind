@@ -237,7 +237,7 @@ export function unsupportedCapabilityWidget(
 }
 
 export function containsSecretLikeCapabilityValue(value: unknown, schema?: Record<string, unknown>, native = false): boolean {
-  native ||= ['repository-scan', 'image-assessment', 'cloud-assessment', 'web-assessment'].includes(String(schema?.['x-moonmind-input-contract'] || ''));
+  native ||= ['repository-scan', 'image-assessment', 'cloud-assessment', 'web-assessment', 'endpoint-assessment'].includes(String(schema?.['x-moonmind-input-contract'] || ''));
   if (value && typeof value === "object") {
     if (Array.isArray(value)) {
       return value.some((item) => containsSecretLikeCapabilityValue(item, recordValue(schema?.items), native));

@@ -40,7 +40,7 @@ PLAN_REF = "art_plan"
 CLOUD_ACCOUNT = "123456789012"
 
 
-def plan_with(*, cloud=False, tls=False):
+def plan_with(*, cloud=False, tls=False, endpoint=False):
     raw = hand_authored()
     raw["jobs"].append(
         {
@@ -69,6 +69,24 @@ def plan_with(*, cloud=False, tls=False):
                 },
                 "assets": ["shop-app"],
                 "sources": source(),
+            }
+        )
+    if endpoint:
+        raw["jobs"].append(
+            {
+                "id": "endpoint-check",
+                "kind": "endpoint-assessment",
+                "input": {
+                    "target": "rootfs",
+                    "asset": "shop-app",
+                    "inputArtifactRef": "art_openapi",
+                    "datastream": "ssg-debian12-ds.xml",
+                    "profile": "xccdf_org.ssgproject.content_profile_standard",
+                },
+                "assets": ["shop-app"],
+                "sources": source(
+                    "environment_field", "environments.prod.artifactRefs"
+                ),
             }
         )
     if tls:
@@ -240,7 +258,7 @@ def test_job_steps_declare_their_outcome_record_and_plan_identity():
 def test_unscoped_step_kinds_are_exactly_the_unscoped_plan_jobs():
     from moonmind.workflows.temporal.workflows.run import _UNSCOPED_ASSESSMENT_JOB_KINDS
 
-    plan = plan_with()
+    plan = plan_with(endpoint=True)
     unscoped = set()
     for job in plan.jobs:
         model, facts, scope = native_job(job.kind, job.input)

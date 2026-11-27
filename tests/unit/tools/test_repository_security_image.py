@@ -48,14 +48,39 @@ def release(tool, version="1.2.3", prerelease=False, *, opengrep_platform="manyl
     }
 
 
+def content_release(version="0.1.82", prerelease=False):
+    names = [
+        f"scap-security-guide-{version}.zip",
+        f"scap-security-guide-{version}.zip.sha512",
+    ]
+    return {
+        "tag_name": f"v{version}",
+        "prerelease": prerelease,
+        "draft": False,
+        "id": 456,
+        "assets": [
+            {
+                "name": name,
+                "id": index,
+                "browser_download_url": f"https://github.com/{image.CONTENT_REPOSITORY}/releases/download/v{version}/{name}",
+            }
+            for index, name in enumerate(names)
+        ],
+    }
+
+
 @pytest.fixture
 def releases(monkeypatch):
     calls = []
 
     def fetch(url):
         calls.append(url)
-        tool = next(t for t, repo in image.REPOSITORIES.items() if f"/{repo}/" in url)
         version = url.rsplit("/", 1)[-1]
+        if f"/{image.CONTENT_REPOSITORY}/" in url:
+            return content_release(
+                "0.1.82" if version == "latest" else version.removeprefix("v")
+            )
+        tool = next(t for t, repo in image.REPOSITORIES.items() if f"/{repo}/" in url)
         return release(
             tool, "1.2.3" if version == "latest" else version.removeprefix("v")
         )
@@ -70,7 +95,10 @@ def test_defaults_resolve_stable_inputs_for_both_architectures(releases):
     for tool in image.REPOSITORIES:
         assert inputs["tools"][tool]["version"] == "v1.2.3"
         assert set(inputs["tools"][tool]["assets"]) == {"amd64", "arm64"}
-    assert len(releases) == 3 and all(url.endswith("/latest") for url in releases)
+    # ComplianceAsCode content is architecture-independent and also current.
+    assert inputs["content"]["version"] == "v0.1.82"
+    assert set(inputs["content"]["assets"]) == {"archive", "checksum"}
+    assert len(releases) == 4 and all(url.endswith("/latest") for url in releases)
 
 
 def test_explicit_versions_and_base_are_resolved_without_compatibility_gates(releases):
@@ -89,6 +117,8 @@ def test_current_opengrep_linux_assets_resolve_for_both_architectures(monkeypatc
 
     def fetch(url):
         calls.append(url)
+        if f"/{image.CONTENT_REPOSITORY}/" in url:
+            return content_release()
         tool = next(t for t, repo in image.REPOSITORIES.items() if f"/{repo}/" in url)
         return release(tool, "2.0.0", opengrep_platform="linux")
 
@@ -406,6 +436,7 @@ def test_failed_update_does_not_write_the_working_default(monkeypatch, problem):
         "moonmind.security.dns_assessment_runner",
         "moonmind.security.service_inventory_runner",
         "moonmind.security.native_tcp_gateway",
+        "moonmind.security.endpoint_assessment_runner",
     ],
 )
 def test_packaged_runner_imports_with_only_its_declared_python_dependency(
@@ -696,3 +727,102 @@ def test_packaged_inventory_runner_refuses_missing_admission_without_console(tmp
     )
     assert result.returncode == 2
     assert result.stdout == result.stderr == ""
+
+
+def test_content_release_is_current_stable_or_explicit_and_stays_in_its_release(
+    monkeypatch,
+):
+    monkeypatch.setattr(image, "fetch_json", lambda url: content_release())
+    assert image.resolve_content()["version"] == "v0.1.82"
+    assert image.resolve_content("0.1.82")["assets"]["archive"]["name"] == (
+        "scap-security-guide-0.1.82.zip"
+    )
+    with pytest.raises(image.ImageError, match="unexpected release tag"):
+        image.resolve_content("0.1.81")
+    with pytest.raises(image.ImageError, match="invalid release version"):
+        image.resolve_content("latest")
+    monkeypatch.setattr(
+        image, "fetch_json", lambda url: content_release(prerelease=True)
+    )
+    with pytest.raises(image.ImageError, match="stable release"):
+        image.resolve_content()
+    moved = content_release()
+    moved["assets"][0]["browser_download_url"] = "https://example.invalid/x.zip"
+    monkeypatch.setattr(image, "fetch_json", lambda url: moved)
+    with pytest.raises(image.ImageError, match="outside the selected release"):
+        image.resolve_content()
+    partial = content_release()
+    partial["assets"] = partial["assets"][:1]
+    monkeypatch.setattr(image, "fetch_json", lambda url: partial)
+    with pytest.raises(image.ImageError, match="zip.sha512"):
+        image.resolve_content()
+
+
+def content_archive(path, *, products=image.CONTENT_PRODUCTS, version="0.1.82"):
+    import zipfile
+
+    with zipfile.ZipFile(path, "w") as bundle:
+        bundle.writestr(f"scap-security-guide-{version}/LICENSE", "BSD-3-Clause text")
+        for product in products:
+            bundle.writestr(
+                f"scap-security-guide-{version}/ssg-{product}-ds.xml",
+                f"<ds product='{product}'/>",
+            )
+        bundle.writestr(f"scap-security-guide-{version}/ssg-rhel9-ds.xml", "<ds/>")
+    return path
+
+
+def stage(monkeypatch, tmp_path, archive, checksum=None):
+    monkeypatch.setattr(image, "fetch_json", lambda url: content_release())
+    selected = image.resolve_content()
+
+    def download(url, path):
+        if url.endswith(".sha512"):
+            digest = checksum or hashlib.sha512(archive.read_bytes()).hexdigest()
+            path.write_text(f"{digest}  scap-security-guide-0.1.82.zip\n")
+        else:
+            path.write_bytes(archive.read_bytes())
+
+    monkeypatch.setattr(image, "download", download)
+    return image.stage_content(
+        selected, tmp_path / "build", tmp_path / "notices", tmp_path / "evidence"
+    )
+
+
+def test_content_is_verified_then_only_shipped_datastreams_are_staged(
+    monkeypatch, tmp_path
+):
+    (tmp_path / "notices").mkdir()
+    archive = content_archive(tmp_path / "content.zip")
+    record = stage(monkeypatch, tmp_path, archive)
+    staged = tmp_path / "build/endpoint-content"
+    assert sorted(p.name for p in staged.iterdir()) == sorted(
+        [f"ssg-{product}-ds.xml" for product in image.CONTENT_PRODUCTS]
+        + ["manifest.json"]
+    )
+    manifest = json.loads((staged / "manifest.json").read_text())
+    assert manifest["release"] == "0.1.82" and manifest["license"] == "BSD-3-Clause"
+    for name, digest in manifest["datastreams"].items():
+        assert hashlib.sha256((staged / name).read_bytes()).hexdigest() == digest
+    assert (tmp_path / "notices/complianceascode-LICENSE").read_text() == (
+        "BSD-3-Clause text"
+    )
+    assert record["verification"].startswith("upstream-https-sha512")
+    assert record["datastreams"] == manifest["datastreams"]
+    # The runner's list of shipped content is the resolver's.
+    from moonmind.security.endpoint_assessments import SHIPPED_DATASTREAMS
+
+    assert set(SHIPPED_DATASTREAMS) == set(manifest["datastreams"])
+
+
+def test_unverified_or_incomplete_content_never_reaches_the_build(
+    monkeypatch, tmp_path
+):
+    (tmp_path / "notices").mkdir()
+    archive = content_archive(tmp_path / "content.zip")
+    with pytest.raises(image.ImageError, match="checksum missing or invalid"):
+        stage(monkeypatch, tmp_path, archive, checksum="0" * 128)
+    assert not (tmp_path / "build/endpoint-content").exists()
+    short = content_archive(tmp_path / "short.zip", products=("debian12",))
+    with pytest.raises(image.ImageError, match="required content missing"):
+        stage(monkeypatch, tmp_path, short)

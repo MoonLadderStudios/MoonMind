@@ -10,13 +10,25 @@ import os
 import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
 from pathlib import Path
+from xml.etree import ElementTree
 
 from tools.ci.repository_security_image import ARCHITECTURES, ROOT, ImageError, command
 
 FIXTURES = ROOT / "services/repository-security/fixtures"
 MARKER = "MOONMIND_TEST_SECRET_0123456789ABCDEF"
+#: Debian 12 root filesystems that differ only in APT settings, evaluated with
+#: the shipped ComplianceAsCode ANSSI minimal profile. Both rules read files
+#: alone, so an offline copy decides them.
+ENDPOINT_FIXTURES = FIXTURES / "endpoint"
+ENDPOINT_PROFILE = "xccdf_org.ssgproject.content_profile_anssi_np_nt28_minimal"
+ENDPOINT_RULES = (
+    "xccdf_org.ssgproject.content_rule_apt_conf_disallow_unauthenticated",
+    "xccdf_org.ssgproject.content_rule_apt_sources_list_official",
+)
+_XCCDF = "{http://checklists.nist.gov/xccdf/1.2}"
 
 
 def snapshot(root: Path, *, exclude_output=False):
@@ -210,6 +222,138 @@ def owned_directory(path: Path) -> None:
         raise ImageError(
             "run the host qualification harness as root or UID 1000; scanner containers remain UID 1000"
         )
+
+
+def rootfs_archive(tree: Path, destination: Path) -> None:
+    """A reproducible root filesystem tar of one fixture tree, owned by root."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(destination, "w") as bundle:
+        for path in sorted(tree.rglob("*")):
+            info = bundle.gettarinfo(path, arcname=path.relative_to(tree).as_posix())
+            info.uid = info.gid = 0
+            info.uname = info.gname = "root"
+            info.mtime = 0
+            if path.is_file():
+                with path.open("rb") as stream:
+                    bundle.addfile(info, stream)
+            else:
+                bundle.addfile(info)
+    destination.chmod(0o644)
+
+
+def endpoint_results(path: Path) -> dict[str, str]:
+    """Rule results of a retained XCCDF ``TestResult``, read with the stdlib."""
+    root = ElementTree.parse(path).getroot()
+    return {
+        row.get("idref"): (row.findtext(f"{_XCCDF}result") or "").strip()
+        for row in root.iter(f"{_XCCDF}rule-result")
+    }
+
+
+def run_endpoint(image, source, output, scratch, evidence, label, assessment, inputs):
+    """One admitted endpoint runner invocation under the scanner job limits."""
+    result = output / "endpoint"
+    if result.exists():
+        shutil.rmtree(result)
+    invoke(
+        container(
+            image,
+            source,
+            output,
+            "-I",
+            "-m",
+            "moonmind.security.endpoint_assessment_runner",
+            json.dumps(assessment),
+            "/scan-output/endpoint",
+            scratch=scratch,
+            mounts=((inputs, "/inputs"),),
+        ),
+        evidence / f"endpoint-{label}.json",
+        exits=(0, 2),
+    )
+    execution = json.loads((result / "execution.json").read_text())
+    for path in result.iterdir():
+        shutil.copyfile(path, evidence / f"endpoint-{label}-{path.name}")
+    if execution.get("state") != "succeeded" or not (result / "results.xml").is_file():
+        raise ImageError(
+            f"endpoint {label}: runner did not retain results; "
+            f"limitations={execution.get('limitations')}"
+        )
+    return endpoint_results(result / "results.xml"), execution
+
+
+def qualify_endpoint(image, source, output, scratch, evidence) -> dict:
+    """Real OpenSCAP separates the hardened and weakened fixtures offline.
+
+    The weakened copy fails exactly the rules the hardened copy passes, file
+    ownership rules are reported as needing the device, and importing the
+    retained result yields the same rule results.
+    """
+    found = {}
+    for kind in ("hardened", "weakened"):
+        inputs = scratch.parent / f"endpoint-{kind}"
+        rootfs_archive(ENDPOINT_FIXTURES / kind, inputs / "endpoint/rootfs.tar")
+        found[kind] = run_endpoint(
+            image,
+            source,
+            output,
+            scratch,
+            evidence,
+            kind,
+            {
+                "target": "rootfs",
+                "asset": "qualification-endpoint",
+                "inputArtifactRef": "art_qualification",
+                "datastream": "ssg-debian12-ds.xml",
+                "profile": ENDPOINT_PROFILE,
+                "ruleIds": list(ENDPOINT_RULES),
+            },
+            inputs,
+        )
+    for kind, expected in (("hardened", "pass"), ("weakened", "fail")):
+        actual = {rule: found[kind][0].get(rule) for rule in ENDPOINT_RULES}
+        if set(actual.values()) != {expected}:
+            raise ImageError(
+                f"endpoint {kind} fixture: expected {expected} for every rule, got {actual}"
+            )
+    offline = found["hardened"][1].get("offlineRules") or {}
+    if offline.get("xccdf_org.ssgproject.content_rule_file_owner_etc_shadow") != (
+        "metadata"
+    ):
+        raise ImageError("endpoint: ownership rules were not reported as device-only")
+    inputs = scratch.parent / "endpoint-import"
+    (inputs / "endpoint").mkdir(parents=True)
+    shutil.copyfile(
+        evidence / "endpoint-hardened-results.xml", inputs / "endpoint/results.xml"
+    )
+    (inputs / "endpoint/results.xml").chmod(0o644)
+    imported, _ = run_endpoint(
+        image,
+        source,
+        output,
+        scratch,
+        evidence,
+        "import",
+        {
+            "target": "results",
+            "asset": "qualification-endpoint",
+            "inputArtifactRef": "art_qualification",
+            "profile": ENDPOINT_PROFILE,
+        },
+        inputs,
+    )
+    if imported != found["hardened"][0]:
+        raise ImageError("endpoint: imported results differ from the evaluated result")
+    return {
+        "datastream": "ssg-debian12-ds.xml",
+        "profile": ENDPOINT_PROFILE,
+        "contentRelease": found["hardened"][1].get("contentRelease"),
+        "scannerVersion": found["hardened"][1].get("version"),
+        "rules": {
+            kind: {rule: found[kind][0][rule] for rule in ENDPOINT_RULES}
+            for kind in found
+        },
+    }
 
 
 def qualify(image: str, evidence: Path) -> dict:
@@ -563,8 +707,10 @@ print(json.dumps(inventory))
         ):
             raise ImageError("image SBOM is missing its SPDX package inventory")
         shutil.copyfile(sbom, evidence / "sbom.spdx.json")
+        endpoint = qualify_endpoint(image, source, output, scratch, evidence)
         record.update(
             qualification="passed",
+            endpoint=endpoint,
             sbomSha256=hashlib.sha256(sbom.read_bytes()).hexdigest(),
             rules=inventory["defaultRules"],
             qualificationRules=snapshot(FIXTURES),

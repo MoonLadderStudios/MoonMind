@@ -49,7 +49,7 @@ def test_create_inputs_are_a_subject_type_and_catalog_fed_standards():
     schema = preset["annotations"]["inputSchema"]
     assert set(schema["properties"]) == {"subject_type", "standards"}
     # Only subjects an installed journey honours.
-    assert schema["properties"]["subject_type"]["enum"] == ["application"]
+    assert schema["properties"]["subject_type"]["enum"] == ["application", "endpoint"]
     standards = schema["properties"]["standards"]
     assert standards["type"] == "array" and standards["minItems"] == 1
     assert standards["x-moonmind-options"] == "framework-packs"

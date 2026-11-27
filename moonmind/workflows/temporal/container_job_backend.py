@@ -109,6 +109,13 @@ from moonmind.security.egress import (
     restricted_proxy_env,
 )
 from moonmind.security.egress_conformance_evidence import serialize_conformance_evidence
+from moonmind.security.endpoint_assessments import (
+    EndpointExecution,
+    EndpointResultsError,
+    parse_results,
+    sanitize_results,
+    summarize,
+)
 from moonmind.security.image_assessments import (
     TARGET_AUTH_TARGET,
     ImageAssessmentSummary,
@@ -614,6 +621,7 @@ def _withholds_console(spec) -> bool:
         or spec.tls_assessment is not None
         or spec.web_assessment is not None
         or spec.cloud_assessment is not None
+        or spec.endpoint_assessment is not None
         or (
             spec.workload_profile is not None
             and (spec.workload_profile.service_inventory is not None
@@ -1333,6 +1341,25 @@ class DockerContainerJobBackend:
                     'done; fi; [ -n "$p" ] || exit 127; exec "$p" --version',
                 )
             )
+        elif kind == "endpoint-assessment":
+            # OpenSCAP runs and the selected shipped datastream matches the
+            # image's content manifest; no input, target or network.
+            args.extend(
+                (
+                    "--entrypoint",
+                    "timeout",
+                    image,
+                    "--signal=TERM",
+                    "--kill-after=5s",
+                    "75s",
+                    "python",
+                    "-I",
+                    "-m",
+                    "moonmind.security.endpoint_assessment_runner",
+                    "--readiness",
+                    json.dumps(selection, separators=(",", ":")),
+                )
+            )
         elif kind == "web-assessment":
             args.extend(
                 (
@@ -1370,7 +1397,7 @@ class DockerContainerJobBackend:
                 return readiness_failure("scanner_probe_unavailable", unavailable=True)
             if len(stdout) > 16384:
                 return readiness_failure("scanner_probe_unavailable", unavailable=True)
-            if kind in {"cloud-assessment", "web-assessment"}:
+            if kind in {"cloud-assessment", "web-assessment", "endpoint-assessment"}:
                 # Fixed offline entrypoints; don't expose upstream console text.
                 if not re.search(rb"[0-9]+\.[0-9]+", stdout):
                     return readiness_failure("scanner_probe_unavailable", unavailable=True)
@@ -1383,11 +1410,19 @@ class DockerContainerJobBackend:
                             "status": "ready",
                             "code": "scanner_available",
                         },
-                        {
-                            "component": "targetAccess",
-                            "status": "unverified",
-                            "code": "not_probed",
-                        },
+                        (
+                            {
+                                "component": "content",
+                                "status": "ready",
+                                "code": "content_available",
+                            }
+                            if kind == "endpoint-assessment"
+                            else {
+                                "component": "targetAccess",
+                                "status": "unverified",
+                                "code": "not_probed",
+                            }
+                        ),
                     ],
                 }
             from api_service.services.assessment_runtime_readiness import (
@@ -4441,6 +4476,8 @@ class DockerContainerJobBackend:
             return await self._collect_scanner_outputs(request)
         if request.request.spec.image_assessment is not None:
             return await self._collect_image_assessment_outputs(request)
+        if request.request.spec.endpoint_assessment is not None:
+            return await self._collect_endpoint_assessment_outputs(request)
         if request.request.spec.tls_assessment is not None:
             return await self._collect_tls_assessment_outputs(request)
         profile = request.request.spec.workload_profile
@@ -5172,6 +5209,123 @@ class DockerContainerJobBackend:
             )
         except ValueError:
             rejected("summary", "Image assessment summary exceeds the output bound.")
+        return manifest
+
+    async def _collect_endpoint_assessment_outputs(
+        self, request: ContainerJobActivityRequest
+    ):
+        """Rebuild endpoint results and their summary before publication.
+
+        The job's results are sanitized and summarized again here, so neither
+        a crafted input nor the job decides what is retained or concluded.
+        """
+        if self._publish is None:
+            return []
+        spec = request.request.spec
+        assessment = spec.endpoint_assessment
+        entries = await asyncio.to_thread(
+            self._build_output_entries, self._output_root(request), list(spec.outputs)
+        )
+        by_name = {e["name"]: e for e in entries}
+        manifest, limitations = [], []
+        terminal = str(request.terminal_state or "failed")
+        if terminal != "succeeded":
+            limitations.append(f"container_job_{terminal}")
+        bytes_remaining = self._settings.max_output_total_bytes
+        files_remaining = self._settings.max_output_files
+        limit = assessment.max_report_bytes
+        suffixes = {"results": "xml", "execution": "json", "summary": "json"}
+
+        def relative(name):
+            return f"{assessment.output_directory}/{name}.{suffixes[name]}"
+
+        async def publish(name, payload):
+            nonlocal bytes_remaining, files_remaining
+            if len(payload) > min(limit, bytes_remaining) or files_remaining < 1:
+                raise ValueError("output exceeds the collection ceiling")
+            ref = await self._publish_artifact(
+                request,
+                f"{request.job_id}-output-{name}.{suffixes[name]}",
+                payload,
+            )
+            bytes_remaining -= len(payload)
+            files_remaining -= 1
+            manifest.append(
+                ContainerJobArtifact(
+                    name=name,
+                    artifactRef=ref,
+                    sizeBytes=len(payload),
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                    mediaType=(
+                        "application/xml" if name == "results" else "application/json"
+                    ),
+                    relativePath=relative(name),
+                    collectionStatus="collected",
+                )
+            )
+            return ref
+
+        def rejected(name, detail):
+            manifest.append(
+                ContainerJobArtifact(
+                    name=name,
+                    relativePath=relative(name),
+                    collectionStatus="rejected",
+                    detail=detail,
+                )
+            )
+
+        execution = None
+        try:
+            execution = EndpointExecution.model_validate(
+                _redact_strings(
+                    EndpointExecution.model_validate_json(
+                        by_name["execution"]["payload"] or b""
+                    ).model_dump(mode="json", by_alias=True)
+                )
+            )
+            if execution.target != assessment.target or execution.content_file not in (
+                None,
+                assessment.datastream,
+            ):
+                raise ValueError("endpoint execution differs from admission")
+        except (ValueError, TypeError):
+            execution = None
+        limitations.extend(await self._capture_limitations(request))
+        native, native_ref = None, None
+        try:
+            payload = by_name["results"]["payload"]
+            if payload is None:
+                raise ValueError("native results unavailable")
+            safe = sanitize_results(
+                payload, limit, keep_target=assessment.target == "results"
+            )
+            native = parse_results(safe, limit)
+            native_ref = await publish("results", safe)
+        except (EndpointResultsError, ValueError, TypeError):
+            native = None
+            rejected("results", "Native results unavailable or failed checks.")
+        if execution is not None:
+            try:
+                await publish(
+                    "execution", execution.model_dump_json(by_alias=True).encode()
+                )
+            except ValueError:
+                limitations.append("execution_artifact_unavailable")
+                rejected("execution", "Execution evidence exceeds the output bound.")
+        else:
+            rejected("execution", "Execution evidence unavailable.")
+        summary = summarize(
+            assessment,
+            execution,
+            native,
+            native_ref=native_ref,
+            limitations=limitations,
+        )
+        try:
+            await publish("summary", summary.model_dump_json(by_alias=True).encode())
+        except ValueError:
+            rejected("summary", "Endpoint assessment summary exceeds the output bound.")
         return manifest
 
     async def _collect_service_inventory_outputs(

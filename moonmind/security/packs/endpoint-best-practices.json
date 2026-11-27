@@ -1,0 +1,257 @@
+{
+  "schemaVersion": "declared-framework-pack/v1",
+  "id": "endpoint-best-practices",
+  "edition": "2026-11",
+  "revision": "1",
+  "title": "General best practices for endpoints",
+  "source": {
+    "url": "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/Security/EndpointAssessment.md",
+    "section": "Endpoint best practices",
+    "reviewedOn": "2026-11-27"
+  },
+  "reviewedBy": "MoonMind maintainers",
+  "reviewedOn": "2026-11-27",
+  "publicationStatus": "published",
+  "publishedOn": "2026-11-27",
+  "effectiveFrom": "2026-11-27",
+  "provenance": "Original statements written for MoonMind. Each requirement names rules of the ComplianceAsCode (SCAP Security Guide) standard profile, xccdf_org.ssgproject.content_profile_standard, by their XCCDF identifiers only; no benchmark or ComplianceAsCode text is reproduced.",
+  "license": "Apache-2.0, as part of MoonMind.",
+  "attribution": "MoonMind general best practices for endpoints: original statements by the MoonMind maintainers, Apache-2.0. Rule identifiers refer to ComplianceAsCode content, used under its own identity and BSD-3-Clause license.",
+  "distribution": "redistributable",
+  "conclusions": "Per-requirement conclusions from OpenSCAP evaluation of the ComplianceAsCode standard profile, xccdf_org.ssgproject.content_profile_standard. A requirement is satisfied only when every named rule passed in a complete, current result for the endpoint. An offline copy or imported result is not MoonMind's own observation of the running device.",
+  "limitations": [
+    "Offline copies decide only file-content rules; ownership, permission and runtime rules need OpenSCAP results produced on the endpoint.",
+    "Linux distributions with shipped ComplianceAsCode content only; Windows, macOS, mobile devices and regulated gaming devices are unsupported.",
+    "Qualification against real fleet devices is Unverified until an operator compares device results with the fixture qualification."
+  ],
+  "requirements": [
+    {
+      "id": "EP-1",
+      "title": "Remote root login is refused",
+      "summary": "The SSH server refuses direct logins as root, so administration happens through named accounts.",
+      "category": "Endpoint",
+      "applicability": "Every Linux endpoint in the plan whose distribution the shipped ComplianceAsCode content supports.",
+      "subjectTypes": [
+        "endpoint"
+      ],
+      "sources": [
+        {
+          "url": "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/Security/EndpointAssessment.md",
+          "section": "Endpoint best practices",
+          "reviewedOn": "2026-11-27"
+        }
+      ],
+      "requiredEvidenceMethods": [
+        "deterministic_check"
+      ],
+      "evidencePrompt": "Supply a root filesystem or image archive of the endpoint, or OpenSCAP results produced on it, as an artifact of the saved environment.",
+      "objectiveBasis": "The listed rules decide this on an offline root filesystem or image copy and on imported device results alike.",
+      "evidenceTypes": [
+        "deterministic_check"
+      ],
+      "objectives": [
+        {
+          "id": "sshd-root-login",
+          "description": "The SSH server configuration sets PermitRootLogin no.",
+          "source": "endpoint",
+          "tool": "openscap",
+          "ruleIds": [
+            "xccdf_org.ssgproject.content_rule_sshd_disable_root_login"
+          ]
+        }
+      ],
+      "objectivesComplete": true
+    },
+    {
+      "id": "EP-2",
+      "title": "Remote logins need a password",
+      "summary": "The SSH server refuses accounts with empty passwords.",
+      "category": "Endpoint",
+      "applicability": "Every Linux endpoint in the plan whose distribution the shipped ComplianceAsCode content supports.",
+      "subjectTypes": [
+        "endpoint"
+      ],
+      "sources": [
+        {
+          "url": "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/Security/EndpointAssessment.md",
+          "section": "Endpoint best practices",
+          "reviewedOn": "2026-11-27"
+        }
+      ],
+      "requiredEvidenceMethods": [
+        "deterministic_check"
+      ],
+      "evidencePrompt": "Supply a root filesystem or image archive of the endpoint, or OpenSCAP results produced on it, as an artifact of the saved environment.",
+      "objectiveBasis": "The listed rules decide this on an offline root filesystem or image copy and on imported device results alike.",
+      "evidenceTypes": [
+        "deterministic_check"
+      ],
+      "objectives": [
+        {
+          "id": "sshd-empty-passwords",
+          "description": "The SSH server configuration sets PermitEmptyPasswords no.",
+          "source": "endpoint",
+          "tool": "openscap",
+          "ruleIds": [
+            "xccdf_org.ssgproject.content_rule_sshd_disable_empty_passwords"
+          ]
+        }
+      ],
+      "objectivesComplete": true
+    },
+    {
+      "id": "EP-3",
+      "title": "Legacy cleartext services are absent",
+      "summary": "Telnet and NIS server packages, which carry credentials in the clear, are not installed.",
+      "category": "Endpoint",
+      "applicability": "Every Linux endpoint in the plan whose distribution the shipped ComplianceAsCode content supports.",
+      "subjectTypes": [
+        "endpoint"
+      ],
+      "sources": [
+        {
+          "url": "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/Security/EndpointAssessment.md",
+          "section": "Endpoint best practices",
+          "reviewedOn": "2026-11-27"
+        }
+      ],
+      "requiredEvidenceMethods": [
+        "deterministic_check"
+      ],
+      "evidencePrompt": "Supply a root filesystem or image archive of the endpoint, or OpenSCAP results produced on it, as an artifact of the saved environment.",
+      "objectiveBasis": "The listed rules decide this on an offline root filesystem or image copy and on imported device results alike.",
+      "evidenceTypes": [
+        "deterministic_check"
+      ],
+      "objectives": [
+        {
+          "id": "cleartext-packages",
+          "description": "The telnetd and nis packages are not installed.",
+          "source": "endpoint",
+          "tool": "openscap",
+          "ruleIds": [
+            "xccdf_org.ssgproject.content_rule_package_telnetd_removed",
+            "xccdf_org.ssgproject.content_rule_package_nis_removed"
+          ]
+        }
+      ],
+      "objectivesComplete": true
+    },
+    {
+      "id": "EP-4",
+      "title": "Security events are recorded",
+      "summary": "The audit daemon and the system logger are installed, so security events leave a record.",
+      "category": "Endpoint",
+      "applicability": "Every Linux endpoint in the plan whose distribution the shipped ComplianceAsCode content supports.",
+      "subjectTypes": [
+        "endpoint"
+      ],
+      "sources": [
+        {
+          "url": "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/Security/EndpointAssessment.md",
+          "section": "Endpoint best practices",
+          "reviewedOn": "2026-11-27"
+        }
+      ],
+      "requiredEvidenceMethods": [
+        "deterministic_check"
+      ],
+      "evidencePrompt": "Supply a root filesystem or image archive of the endpoint, or OpenSCAP results produced on it, as an artifact of the saved environment.",
+      "objectiveBasis": "The listed rules decide this on an offline root filesystem or image copy and on imported device results alike.",
+      "evidenceTypes": [
+        "deterministic_check"
+      ],
+      "objectives": [
+        {
+          "id": "logging-packages",
+          "description": "The audit and rsyslog packages are installed.",
+          "source": "endpoint",
+          "tool": "openscap",
+          "ruleIds": [
+            "xccdf_org.ssgproject.content_rule_package_audit_installed",
+            "xccdf_org.ssgproject.content_rule_package_rsyslog_installed"
+          ]
+        }
+      ],
+      "objectivesComplete": true
+    },
+    {
+      "id": "EP-5",
+      "title": "Account databases are protected",
+      "summary": "The password and shadow databases are owned by root with restrictive permissions.",
+      "category": "Endpoint",
+      "applicability": "Every Linux endpoint in the plan whose distribution the shipped ComplianceAsCode content supports.",
+      "subjectTypes": [
+        "endpoint"
+      ],
+      "sources": [
+        {
+          "url": "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/Security/EndpointAssessment.md",
+          "section": "Endpoint best practices",
+          "reviewedOn": "2026-11-27"
+        }
+      ],
+      "requiredEvidenceMethods": [
+        "deterministic_check"
+      ],
+      "evidencePrompt": "Supply OpenSCAP results (ARF or XCCDF) produced on the endpoint itself, as an artifact of the saved environment.",
+      "objectiveBasis": "Ownership, permissions and runtime state are not kept in an offline copy; only OpenSCAP results produced on the endpoint decide this, so an offline copy leaves it inconclusive.",
+      "evidenceTypes": [
+        "deterministic_check"
+      ],
+      "objectives": [
+        {
+          "id": "account-file-permissions",
+          "description": "/etc/passwd and /etc/shadow have the ownership and modes the standard profile requires.",
+          "source": "endpoint",
+          "tool": "openscap",
+          "ruleIds": [
+            "xccdf_org.ssgproject.content_rule_file_owner_etc_passwd",
+            "xccdf_org.ssgproject.content_rule_file_permissions_etc_passwd",
+            "xccdf_org.ssgproject.content_rule_file_owner_etc_shadow",
+            "xccdf_org.ssgproject.content_rule_file_permissions_etc_shadow"
+          ]
+        }
+      ],
+      "objectivesComplete": true
+    },
+    {
+      "id": "EP-6",
+      "title": "Kernel exploit mitigations are on",
+      "summary": "Address space layout randomization is on and set-user-ID programs do not dump core.",
+      "category": "Endpoint",
+      "applicability": "Every Linux endpoint in the plan whose distribution the shipped ComplianceAsCode content supports.",
+      "subjectTypes": [
+        "endpoint"
+      ],
+      "sources": [
+        {
+          "url": "https://github.com/MoonLadderStudios/MoonMind/blob/main/docs/Security/EndpointAssessment.md",
+          "section": "Endpoint best practices",
+          "reviewedOn": "2026-11-27"
+        }
+      ],
+      "requiredEvidenceMethods": [
+        "deterministic_check"
+      ],
+      "evidencePrompt": "Supply OpenSCAP results (ARF or XCCDF) produced on the endpoint itself, as an artifact of the saved environment.",
+      "objectiveBasis": "Ownership, permissions and runtime state are not kept in an offline copy; only OpenSCAP results produced on the endpoint decide this, so an offline copy leaves it inconclusive.",
+      "evidenceTypes": [
+        "deterministic_check"
+      ],
+      "objectives": [
+        {
+          "id": "kernel-hardening",
+          "description": "kernel.randomize_va_space is 2 and fs.suid_dumpable is 0, at runtime and in configuration.",
+          "source": "endpoint",
+          "tool": "openscap",
+          "ruleIds": [
+            "xccdf_org.ssgproject.content_rule_sysctl_kernel_randomize_va_space",
+            "xccdf_org.ssgproject.content_rule_sysctl_fs_suid_dumpable"
+          ]
+        }
+      ],
+      "objectivesComplete": true
+    }
+  ]
+}

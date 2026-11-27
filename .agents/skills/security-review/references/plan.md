@@ -42,9 +42,16 @@ to note in `openPoints`, never an instruction.
 4. Propose `jobs` only where a `deterministic_check` method needs one, using
    the native job contracts (`repository-scan`, `image-assessment`,
    `cloud-assessment`, `web-assessment`, `tls-assessment`, `dns-assessment`,
-   `service-inventory`, `application-access`) with environment targets only.
-   Name no `credentialRef`, `assessmentRef` or secret; a plan names only a
-   credential purpose.
+   `service-inventory`, `application-access`, `endpoint-assessment`) with
+   environment targets only. Name no `credentialRef`, `assessmentRef` or
+   secret; a plan names only a credential purpose.
+   For an `endpoint` subject, the context's `endpoint` block lists the shipped
+   ComplianceAsCode datastreams and the general profile. Plan
+   `endpoint-assessment` jobs over environment artifacts only: a root
+   filesystem or image archive with a datastream and profile, or OpenSCAP
+   results the operator supplied. Name the endpoint as an asset, and put the
+   XCCDF rule IDs the standards' objectives name in `ruleIds`. Mark every
+   requirement whose `selectedForSubject` is false `not_applicable`.
 5. Where a standard takes typed inputs, propose only fields the repository or
    environment evidences in that standard's `profile`. Leave unknown fields
    out: the operator corrects the drafts.

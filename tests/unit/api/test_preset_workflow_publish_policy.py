@@ -48,6 +48,7 @@ _PUBLISH_NOTHING_PRESETS = frozenset(
         "pr-review-resolve",
         "security-code-supply-chain",
         "security-image-sbom",
+        "security-endpoint",
         "security-aws-posture",
         "security-web-api",
         "security-nj-dge",

@@ -86,7 +86,8 @@ it('opens the security plan from its start link and chooses standards from the c
   expect(await screen.findByLabelText('Assessment context')).toBeTruthy();
 
   const subject = within(step).getByLabelText('Subject type') as HTMLSelectElement;
-  expect(Array.from(subject.options).map((option) => option.value).filter(Boolean)).toEqual(['application']);
+  // An endpoint is a choice now that MoonMind assesses one offline.
+  expect(Array.from(subject.options).map((option) => option.value).filter(Boolean)).toEqual(['application', 'endpoint']);
   const standards = await within(step).findByRole('listbox', { name: 'Standards' }) as HTMLSelectElement;
   await waitFor(() => expect(standards.options).toHaveLength(3));
   const [general, iso, declared] = Array.from(standards.options);

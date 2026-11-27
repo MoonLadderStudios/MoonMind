@@ -139,6 +139,7 @@ def _validate_json(payload, *, hint: str):
     )
     from moonmind.security.cloud_assessments import CloudAssessmentSummary
     from moonmind.security.dns_assessments import DNSAssessmentSummary, DNSExecution
+    from moonmind.security.endpoint_assessments import EndpointAssessmentSummary
     from moonmind.security.game_math import GameMathAssessment
     from moonmind.security.image_assessments import ImageAssessmentSummary
     from moonmind.security.repository_scanners import ScannerSummary, _document
@@ -161,6 +162,7 @@ def _validate_json(payload, *, hint: str):
         "dns-execution/v1": DNSExecution,
         "web-assessment/v1": WebAssessmentSummary,
         "cloud-posture/v1": CloudAssessmentSummary,
+        "endpoint-assessment/v1": EndpointAssessmentSummary,
         "game-math-assessment/v1": GameMathAssessment,
     }
     if hint in {"native:gitleaks", "native:opengrep", "native:trivy"}:

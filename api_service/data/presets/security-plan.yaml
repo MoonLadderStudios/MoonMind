@@ -1,7 +1,8 @@
 slug: security-plan
 title: Security plan
-description: Plan what a security assessment of an application will check against the standards you
-  choose, from its repository and a saved environment. Runs no scanner, cloud, web or network job.
+description: Plan what a security assessment of an application, or of an endpoint from its captured
+  filesystem or OpenSCAP results, will check against the standards you choose, from a saved
+  environment. Runs no scanner, cloud, web or network job.
 tags:
 - security
 - assessment
@@ -23,9 +24,11 @@ annotations:
         title: Subject type
         enum:
         - application
+        - endpoint
         default: application
-        description: What the plan covers. Endpoints and networks become choices when MoonMind can assess
-          them.
+        description: What the plan covers. An endpoint is assessed offline with OpenSCAP from a root
+          filesystem, image archive or OpenSCAP results uploaded as artifacts of the saved environment;
+          MoonMind does not reach the host. Networks become a choice when MoonMind can assess them.
       standards:
         type: array
         title: Standards
@@ -34,8 +37,8 @@ annotations:
         x-moonmind-options: framework-packs
         items:
           type: object
-        description: Choose from the standards catalog. General best practices cover an application with
-          no regulatory standard. Unavailable standards show why.
+        description: Choose from the standards catalog. General best practices cover an application, or
+          an endpoint, with no regulatory standard. Unavailable standards show why.
   defaults:
     subject_type: application
     standards: []

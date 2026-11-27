@@ -22,6 +22,15 @@ ROOT = Path(__file__).resolve().parents[3]
         ),
         ("image-assessment", {"operation": "assess", "target": "archive"}),
         (
+            "endpoint-assessment",
+            {
+                "target": "rootfs",
+                "asset": "web-01",
+                "inputArtifactRef": "art_x",
+                "remediate": True,
+            },
+        ),
+        (
             "cloud-assessment",
             {
                 "provider": "azure",
@@ -67,6 +76,7 @@ def test_preset_inputs_reject_invalid_native_admission(contract, value):
         "security-image-sbom",
         "security-aws-posture",
         "security-web-api",
+        "security-endpoint",
     ],
 )
 def test_supported_catalog_contracts(slug):
@@ -146,6 +156,18 @@ CASES = [
             },
         },
     ),
+    (
+        "security-endpoint",
+        "endpointAssessment",
+        {
+            "target": "rootfs",
+            "asset": "web-01",
+            "inputArtifactRef": "art_rootfs",
+            "datastream": "ssg-debian12-ds.xml",
+            "profile": "xccdf_org.ssgproject.content_profile_standard",
+            "timeoutSeconds": 600,
+        },
+    ),
 ]
 
 
@@ -205,6 +227,7 @@ async def test_api_expansion_and_rerun_feed_existing_native_jobs(
     from moonmind.config.settings import settings
     from moonmind.security.assessment_preset_inputs import ASSESSMENT_INPUT_CONTRACTS
     from moonmind.security.cloud_assessments import build_cloud_assessment_job
+    from moonmind.security.endpoint_assessments import build_endpoint_assessment_job
     from moonmind.security.image_assessments import build_image_assessment_job
     from moonmind.security.repository_scanners import build_scanner_job
     from moonmind.security.web_assessments import build_web_assessment_job
@@ -255,6 +278,7 @@ async def test_api_expansion_and_rerun_feed_existing_native_jobs(
                 "imageAssessment": build_image_assessment_job,
                 "cloudAssessment": build_cloud_assessment_job,
                 "webAssessment": build_web_assessment_job,
+                "endpointAssessment": build_endpoint_assessment_job,
             }[job_key]
             job = builder(model)
             assert selection["jobSpec"] == job

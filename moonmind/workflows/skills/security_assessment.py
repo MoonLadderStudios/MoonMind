@@ -49,6 +49,10 @@ from moonmind.security.dns_assessments import (
 from moonmind.security.frameworks import PACK_EDITION_PATTERN, PACK_IDENTIFIER_PATTERN
 from moonmind.security.game_math import GameMathAssessment
 from moonmind.security.github_alerts import alert_observation, correlate_alerts
+from moonmind.security.endpoint_assessments import EndpointAssessmentSummary
+from moonmind.security.endpoint_assessments import (
+    verify_summary as verify_endpoint_summary,
+)
 from moonmind.security.image_assessments import ImageAssessmentSummary
 from moonmind.security.passive_repo_scan import (
     PASSIVE_SCAN_TOOL_REF,
@@ -500,6 +504,139 @@ def _image_observation(
             "imageFeedSnapshot": (execution.database_digest if execution else None)
             or "unavailable",
             "imageScannerVersion": version,
+        },
+    )
+
+
+#: Endpoint limitations confined to the rules they name; others reach every rule.
+_ENDPOINT_RULE_LIMITATIONS = frozenset(
+    {
+        "rule_check_errors",
+        "required_rules_not_evaluated",
+        "results_include_remediation",
+        "content_digest_not_recorded",
+    }
+)
+
+
+def _endpoint_observation(
+    request, summary: EndpointAssessmentSummary, ref: str, created_at: datetime
+) -> Observation:
+    """OpenSCAP rule results as deterministic coverage of one admitted endpoint.
+
+    Pass and fail cover their rules. Errors, unknown results and required rules
+    that were not evaluated are partial coverage of those rules, so the run is
+    never clean; other coverage states cover nothing. Content, profile and
+    tailoring identity are intelligence, so a changed profile or content
+    release explains a changed result without implying a changed endpoint.
+    """
+    admission, subject, content = summary.admission, summary.subject, summary.content
+    asset = admission.asset
+    if asset not in request.scope.assets or asset in request.scope.exclusions:
+        raise ValueError("endpoint outside admitted assessment scope")
+    if summary.native_ref is None or subject is None or content is None:
+        raise ValueError("endpoint summary lacks retained results or identity")
+    findings = [
+        Finding(
+            source="endpoint",
+            tool="openscap",
+            rule_id=rule.rule_id,
+            asset=asset,
+            # One finding per rule on the endpoint, so reassessment compares it.
+            native_id=rule.rule_id,
+            severity=rule.severity,
+            evidence_refs=[summary.native_ref],
+        )
+        for rule in summary.rules
+        if rule.state == "failed"
+    ]
+    conclusive = [r.rule_id for r in summary.rules if r.state != "not_assessed"]
+    incomplete = sorted(
+        {
+            r.rule_id
+            for r in summary.rules
+            if r.result in {"error", "unknown", "fixed"}
+        }
+        | (set(admission.rule_ids) - set(conclusive))
+    )
+    run_limits = set(summary.limitations) - _ENDPOINT_RULE_LIMITATIONS
+    intelligence = {
+        "version": (summary.execution.version if summary.execution else None)
+        or "unavailable",
+        "benchmark": content.benchmark_id,
+        "benchmarkVersion": content.benchmark_version or "unrecorded",
+        "profile": content.profile_id or "default",
+        "content": content.content_digest or "not_recorded",
+        "contentRelease": content.content_release or "not_recorded",
+        "tailoring": content.tailoring.digest or content.tailoring.state,
+        "origin": subject.observation,
+    }
+    # Absence compares only under the same profile, tailoring and origin.
+    config_ref = content_key(
+        [
+            "endpoint",
+            "openscap",
+            subject.observation,
+            content.profile_id,
+            content.tailoring.digest or content.tailoring.state,
+        ]
+    )
+    coverage = [
+        Coverage(
+            source="endpoint",
+            tool="openscap",
+            assets=[asset],
+            rule_ids=conclusive[:4096],
+            all_rules=False,
+            config_ref=config_ref,
+            status=(
+                "complete" if not run_limits and len(conclusive) <= 4096 else "partial"
+            ),
+            evidence_method="deterministic_check",
+            intelligence=intelligence,
+        )
+    ]
+    if incomplete:
+        coverage.append(
+            Coverage(
+                source="endpoint",
+                tool="openscap",
+                assets=[asset],
+                rule_ids=incomplete[:4096],
+                all_rules=False,
+                config_ref=config_ref,
+                status="partial",
+                evidence_method="deterministic_check",
+                intelligence=intelligence,
+            )
+        )
+    observed_at = summary.observed_at or created_at
+    return Observation(
+        scope=request.scope,
+        observed_at=observed_at,
+        expires_at=observed_at + timedelta(days=1),
+        findings=findings,
+        coverage=coverage,
+        provenance={
+            "endpointSummary": ref,
+            "endpointNativeResults": summary.native_ref,
+            "endpointSubject": subject.identity,
+            "endpointObservation": subject.observation,
+            "endpointStatement": subject.statement,
+            "endpointContent": " ".join(
+                part
+                for part in (
+                    content.benchmark_id,
+                    content.benchmark_version,
+                    content.profile_id,
+                )
+                if part
+            ),
+            **(
+                {"endpointAlignedWith": content.aligned_with}
+                if content.aligned_with
+                else {}
+            ),
         },
     )
 
@@ -2846,6 +2983,27 @@ class AssessmentExecution:
                                     "interpretation": image_summary.interpretation,
                                 }
                             )
+                        elif payload.get("schemaVersion") == "endpoint-assessment/v1":
+                            endpoint_summary = EndpointAssessmentSummary.model_validate(
+                                payload
+                            )
+                            if endpoint_summary.native_ref is None:
+                                raise ValueError("endpoint results unavailable")
+                            _, native_body = await self.read(
+                                endpoint_summary.native_ref
+                            )
+                            endpoint_summary = verify_endpoint_summary(
+                                endpoint_summary, native_body
+                            )
+                            observed_at = metadata.created_at
+                            if observed_at.tzinfo is None:
+                                observed_at = observed_at.replace(tzinfo=UTC)
+                            observation = _endpoint_observation(
+                                request, endpoint_summary, ref, observed_at
+                            )
+                            scanner_summaries.append(
+                                _endpoint_entry(endpoint_summary, ref, observation)
+                            )
                         elif payload.get("schemaVersion") == "service-inventory/v1":
                             inventory_summary = ServiceInventorySummary.model_validate(
                                 payload
@@ -4453,6 +4611,8 @@ def _scanner_summary(summaries: list[dict]) -> str:
                 + "."
             )
             lines.append("Coverage expires: " + str(summary["coverageExpiresAt"]) + ".")
+        if summary["scanner"] == "openscap":
+            lines += _endpoint_summary_lines(summary)
         if summary["scanner"] == "service-inventory":
             lines.append(summary["attribution"])
             lines.append(
@@ -4495,6 +4655,80 @@ def _scanner_summary(summaries: list[dict]) -> str:
             ):
                 lines.append(f"{label}: {json.dumps(summary[key], sort_keys=True)}")
     return "\n".join(lines) + ("\n" if lines else "")
+
+
+def _endpoint_entry(summary: EndpointAssessmentSummary, ref: str, observation):
+    """The retained-report record of one endpoint result, with per-rule evidence."""
+    content, subject = summary.content, summary.subject
+    return {
+        "scanner": "openscap",
+        "target": f"{summary.admission.asset} ({subject.identity})",
+        "summaryRef": ref,
+        "nativeRefs": {"results": summary.native_ref},
+        "coverage": (
+            "complete"
+            if all(row.status == "complete" for row in observation.coverage)
+            else "partial"
+        ),
+        "execution": {"results": summary.counts, "platform": summary.platform},
+        "limitations": list(summary.limitations),
+        "verification": "recomputed_from_retained_results",
+        "interpretation": summary.interpretation,
+        "observation": subject.statement,
+        "content": {
+            "benchmark": content.benchmark_id,
+            "benchmarkVersion": content.benchmark_version,
+            "profile": content.profile_id,
+            "family": content.family,
+            "alignedWith": content.aligned_with,
+            "contentDigest": content.content_digest,
+            "contentRelease": content.content_release,
+            "tailoring": content.tailoring.model_dump(mode="json", by_alias=True),
+        },
+        "contentRights": summary.content_rights,
+        "unsupportedPlatforms": list(summary.unsupported_platforms),
+        "rules": [
+            rule.model_dump(mode="json", by_alias=True, exclude_none=True)
+            for rule in summary.rules
+            if rule.result != "notselected"
+        ],
+    }
+
+
+def _endpoint_summary_lines(summary: dict) -> list[str]:
+    content = summary["content"]
+    lines = [
+        summary["observation"],
+        "Content: "
+        + " ".join(
+            str(value)
+            for value in (
+                content["benchmark"],
+                content["benchmarkVersion"],
+                content["profile"],
+            )
+            if value
+        )
+        + f" ({content['family']}"
+        + (f", aligned with {content['alignedWith']}" if content["alignedWith"] else "")
+        + f"; tailoring {content['tailoring']['state']}).",
+        summary["contentRights"],
+        "Unsupported coverage: " + ", ".join(summary["unsupportedPlatforms"]) + ".",
+        "Per-rule evidence:",
+    ]
+    rules = summary["rules"]
+    for rule in rules[:500]:
+        lines.append(
+            # Rule IDs are checked tokens without backticks; code spans keep
+            # their underscores literal.
+            f"- `{rule['ruleId']}`: {rule['result']} ({rule['state']})"
+            + (f". {rule['reason']}" if rule.get("reason") else ".")
+        )
+    if len(rules) > 500:
+        lines.append(
+            f"- {len(rules) - 500} more rules are listed in the retained summary."
+        )
+    return lines
 
 
 def _github_summary(github: dict | None) -> str:

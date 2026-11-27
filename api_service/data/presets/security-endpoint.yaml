@@ -1,0 +1,162 @@
+slug: security-endpoint
+title: Endpoint configuration assessment
+description: Evaluate a ComplianceAsCode profile with OpenSCAP against a captured root filesystem or
+  image archive offline, or import OpenSCAP results produced on the endpoint. Never reaches the host
+  and never remediates.
+tags:
+- security
+- assessment
+- endpoint-assessment
+releaseStatus: active
+requiredCapabilities:
+- sandbox
+annotations:
+  workflowPublish:
+    mode: none
+  uiSchema:
+    assessment:
+      outputDirectory:
+        advanced: true
+      maxInputBytes:
+        advanced: true
+      maxReportBytes:
+        advanced: true
+      timeoutSeconds:
+        advanced: true
+  inputSchema:
+    type: object
+    required:
+    - assessment
+    properties:
+      goal:
+        type: string
+        title: Goal
+        default: Evaluate the endpoint's configuration against the selected ComplianceAsCode profile
+          and report every rule's result. No remediation.
+      assessment:
+        additionalProperties: false
+        description: 'Offline OpenSCAP evaluation of an endpoint, or import of its results.
+
+
+          rootfs and image read a captured root filesystem tar or Docker/OCI image archive and
+          evaluate a ComplianceAsCode profile shipped in the scanner image, with no network. results
+          imports ARF or XCCDF results the operator produced with OpenSCAP on the endpoint. Neither is
+          MoonMind''s own observation of the running device. Evaluation is read-only: there is no
+          remediation, fix-generation or command input.'
+        properties:
+          target:
+            enum:
+            - rootfs
+            - image
+            - results
+            title: Target
+            type: string
+            default: rootfs
+          asset:
+            pattern: ^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$
+            type: string
+            title: Endpoint asset
+            description: The endpoint's stable name in the assessment scope; findings attach to it.
+          inputArtifactRef:
+            pattern: ^art_[0-9A-Za-z]{1,64}$
+            type: string
+            title: Input artifact ref
+            description: A root filesystem tar, a Docker or OCI image archive, or ARF or XCCDF results.
+          datastream:
+            enum:
+            - ssg-debian12-ds.xml
+            - ssg-debian13-ds.xml
+            - ssg-ubuntu2204-ds.xml
+            - ssg-ubuntu2404-ds.xml
+            type: string
+            title: ComplianceAsCode datastream
+            description: Required to evaluate a root filesystem or image; imported results name their own
+              content.
+          profile:
+            pattern: ^xccdf_[A-Za-z0-9.-]+_profile_[A-Za-z0-9_.-]{1,128}$
+            type: string
+            title: XCCDF profile
+            description: Required to evaluate; xccdf_org.ssgproject.content_profile_standard is the
+              general best-practices choice. For imported results, leave it empty or name the profile
+              they must report.
+          tailoringArtifactRef:
+            pattern: ^art_[0-9A-Za-z]{1,64}$
+            type: string
+            title: Tailoring artifact ref
+          ruleIds:
+            type: array
+            title: Required rule IDs
+            maxItems: 256
+            items:
+              type: string
+              pattern: ^xccdf_[A-Za-z0-9.-]+_rule_[A-Za-z0-9_.-]{1,128}$
+            description: Rules the selected standards name. Any the profile leaves unselected, or that
+              end without pass or fail, leave the run partial.
+          outputDirectory:
+            default: endpoint-assessment
+            title: Output directory
+            type: string
+          maxInputBytes:
+            default: 2147483648
+            maximum: 4294967296
+            minimum: 1
+            title: Max input bytes
+            type: integer
+          maxReportBytes:
+            default: 33554432
+            maximum: 33554432
+            minimum: 1024
+            title: Max report bytes
+            type: integer
+          timeoutSeconds:
+            default: 1800
+            maximum: 3600
+            minimum: 60
+            title: Timeout seconds
+            type: integer
+        required:
+        - target
+        - asset
+        - inputArtifactRef
+        title: Assessment
+        type: object
+        x-moonmind-input-contract: endpoint-assessment
+      baseline_ref:
+        type: string
+        title: Baseline ref
+        description: Optional retained report for comparison. Omit for a first assessment.
+steps:
+- title: Collect evidence and assess
+  repositoryOperation: read
+  instructions: 'Use the portable security-review Skill and the supplied goal and assessment arguments.
+    Execute the compiled job_spec through moonmind container run --spec <file> --request-id <collection-id>.
+    Serialize job_spec as JSON and reuse the collection ID on retry without changing the target,
+    content, profile, tailoring, rules, timeout or input. Use the existing container-job owner; retain
+    the job ID and the results and summary artifact references. Reconcile uncertain submissions before
+    retrying. Stop with actionable diagnostics if readiness or admission fails; never install
+    substitutes, reach the endpoint or broaden scope.
+
+
+    Interpret this step''s collected evidence for the supplied goal. Reuse completed evidence; never
+    repeat collection. Save an evidence-referenced security-review/v1 interpretation and readable report
+    with per-rule results, coverage states and their reasons, and honest exclusions: an offline copy or
+    imported result is not an observation of the running device. Compare baseline_ref only when
+    supplied and accessible. Preserve native results if interpretation fails.
+
+
+    Preserve the selected workflow source, harness, Provider Profile, evidence-processing policy and publication
+    choice. This assessment does not authorize remediation, fix scripts, configuration changes or
+    publication. Use only the original remaining budget, including retries.'
+  skill:
+    id: security-review
+    args:
+      goal: '{{ inputs.goal }}'
+      assessment: '{{ inputs.assessment }}'
+      baseline_ref: '{{ inputs.baseline_ref }}'
+    requiredCapabilities:
+    - sandbox
+  annotations:
+    securityAssessment:
+      kind: endpoint-assessment
+      admission: '{{ inputs.assessment }}'
+      phase: collect

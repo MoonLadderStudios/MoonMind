@@ -150,7 +150,7 @@ jobs:
       - name: Preserve published tools and build the candidate production Dockerfile
         run: |
           set -euo pipefail
-          mkdir -p artifacts/tls-qualification services/repository-security/resolved/{bin,notices,rules}
+          mkdir -p artifacts/tls-qualification services/repository-security/resolved/{bin,notices,rules,endpoint-content}
           docker pull --platform "linux/$TEST_ARCHITECTURE" "$PUBLISHED_SCANNER_IMAGE"
           docker image inspect "$PUBLISHED_SCANNER_IMAGE" > artifacts/tls-qualification/published-image.json
           source=$(docker create "$PUBLISHED_SCANNER_IMAGE")
@@ -161,6 +161,11 @@ jobs:
           docker cp "$source:/usr/local/share/repository-security/notices/." services/repository-security/resolved/notices/
           docker cp "$source:/usr/local/share/repository-security/inventory.json" services/repository-security/resolved/inventory.json
           docker cp "$source:/opt/moonmind-scanner-rules/default/." services/repository-security/resolved/rules/
+          # TLS rows never read endpoint content, so a published image from
+          # before it shipped still qualifies the candidate without it.
+          if ! docker cp "$source:/opt/moonmind-endpoint-content/." services/repository-security/resolved/endpoint-content/; then
+            echo "::notice::$PUBLISHED_SCANNER_IMAGE has no endpoint content; the TLS candidate is built without it"
+          fi
           python - <<'PY_STAGE'
           import hashlib, json, os, subprocess
           from pathlib import Path

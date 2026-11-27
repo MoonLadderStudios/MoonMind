@@ -2136,6 +2136,9 @@
           "reviewedOn": "2026-11-09"
         }
       ],
+      "subjectTypes": [
+        "endpoint"
+      ],
       "evidenceTypes": [
         "organisational",
         "technical_context"
@@ -2232,6 +2235,9 @@
           "reviewedOn": "2026-11-09"
         }
       ],
+      "subjectTypes": [
+        "endpoint"
+      ],
       "evidenceTypes": [
         "organisational",
         "technical_context"
@@ -2280,6 +2286,9 @@
           "reviewedOn": "2026-11-09"
         }
       ],
+      "subjectTypes": [
+        "endpoint"
+      ],
       "evidenceTypes": [
         "organisational",
         "technical_context"
@@ -2304,6 +2313,9 @@
           "reviewedOn": "2026-11-09"
         }
       ],
+      "subjectTypes": [
+        "endpoint"
+      ],
       "evidenceTypes": [
         "organisational",
         "technical_context"
@@ -2327,6 +2339,9 @@
           "section": "A.8.9",
           "reviewedOn": "2026-11-09"
         }
+      ],
+      "subjectTypes": [
+        "endpoint"
       ],
       "evidenceTypes": [
         "organisational",
@@ -2472,6 +2487,9 @@
           "reviewedOn": "2026-11-09"
         }
       ],
+      "subjectTypes": [
+        "endpoint"
+      ],
       "evidenceTypes": [
         "organisational",
         "technical_context"
@@ -2520,6 +2538,9 @@
           "reviewedOn": "2026-11-09"
         }
       ],
+      "subjectTypes": [
+        "endpoint"
+      ],
       "evidenceTypes": [
         "organisational",
         "technical_context"
@@ -2567,6 +2588,9 @@
           "section": "A.8.19",
           "reviewedOn": "2026-11-09"
         }
+      ],
+      "subjectTypes": [
+        "endpoint"
       ],
       "evidenceTypes": [
         "organisational",

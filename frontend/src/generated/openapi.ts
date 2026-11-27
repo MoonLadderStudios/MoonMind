@@ -6706,6 +6706,7 @@ export interface components {
             tlsAssessment?: components["schemas"]["TLSAssessment"] | null;
             webAssessment?: components["schemas"]["WebAssessment"] | null;
             cloudAssessment?: components["schemas"]["CloudAssessment"] | null;
+            endpointAssessment?: components["schemas"]["EndpointAssessment"] | null;
             workloadProfile?: components["schemas"]["WorkloadProfileSelection"] | null;
             /** Image */
             image?: string | null;
@@ -7722,6 +7723,56 @@ export interface components {
              * @default false
              */
             busy: boolean;
+        };
+        /**
+         * EndpointAssessment
+         * @description Offline OpenSCAP evaluation of an endpoint, or import of its results.
+         *
+         *     ``rootfs`` and ``image`` read a captured root filesystem tar or Docker/OCI
+         *     image archive and evaluate a ComplianceAsCode profile shipped in the
+         *     scanner image, with no network. ``results`` imports ARF or XCCDF results
+         *     the operator produced with OpenSCAP on the endpoint. Neither is MoonMind's
+         *     own observation of the running device. Evaluation is read-only: the
+         *     contract has no remediation, fix-generation or command input.
+         */
+        EndpointAssessment: {
+            /**
+             * Target
+             * @enum {string}
+             */
+            target: "rootfs" | "image" | "results";
+            /** Asset */
+            asset: string;
+            /** Inputartifactref */
+            inputArtifactRef: string;
+            /** Datastream */
+            datastream?: string | null;
+            /** Profile */
+            profile?: string | null;
+            /** Tailoringartifactref */
+            tailoringArtifactRef?: string | null;
+            /** Ruleids */
+            ruleIds?: string[];
+            /**
+             * Outputdirectory
+             * @default endpoint-assessment
+             */
+            outputDirectory: string;
+            /**
+             * Maxinputbytes
+             * @default 2147483648
+             */
+            maxInputBytes: number;
+            /**
+             * Maxreportbytes
+             * @default 33554432
+             */
+            maxReportBytes: number;
+            /**
+             * Timeoutseconds
+             * @default 1800
+             */
+            timeoutSeconds: number;
         };
         /** EndpointPolicy */
         EndpointPolicy: {

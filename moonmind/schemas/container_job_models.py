@@ -22,6 +22,7 @@ from pydantic import (
 from moonmind.provider_profiles.template_renderer import SENSITIVE_ENVIRONMENT_KEY_PATTERN
 from moonmind.schemas.repository_scanner_models import (
     CloudAssessment,
+    EndpointAssessment,
     FeedRefresh,
     ImageAssessment,
     RepositoryScan,
@@ -504,6 +505,9 @@ class ContainerJobSpec(ContractModel):
     tls_assessment: TLSAssessment | None = Field(None, alias="tlsAssessment")
     web_assessment: WebAssessment | None = Field(None, alias="webAssessment")
     cloud_assessment: CloudAssessment | None = Field(None, alias="cloudAssessment")
+    endpoint_assessment: EndpointAssessment | None = Field(
+        None, alias="endpointAssessment"
+    )
     workload_profile: WorkloadProfileSelection | None = Field(
         None, alias="workloadProfile"
     )
@@ -612,6 +616,7 @@ class ContainerJobSpec(ContractModel):
                 or self.tls_assessment is not None
                 or self.web_assessment is not None
                 or self.cloud_assessment is not None
+                or self.endpoint_assessment is not None
             ):
                 raise ValueError(
                     "workload profile jobs cannot select an image or scanner"
@@ -646,6 +651,9 @@ class ContainerJobSpec(ContractModel):
             ):
                 raise ValueError("egress proxy environment is deployment-owned")
         from moonmind.security.cloud_assessments import validate_cloud_assessment_job
+        from moonmind.security.endpoint_assessments import (
+            validate_endpoint_assessment_job,
+        )
         from moonmind.security.image_assessments import validate_image_assessment_job
         from moonmind.security.repository_scanners import validate_scanner_job
         from moonmind.security.scanner_feeds import validate_feed_refresh_job
@@ -658,6 +666,7 @@ class ContainerJobSpec(ContractModel):
         validate_image_assessment_job(self)
         validate_web_assessment_job(self)
         validate_cloud_assessment_job(self)
+        validate_endpoint_assessment_job(self)
         return self
 
     @field_validator("workdir")
