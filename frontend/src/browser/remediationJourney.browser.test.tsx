@@ -4,6 +4,7 @@ import { page, userEvent } from 'vitest/browser';
 import type { BootPayload } from '../boot/parseBootPayload';
 import { DashboardApp } from '../entrypoints/dashboard-app';
 import { renderWithClient, screen, waitFor, within } from '../utils/test-utils';
+import { openSubmitControls } from './submitBar';
 import '../styles/dashboard.css';
 
 // Controlling real-browser journey for MoonLadderStudios/MoonMind#3623. This
@@ -494,6 +495,7 @@ describe('routed remediation operator journey', () => {
       }
       expect(screen.queryByRole('option', { name: /Administrator automatic/ })).toBeNull();
       expect(screen.queryByText('Live remediation observations')).toBeNull();
+      await openSubmitControls();
       await userEvent.selectOptions(screen.getByLabelText('Publish Mode'), 'branch');
 
       const createButton = screen.getByRole('button', { name: 'Start Workflow' });

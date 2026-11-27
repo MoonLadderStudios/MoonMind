@@ -66,6 +66,11 @@ import {
 import {
   readWorkflowListDisplayMode,
 } from "../lib/collectionListDisplayMode";
+import {
+  CREATE_SUBMIT_BAR_NARROW_QUERY,
+  useCreateFloatingSubmitBar,
+  useMediaQueryMatch,
+} from "../lib/createFloatingSubmitBar";
 import { WorkflowWorkspaceSidebarPanel } from "../components/workflows/WorkflowWorkspaceSidebar";
 import { WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT } from "../lib/workflowStartRouteGuard";
 import {
@@ -3037,6 +3042,15 @@ function destinationPublishLabel(selection: string): string {
   return mode === "branch" ? "Branch" : "";
 }
 
+/** One-line phone summary of the collapsed source and publish controls. */
+export function submitBarSummaryText(repository: string, publishMode: string): string {
+  const source = repository.trim().replace(/\/+$/, "").replace(/\.git$/i, "");
+  const name = source.slice(source.lastIndexOf("/") + 1);
+  const mode = normalizePublishModeSelection(publishMode);
+  const publish = destinationPublishLabel(mode) || (mode === "auto" ? "Auto" : "None");
+  return `${name || "No repository"} · ${publish}`;
+}
+
 function blankSourcePublishNotice(selection: string): string {
   const label = destinationPublishLabel(selection);
   return label
@@ -5554,6 +5568,42 @@ function WorkflowStartPageContent({
     element?.removeAttribute("aria-invalid");
     element?.removeAttribute("aria-errormessage");
   }, []);
+  // On phones the submit bar collapses to a one-line summary and slides away
+  // while a form field is edited (MoonMind#5471).
+  const narrowSubmitBar = useMediaQueryMatch(CREATE_SUBMIT_BAR_NARROW_QUERY);
+  const [submitBarExpanded, setSubmitBarExpanded] = useState(false);
+  const submitBarCollapsed = narrowSubmitBar && !submitBarExpanded;
+  const submitBarRef = useRef<HTMLDivElement | null>(null);
+  const submitBarSlotRef = useRef<HTMLDivElement | null>(null);
+  const submitBarSummaryRef = useRef<HTMLButtonElement | null>(null);
+  const submitBarPlacement = useCreateFloatingSubmitBar({
+    formRef: submitFormRef,
+    barRef: submitBarRef,
+    slotRef: submitBarSlotRef,
+    hideWhileEditing: narrowSubmitBar,
+    revealKey: submitMessageState,
+  });
+  useEffect(() => {
+    const bar = submitBarRef.current;
+    if (!narrowSubmitBar || !submitBarExpanded || !bar) {
+      return undefined;
+    }
+    // A tap outside the expanded bar, or focus moving out of it, collapses it.
+    const isOutside = (target: EventTarget | null) =>
+      target instanceof Node && !bar.contains(target);
+    const collapseOnOutsidePointer = (event: PointerEvent) => {
+      if (isOutside(event.target)) setSubmitBarExpanded(false);
+    };
+    const collapseOnFocusLeaving = (event: FocusEvent) => {
+      if (isOutside(event.relatedTarget)) setSubmitBarExpanded(false);
+    };
+    document.addEventListener("pointerdown", collapseOnOutsidePointer);
+    bar.addEventListener("focusout", collapseOnFocusLeaving);
+    return () => {
+      document.removeEventListener("pointerdown", collapseOnOutsidePointer);
+      bar.removeEventListener("focusout", collapseOnFocusLeaving);
+    };
+  }, [narrowSubmitBar, submitBarExpanded]);
   useEffect(() => {
     if (!invalidFieldTarget) {
       return;
@@ -5565,6 +5615,11 @@ function WorkflowStartPageContent({
     );
     if (revealAdvanced) {
       setShowAdvancedStepOptions(true);
+      return;
+    }
+    // A collapsed phone submit bar hides Repository, Branch and Publish Mode.
+    if (element && submitBarCollapsed && submitBarRef.current?.contains(element)) {
+      setSubmitBarExpanded(true);
       return;
     }
     setInvalidFieldTarget(null);
@@ -5585,7 +5640,7 @@ function WorkflowStartPageContent({
       disclosure.open = true;
     }
     element.focus();
-  }, [invalidFieldTarget, showAdvancedStepOptions, clearInvalidFieldMark]);
+  }, [invalidFieldTarget, showAdvancedStepOptions, clearInvalidFieldMark, submitBarCollapsed]);
   useEffect(() => {
     const clearEditedField = (event: Event) => {
       const element = markedInvalidFieldRef.current;
@@ -13420,13 +13475,32 @@ function WorkflowStartPageContent({
               </div>
             </InfoTooltip>
           </div>
+        {/* Holds the floating bar's height where the docked bar goes. */}
         <div
+          ref={submitBarSlotRef}
+          className="queue-floating-bar-slot"
+          aria-hidden="true"
+          hidden={submitBarPlacement.docked}
+        />
+        <div
+          ref={submitBarRef}
           className="queue-floating-bar queue-step-actions queue-step-submit-actions"
           role="group"
           aria-label="Workflow submission controls"
+          data-placement={
+            submitBarPlacement.docked
+              ? "docked"
+              : submitBarPlacement.hidden
+                ? "hidden"
+                : "floating"
+          }
+          data-compact={
+            narrowSubmitBar ? (submitBarExpanded ? "expanded" : "collapsed") : undefined
+          }
+          inert={submitBarPlacement.hidden}
         >
-          {/* The submit outcome lives in the fixed bar beside Start, so it is
-              visible wherever the form is scrolled. */}
+          {/* The submit outcome lives in the bar beside Start, which floats
+              over the form or docks at its end, so it stays in view. */}
           {submitMessage && submitErrorDetail ? (
             <DashboardErrorDetails
               className="queue-submit-message"
@@ -13457,12 +13531,14 @@ function WorkflowStartPageContent({
           {acceptedCreatePath ? (
             <a href={acceptedCreatePath}>Open accepted result</a>
           ) : null}
-          {branchStatusMessage ? (
+          {/* Branch and source notes describe the controls a collapsed phone
+              bar hides, so they show with those controls. */}
+          {branchStatusMessage && !submitBarCollapsed ? (
             <p className="queue-authoring-controls-status small">
               {branchStatusMessage}
             </p>
           ) : null}
-          {recordedSavedSourceNotice ? (
+          {recordedSavedSourceNotice && !submitBarCollapsed ? (
             <p className="queue-authoring-controls-status small">
               {recordedSavedSourceNotice}
             </p>
@@ -13490,6 +13566,20 @@ function WorkflowStartPageContent({
             </p>
           ) : null}
           <div className="queue-floating-bar-row">
+            {narrowSubmitBar ? (
+              <Button variant="ghost"
+                ref={submitBarSummaryRef}
+                className="queue-floating-bar-summary"
+                aria-expanded={submitBarExpanded}
+                onClick={() => setSubmitBarExpanded((expanded) => !expanded)}
+              >
+                <span className="sr-only">Repository and publish mode: </span>
+                <span className="queue-floating-bar-summary-text">
+                  {submitBarSummaryText(repository, sourcePublishMode)}
+                </span>
+                {submitBarExpanded ? <ArrowDownIcon /> : <ArrowUpIcon />}
+              </Button>
+            ) : null}
             <label
               className="queue-inline-selector queue-inline-selector--repo"
               title={repositoryTooltip}
@@ -13551,6 +13641,11 @@ function WorkflowStartPageContent({
                 onChange={(event) => {
                   setPublishModeTouched(true);
                   setPublishMode(event.target.value);
+                  // A choice collapses the phone bar back to its summary.
+                  if (narrowSubmitBar && submitBarExpanded) {
+                    submitBarSummaryRef.current?.focus();
+                    setSubmitBarExpanded(false);
+                  }
                 }}
               >
                 <option

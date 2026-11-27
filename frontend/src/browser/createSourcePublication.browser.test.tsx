@@ -5,6 +5,7 @@ import type { BootPayload } from '../boot/parseBootPayload';
 import { DashboardApp } from '../entrypoints/dashboard-app';
 import { renderWithClient, screen, waitFor, within } from '../utils/test-utils';
 import { contrast } from './colorContrast';
+import { openSubmitControls, revealSubmitBar } from './submitBar';
 import '../styles/dashboard.css';
 
 declare module 'vitest/browser' {
@@ -189,6 +190,7 @@ describe('Create workspace source and publication intent', () => {
         const { unmount } = renderWithClient(<DashboardApp payload={payload} />);
         cleanupRender = unmount;
         await screen.findByLabelText('Instructions');
+        await openSubmitControls();
         const bar = screen.getByRole('group', { name: 'Workflow submission controls' });
         const repository = within(bar).getByLabelText('Repository') as HTMLInputElement;
         const branch = within(bar).getByLabelText('Branch') as HTMLInputElement;
@@ -241,6 +243,7 @@ describe('Create workspace source and publication intent', () => {
       const branch = screen.getByLabelText('Branch') as HTMLInputElement;
       const publish = screen.getByLabelText('Publish Mode') as HTMLSelectElement;
       const start = screen.getByRole('button', { name: 'Start Workflow' });
+      await openSubmitControls();
 
       for (const control of [repository, branch, publish]) {
         const label = control.closest('label')!;
@@ -271,6 +274,7 @@ describe('Create workspace source and publication intent', () => {
 
       await userEvent.fill(instructions, 'Write a scratch report.');
       rejectNextCreate = true;
+      await revealSubmitBar();
       await userEvent.click(start);
       const rejection = await screen.findByText(BACKEND_REJECTION);
       // Focus moves to the reason so keyboard and screen-reader users hear it.
@@ -284,6 +288,7 @@ describe('Create workspace source and publication intent', () => {
 
       // A source the backend can never admit is caught before submission and
       // focus moves to the field that needs the correction.
+      await openSubmitControls();
       await replaceWithKeyboard(repository, 'octo repo');
       await waitFor(() => expect(start).not.toHaveAttribute('aria-busy', 'true'));
       await userEvent.click(start);
@@ -293,6 +298,7 @@ describe('Create workspace source and publication intent', () => {
 
       await replaceWithKeyboard(repository, 'octo/repo');
       await userEvent.selectOptions(publish, 'pr');
+      await openSubmitControls();
       await userEvent.hover(publish);
       expect(publish.getAttribute('title')).toBe('Opens a pull request on octo/repo.');
       expect(screen.queryByText('Opens a pull request on octo/repo.')).toBeNull();
@@ -336,6 +342,7 @@ describe('Create workspace source and publication intent', () => {
       }
 
       await userEvent.fill(instructions, 'Summarize the public repository again.');
+      await revealSubmitBar();
       await userEvent.click(save);
       const rejection = await screen.findByText(BACKEND_REJECTION);
       await waitFor(() => expect(document.activeElement).toBe(rejection));
