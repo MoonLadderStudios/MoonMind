@@ -701,3 +701,96 @@ async def test_truncated_cloud_native_retains_sanitized_complete_records(
             terminal == "canceled"
         )
         assert summary["nativeRef"] == report.artifact_ref
+
+
+async def test_network_config_evidence_is_restricted_and_linked_to_its_workflow(
+    session_factory, tmp_path, monkeypatch
+):
+    """Unscoped exports are still confidential: restricted, and readable by
+    the workflow that admitted the analyzer job, where its conclusion runs."""
+    from moonmind.schemas.repository_scanner_models import NetworkConfigAssessment
+    from moonmind.security.network_configs import build_network_config_job
+
+    monkeypatch.setattr(worker_runtime, "get_async_session_context", session_factory)
+    async with session_factory() as session:
+        operator = OperatorAdmission(via="network-evidence-test")
+        owner = container_job_owner(operator)
+        settings = NetworkConfigAssessment.model_validate(
+            {
+                "exports": [
+                    {
+                        "artifactRef": "art_export",
+                        "fileName": "edge.cfg",
+                        "device": "edge-rtr-1",
+                        "exportedAt": "2026-11-27T08:00:00Z",
+                        "supplier": "Network team",
+                    }
+                ]
+            }
+        )
+        submit = ContainerJobSubmitRequest.model_validate(
+            {
+                "idempotencyKey": "network",
+                "source": {"source": "workflow", "workflowId": "assessment"},
+                "spec": build_network_config_job(settings),
+            }
+        )
+        service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "bytes"),
+        )
+        jobs = ContainerJobService(session, operator=operator, artifacts=service)
+        record, _ = await jobs.repository.create_or_replay(owner=owner, request=submit)
+        session.add(
+            TemporalExecutionCanonicalRecord(
+                namespace="default",
+                workflow_id="assessment",
+                run_id="source-run",
+                workflow_type="MoonMind.UserWorkflow",
+                entry="run",
+                owner_id=owner.principal_id,
+                owner_type="user",
+                state="executing",
+            )
+        )
+        await session.commit()
+        request = ContainerJobActivityRequest(
+            jobId=record.job_id,
+            ownershipToken=f"{record.job_id}:v1",
+            owner=owner,
+            request=submit,
+            terminalState="succeeded",
+            exitCode=0,
+        )
+        activity = ActivityEnvironment()
+        activity.info = replace(
+            activity.info,
+            namespace="default",
+            workflow_id=container_job_workflow_id(record.job_id),
+            workflow_run_id="job-run",
+        )
+        publish = worker_runtime._container_job_evidence_publisher(service)
+        ref = await activity.run(
+            publish,
+            request,
+            f"{record.job_id}-output-summary.json",
+            b'{"schemaVersion": "network-config/v1"}',
+        )
+        reader = access_for_test("workflow:assessment")
+        artifact, links, _, _ = await service.get_metadata(
+            artifact_id=ref, access=reader
+        )
+        assert artifact.redaction_level is TemporalArtifactRedactionLevel.RESTRICTED
+        assert any(
+            link.link_type == "output.container-job"
+            and link.workflow_id == "assessment"
+            for link in links
+        )
+        listed = await service.list_for_execution(
+            namespace="default",
+            workflow_id="assessment",
+            run_id="source-run",
+            link_type="output.container-job",
+            access=reader,
+        )
+        assert ref in {item.artifact_id for item in listed}

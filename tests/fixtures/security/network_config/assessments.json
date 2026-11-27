@@ -1,0 +1,80 @@
+{
+ "weakened": {
+  "outputDirectory": "weakened",
+  "exports": [
+   {
+    "artifactRef": "art_fxweakened0",
+    "fileName": "edge-weakened.cfg",
+    "device": "edge-weakened",
+    "exportedAt": "2026-11-27T08:00:00Z",
+    "supplier": "Fixture network team",
+    "kind": "device_config"
+   },
+   {
+    "artifactRef": "art_fxweakened1",
+    "fileName": "core-partial.cfg",
+    "device": "core-partial",
+    "exportedAt": "2026-11-27T08:00:00Z",
+    "supplier": "Fixture network team",
+    "kind": "device_config"
+   },
+   {
+    "artifactRef": "art_fxweakened2",
+    "fileName": "branch-legacy.cfg",
+    "device": "branch-legacy",
+    "exportedAt": "2026-11-27T08:00:00Z",
+    "supplier": "Fixture network team",
+    "kind": "device_config"
+   },
+   {
+    "artifactRef": "art_fxweakened3",
+    "fileName": "acme-unsupported.cfg",
+    "device": "acme-unsupported",
+    "exportedAt": "2026-11-27T08:00:00Z",
+    "supplier": "Fixture network team",
+    "kind": "device_config"
+   },
+   {
+    "artifactRef": "art_fxweakened4",
+    "fileName": "segmentation.md",
+    "device": "segmentation",
+    "exportedAt": "2026-11-27T08:00:00Z",
+    "supplier": "Fixture network team",
+    "kind": "topology"
+   }
+  ],
+  "flows": [
+   {
+    "host": "10.10.10.20",
+    "port": 23
+   },
+   {
+    "host": "10.10.10.20",
+    "port": 443
+   }
+  ]
+ },
+ "corrected": {
+  "outputDirectory": "corrected",
+  "exports": [
+   {
+    "artifactRef": "art_fxcorrected0",
+    "fileName": "edge-corrected.cfg",
+    "device": "edge-corrected",
+    "exportedAt": "2026-11-27T08:00:00Z",
+    "supplier": "Fixture network team",
+    "kind": "device_config"
+   }
+  ],
+  "flows": [
+   {
+    "host": "10.10.10.20",
+    "port": 23
+   },
+   {
+    "host": "10.10.10.20",
+    "port": 443
+   }
+  ]
+ }
+}

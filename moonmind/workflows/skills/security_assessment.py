@@ -9,6 +9,7 @@ import json
 import re
 from collections import Counter
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 from pydantic import ValidationError
@@ -50,6 +51,14 @@ from moonmind.security.frameworks import PACK_EDITION_PATTERN, PACK_IDENTIFIER_P
 from moonmind.security.game_math import GameMathAssessment
 from moonmind.security.github_alerts import alert_observation, correlate_alerts
 from moonmind.security.image_assessments import ImageAssessmentSummary
+from moonmind.security.network_configs import PROVENANCE as NETWORK_PROVENANCE
+from moonmind.security.network_configs import (
+    NetworkConfigSummary,
+    compare_with_inventory,
+    report_files,
+    review_locator_errors,
+    verify_retained_summary,
+)
 from moonmind.security.passive_repo_scan import (
     PASSIVE_SCAN_TOOL_REF,
     parse_scan_report_json,
@@ -602,6 +611,117 @@ def _service_inventory_observation(request, summary, ref, created_at):
             "serviceInventoryInterpretation": summary.interpretation,
         },
     )
+
+
+def _network_config_observation(request, summary: NetworkConfigSummary, ref: str):
+    """Analyzer checks of each export, observed as of its export time.
+
+    Coverage of an export ages out with its stated export time, not the time
+    MoonMind analyzed it, so stale exports follow the freshness rules.
+    """
+    devices = [row for row in summary.files if row.kind == "device_config"]
+    assets = {row.artifact_ref for row in devices}
+    if assets - set(request.scope.assets) or assets & set(request.scope.exclusions):
+        raise ValueError("Network exports outside admitted assessment scope")
+    refs = {row.file_name: row.sanitized_ref for row in summary.files}
+    findings = [
+        Finding(
+            source="network-config",
+            tool="batfish",
+            rule_id=item.rule_id,
+            asset=item.artifact_ref,
+            native_id=item.native_id,
+            evidence_refs=[
+                ref
+                for ref in (summary.native_ref, refs.get(item.file))
+                if ref and ref != "unavailable"
+            ],
+        )
+        for item in summary.findings
+    ]
+    coverage, windows = [], []
+    for row in devices:
+        analyzed = row.coverage != "not_analyzed" and summary.status != "failed"
+        coverage.append(
+            Coverage(
+                source="network-config",
+                tool="batfish",
+                assets=[row.artifact_ref],
+                rule_ids=list(summary.checks),
+                all_rules=False,
+                config_ref=summary.comparison_key,
+                status=(
+                    "complete"
+                    if analyzed and row.coverage == "complete"
+                    else "partial" if analyzed else "unsupported"
+                ),
+                evidence_method="deterministic_check",
+                intelligence={"analyzer": summary.analyzer.get("version", "unknown")},
+            )
+        )
+        windows.append(
+            CoverageWindow(observed_at=row.exported_at, expires_at=row.expires_at)
+        )
+    if not coverage:
+        raise ValueError("Network summary analyzed no device configuration export")
+    return Observation(
+        scope=request.scope,
+        observed_at=min(window.observed_at for window in windows),
+        expires_at=min(window.expires_at for window in windows),
+        coverage=coverage,
+        coverage_windows=windows,
+        findings=findings,
+        provenance={
+            "networkConfigSummary": ref,
+            "networkConfigNativeReport": summary.native_ref,
+            "networkConfigProvenance": NETWORK_PROVENANCE,
+            "networkConfigInterpretation": summary.interpretation,
+        },
+    )
+
+
+def _compose_network_evidence(network_entries, inventories, observations) -> None:
+    """Show where admitted inventories contradict exported rules.
+
+    A contradicted export's checks become partial coverage, so requirements
+    that rely on them stay inconclusive rather than passing on either source.
+    """
+    for ref, summary, entry in network_entries:
+        comparisons = [
+            row
+            for inventory in inventories
+            for row in compare_with_inventory(summary, inventory)
+        ]
+        if not comparisons:
+            continue
+        entry["comparisons"] = comparisons
+        contradicted = {
+            asset
+            for row in comparisons
+            if row["relation"] == "contradiction"
+            for asset in row["artifactRefs"]
+        }
+        if not contradicted:
+            continue
+        entry["limitations"] = sorted(
+            {*entry["limitations"], "contradicted_by_service_inventory"}
+        )
+        for index, item in enumerate(observations):
+            if item.provenance.get("networkConfigSummary") != ref:
+                continue
+            observations[index] = item.model_copy(
+                update={
+                    "coverage": [
+                        (
+                            row.model_copy(update={"status": "partial"})
+                            if set(row.assets) & contradicted
+                            and row.status == "complete"
+                            else row
+                        )
+                        for row in item.coverage
+                    ]
+                }
+            )
 
 
 def _verify_dns_report(summary, native_body):
@@ -2207,6 +2327,33 @@ class AssessmentExecution:
                 continue
             records[record.job_id] = record
             record_refs.append(artifact.artifact_id)
+        if any(job.kind in plan_run.TOOL_JOB_KINDS for job in plan.jobs):
+            # Agent-free jobs write no record: their workers link summaries to
+            # this run, and a summary counts only for the job it was admitted as.
+            summaries = []
+            linked = await self.service.list_for_execution(
+                **self.execution, link_type="output.container-job", access=self.access
+            )
+            for artifact in sorted(
+                linked, key=lambda item: (item.created_at, item.artifact_id)
+            ):
+                name = str((artifact.metadata_json or {}).get("name") or "")
+                if getattr(
+                    artifact.status, "value", artifact.status
+                ) != "complete" or not name.endswith("-output-summary.json"):
+                    continue
+                try:
+                    _, body = await self.read(artifact.artifact_id)
+                    payload = json.loads(body)
+                except (ValueError, TemporalArtifactError, ToolFailure):
+                    continue
+                if isinstance(payload, dict):
+                    summaries.append((artifact.artifact_id, payload))
+            for job_id, record in plan_run.tool_job_records(
+                plan, identity, summaries
+            ).items():
+                if job_id not in excluded and job_id not in records:
+                    records[job_id] = record
         reports = {}
         for record in records.values():
             for ref in record.report_refs:
@@ -2230,6 +2377,12 @@ class AssessmentExecution:
                 except (TemporalArtifactError, ToolFailure):
                     reports[record.review_ref] = "unavailable"
 
+        policy = (
+            request.assessment_project.configuration.evidence_processing
+            if request.assessment_project is not None
+            else None
+        )
+
         def against(statuses):
             return plan_run.plan_against_actual(
                 plan,
@@ -2238,6 +2391,7 @@ class AssessmentExecution:
                 excluded=selection.excluded,
                 records=records,
                 reports=statuses,
+                model_delivery=policy.model_delivery if policy is not None else None,
             )
 
         report_refs, reports = plan_run.conclusion_reports(against(reports), reports)
@@ -2731,6 +2885,8 @@ class AssessmentExecution:
             outcomes = []
             scanner_summaries = []
             rejected_reports = []
+            # Exported rule sets and live inventories, compared after all reports.
+            network_entries, inventory_summaries = [], []
             github_alerts = None
             if (
                 baseline
@@ -2875,6 +3031,7 @@ class AssessmentExecution:
                             observation = _service_inventory_observation(
                                 request, inventory_summary, ref, observed_at
                             )
+                            inventory_summaries.append(inventory_summary)
                             scanner_summaries.append(
                                 {
                                     "scanner": "service-inventory",
@@ -2908,6 +3065,55 @@ class AssessmentExecution:
                                     "interpretation": inventory_summary.interpretation,
                                 }
                             )
+                        elif payload.get("schemaVersion") == "network-config/v1":
+                            network_summary = NetworkConfigSummary.model_validate(
+                                payload
+                            )
+                            native, network_refs = None, {}
+                            if network_summary.native_ref != "unavailable":
+                                _, native_body = await self.read(
+                                    network_summary.native_ref
+                                )
+                                native = json.loads(native_body)
+                                network_refs["answers"] = network_summary.native_ref
+                            sanitized = {}
+                            for row in network_summary.files:
+                                if row.sanitized_ref:
+                                    _, body = await self.read(row.sanitized_ref)
+                                    sanitized[row.file_name] = body
+                                    network_refs[row.file_name] = row.sanitized_ref
+                            network_summary = verify_retained_summary(
+                                network_summary, native, sanitized
+                            )
+                            observation = _network_config_observation(
+                                request, network_summary, ref
+                            )
+                            entry = {
+                                "scanner": "batfish",
+                                "summaryRef": ref,
+                                "nativeRefs": network_refs,
+                                "coverage": network_summary.status,
+                                "execution": {
+                                    "checks": list(network_summary.checks),
+                                    "findings": len(network_summary.findings),
+                                    "analyzer": network_summary.analyzer,
+                                },
+                                "files": report_files(network_summary),
+                                "gaps": [
+                                    gap.model_dump(mode="json", by_alias=True)
+                                    for gap in network_summary.gaps
+                                ],
+                                "limitations": sorted(
+                                    {gap.code for gap in network_summary.gaps}
+                                ),
+                                "verification": "recomputed_from_retained_evidence",
+                                "interpretation": network_summary.interpretation,
+                                "provenance": network_summary.provenance,
+                                "qualification": network_summary.qualification,
+                                "sensitivity": network_summary.sensitivity,
+                            }
+                            scanner_summaries.append(entry)
+                            network_entries.append((ref, network_summary, entry))
                         elif payload.get("schemaVersion") == "dns-assessment/v1":
                             dns_summary = DNSAssessmentSummary.model_validate(payload)
                             _, native_body = await self.read(dns_summary.evidence_ref)
@@ -3380,6 +3586,9 @@ class AssessmentExecution:
                         scan_diagnostics.append(
                             {"boundary": "retained-report", "error": type(exc).__name__}
                         )
+                _compose_network_evidence(
+                    network_entries, inventory_summaries, observations
+                )
                 if request.github_alerts is not None:
                     github_alerts = await self._import_github_alerts(
                         request, observations, scan_key
@@ -3586,6 +3795,27 @@ class AssessmentExecution:
                 review = SecurityReview.model_validate_json(raw)
                 if not request.scope.equivalent(review.scope):
                     raise ValueError("review scope differs from admitted scope")
+                # An interpretation of an export cites its sanitized file and
+                # lines; it stays an interpretation, never an analyzer finding.
+                exports = [
+                    SimpleNamespace(
+                        files=[
+                            SimpleNamespace(
+                                artifact_ref=row["artifactRef"],
+                                file_name=row["fileName"],
+                                line_count=row["lineCount"],
+                                sanitized_ref=row["sanitizedRef"],
+                            )
+                            for row in item.get("files", [])
+                        ]
+                    )
+                    for item in work.get("scannerSummaries", [])
+                    if item.get("scanner") == "batfish"
+                ]
+                if review_locator_errors(review, exports):
+                    raise ValueError(
+                        "network interpretations must cite the sanitized export and lines"
+                    )
                 native_ids = {row["findingId"] for row in comparison["findings"]}
                 if any(
                     item.native_finding_id and item.native_finding_id not in native_ids
@@ -4453,6 +4683,8 @@ def _scanner_summary(summaries: list[dict]) -> str:
                 + "."
             )
             lines.append("Coverage expires: " + str(summary["coverageExpiresAt"]) + ".")
+        if summary["scanner"] == "batfish":
+            lines += _network_summary_lines(summary)
         if summary["scanner"] == "service-inventory":
             lines.append(summary["attribution"])
             lines.append(
@@ -4495,6 +4727,57 @@ def _scanner_summary(summaries: list[dict]) -> str:
             ):
                 lines.append(f"{label}: {json.dumps(summary[key], sort_keys=True)}")
     return "\n".join(lines) + ("\n" if lines else "")
+
+
+def _network_summary_lines(summary: dict) -> list[str]:
+    def safe(value):
+        value = html.escape(redact_sensitive_text(str(value)), quote=True)
+        return re.sub(r"([\\`*_[\]{}()#!|>])", r"\\\1", value)
+
+    lines = [
+        f"Exported configuration evidence (sensitivity {safe(summary['sensitivity'])}). "
+        + safe(summary["provenance"])
+    ]
+    for row in summary["files"]:
+        identity = " ".join(
+            safe(row[key]) for key in ("vendor", "os", "version") if row.get(key)
+        )
+        lines.append(
+            f"- Export {safe(row['fileName'])} ({safe(row['artifactRef'])}): device "
+            f"{safe(row['device'])}, exported {safe(row['exportedAt'])} by "
+            f"{safe(row['supplier'])}, fresh until {safe(row['expiresAt'])}; "
+            f"{safe(identity or 'vendor and version not identified')}; "
+            f"parse {safe(row.get('parseStatus') or 'not analyzed')}; coverage "
+            f"{safe(row['coverage'])}; {row['redactedLines']} lines with secrets "
+            "redacted."
+        )
+    for gap in summary["gaps"]:
+        lines.append(
+            f"- Coverage gap {safe(gap['code'])}"
+            + (f" in {safe(gap['file'])}" if gap.get("file") else "")
+            + (
+                f" lines {', '.join(str(line) for line in gap['lines'])}"
+                if gap.get("lines")
+                else ""
+            )
+            + f": {safe(gap['detail'])}"
+        )
+    for row in summary.get("comparisons", []):
+        label = {
+            "contradiction": "Contradiction",
+            "corroboration": "Corroboration",
+        }.get(row["relation"], "Not comparable")
+        lines.append(
+            f"- {label} with the service inventory at {safe(row['endpoint'])}: "
+            f"{safe(row['detail'])}"
+            + (
+                " The affected requirements are inconclusive."
+                if row["relation"] == "contradiction"
+                else ""
+            )
+        )
+    lines.append(safe(summary["qualification"]))
+    return lines
 
 
 def _github_summary(github: dict | None) -> str:

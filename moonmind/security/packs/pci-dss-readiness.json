@@ -221,6 +221,9 @@
           "reviewedOn": "2026-11-23"
         }
       ],
+      "subjectTypes": [
+        "network"
+      ],
       "evidenceTypes": [
         "organisational"
       ],
@@ -251,6 +254,9 @@
           "section": "PCI DSS v4.0.1 1.1.2",
           "reviewedOn": "2026-11-23"
         }
+      ],
+      "subjectTypes": [
+        "network"
       ],
       "evidenceTypes": [
         "organisational"
@@ -283,6 +289,9 @@
           "reviewedOn": "2026-11-23"
         }
       ],
+      "subjectTypes": [
+        "network"
+      ],
       "evidenceTypes": [
         "technical"
       ],
@@ -305,6 +314,9 @@
           "section": "PCI DSS v4.0.1 1.2.2",
           "reviewedOn": "2026-11-23"
         }
+      ],
+      "subjectTypes": [
+        "network"
       ],
       "evidenceTypes": [
         "technical",
@@ -331,6 +343,9 @@
           "reviewedOn": "2026-11-23"
         }
       ],
+      "subjectTypes": [
+        "network"
+      ],
       "evidenceTypes": [
         "organisational"
       ],
@@ -354,6 +369,9 @@
           "reviewedOn": "2026-11-23"
         }
       ],
+      "subjectTypes": [
+        "network"
+      ],
       "evidenceTypes": [
         "organisational"
       ],
@@ -376,6 +394,9 @@
           "section": "PCI DSS v4.0.1 1.2.5",
           "reviewedOn": "2026-11-23"
         }
+      ],
+      "subjectTypes": [
+        "network"
       ],
       "evidenceTypes": [
         "technical"
@@ -413,6 +434,9 @@
           "reviewedOn": "2026-11-23"
         }
       ],
+      "subjectTypes": [
+        "network"
+      ],
       "evidenceTypes": [
         "technical"
       ],
@@ -435,6 +459,9 @@
           "section": "PCI DSS v4.0.1 1.2.7",
           "reviewedOn": "2026-11-23"
         }
+      ],
+      "subjectTypes": [
+        "network"
       ],
       "evidenceTypes": [
         "technical",
@@ -469,6 +496,9 @@
           "reviewedOn": "2026-11-23"
         }
       ],
+      "subjectTypes": [
+        "network"
+      ],
       "evidenceTypes": [
         "technical"
       ],
@@ -491,6 +521,9 @@
           "section": "PCI DSS v4.0.1 1.3.1",
           "reviewedOn": "2026-11-23"
         }
+      ],
+      "subjectTypes": [
+        "network"
       ],
       "evidenceTypes": [
         "technical"
@@ -527,6 +560,9 @@
           "reviewedOn": "2026-11-23"
         }
       ],
+      "subjectTypes": [
+        "network"
+      ],
       "evidenceTypes": [
         "technical"
       ],
@@ -549,6 +585,9 @@
           "section": "PCI DSS v4.0.1 1.3.3",
           "reviewedOn": "2026-11-23"
         }
+      ],
+      "subjectTypes": [
+        "network"
       ],
       "evidenceTypes": [
         "technical"
@@ -573,6 +612,9 @@
           "reviewedOn": "2026-11-23"
         }
       ],
+      "subjectTypes": [
+        "network"
+      ],
       "evidenceTypes": [
         "technical"
       ],
@@ -595,6 +637,9 @@
           "section": "PCI DSS v4.0.1 1.4.2",
           "reviewedOn": "2026-11-23"
         }
+      ],
+      "subjectTypes": [
+        "network"
       ],
       "evidenceTypes": [
         "technical"
@@ -619,6 +664,9 @@
           "reviewedOn": "2026-11-23"
         }
       ],
+      "subjectTypes": [
+        "network"
+      ],
       "evidenceTypes": [
         "technical"
       ],
@@ -641,6 +689,9 @@
           "section": "PCI DSS v4.0.1 1.4.4",
           "reviewedOn": "2026-11-23"
         }
+      ],
+      "subjectTypes": [
+        "network"
       ],
       "evidenceTypes": [
         "technical"
@@ -670,6 +721,9 @@
           "reviewedOn": "2026-11-23"
         }
       ],
+      "subjectTypes": [
+        "network"
+      ],
       "evidenceTypes": [
         "technical"
       ],
@@ -692,6 +746,9 @@
           "section": "PCI DSS v4.0.1 1.5.1",
           "reviewedOn": "2026-11-23"
         }
+      ],
+      "subjectTypes": [
+        "network"
       ],
       "evidenceTypes": [
         "technical"

@@ -24,6 +24,7 @@ from moonmind.schemas.repository_scanner_models import (
     CloudAssessment,
     FeedRefresh,
     ImageAssessment,
+    NetworkConfigAssessment,
     RepositoryScan,
     TLSAssessment,
     WebAssessment,
@@ -504,6 +505,9 @@ class ContainerJobSpec(ContractModel):
     tls_assessment: TLSAssessment | None = Field(None, alias="tlsAssessment")
     web_assessment: WebAssessment | None = Field(None, alias="webAssessment")
     cloud_assessment: CloudAssessment | None = Field(None, alias="cloudAssessment")
+    network_config_assessment: NetworkConfigAssessment | None = Field(
+        None, alias="networkConfigAssessment"
+    )
     workload_profile: WorkloadProfileSelection | None = Field(
         None, alias="workloadProfile"
     )
@@ -612,6 +616,7 @@ class ContainerJobSpec(ContractModel):
                 or self.tls_assessment is not None
                 or self.web_assessment is not None
                 or self.cloud_assessment is not None
+                or self.network_config_assessment is not None
             ):
                 raise ValueError(
                     "workload profile jobs cannot select an image or scanner"
@@ -647,6 +652,7 @@ class ContainerJobSpec(ContractModel):
                 raise ValueError("egress proxy environment is deployment-owned")
         from moonmind.security.cloud_assessments import validate_cloud_assessment_job
         from moonmind.security.image_assessments import validate_image_assessment_job
+        from moonmind.security.network_configs import validate_network_config_job
         from moonmind.security.repository_scanners import validate_scanner_job
         from moonmind.security.scanner_feeds import validate_feed_refresh_job
         from moonmind.security.tls_assessments import validate_tls_assessment_job
@@ -658,6 +664,7 @@ class ContainerJobSpec(ContractModel):
         validate_image_assessment_job(self)
         validate_web_assessment_job(self)
         validate_cloud_assessment_job(self)
+        validate_network_config_job(self)
         return self
 
     @field_validator("workdir")

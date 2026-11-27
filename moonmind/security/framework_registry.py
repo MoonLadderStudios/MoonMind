@@ -10,6 +10,17 @@ from functools import cache
 from pathlib import Path
 
 
+def pack_subjects(pack) -> tuple[str, ...]:
+    """Subjects a pack's plan can select: network when it tags network rows."""
+    if pack.requirements and all(
+        list(row.subject_types) == ["network"] for row in pack.requirements
+    ):
+        return ("network",)
+    if any("network" in row.subject_types for row in pack.requirements):
+        return ("application", "network")
+    return ("application",)
+
+
 def subject_availability(*supported):
     return {
         subject: (
@@ -33,6 +44,7 @@ INSTALLED_PACK_IDS = (
     "soc2-readiness",
     "ukgc-rts-security",
     "owasp-asvs-l1",
+    "network-best-practices",
 )
 # Separately licensed packs live with their license and notice.
 PACK_FILES = {"owasp-asvs-l1": "owasp-asvs/owasp-asvs-l1.json"}
@@ -187,7 +199,7 @@ def readiness_catalog():
             "effectiveUntil": pack.effective_until,
             "license": pack.license,
             "distribution": pack.distribution,
-            "subjects": subject_availability("application"),
+            "subjects": subject_availability(*pack_subjects(pack)),
             "sector": pack.sector,
             "jurisdiction": pack.jurisdiction,
             "requirementCount": len(pack.requirements),

@@ -1450,9 +1450,15 @@ async def test_framework_catalog_lists_installed_readiness_and_skill(settings_ap
         "pci-dss-readiness",
         "ukgc-rts-security",
         "owasp-asvs-l1",
+        "network-best-practices",
         "web-api-methodology",
     }
     assert packs["web-api-methodology"]["requirementCount"] == 6
+    # General best practices for networks: original statements, network plans only.
+    network = packs["network-best-practices"]
+    assert network["available"] and network["license"].startswith("Apache-2.0")
+    assert network["subjects"]["network"]["available"]
+    assert not network["subjects"]["application"]["available"]
     # General best practices for applications: ASVS 5.0.0 Level 1 plus the
     # shipped known-CVE, secret and misconfiguration checks. Levels 2 and 3
     # are not offered.
@@ -1485,11 +1491,19 @@ async def test_framework_catalog_lists_installed_readiness_and_skill(settings_ap
         assert schema["additionalProperties"] is False
         assert {name: schema["properties"][name] for name in fields} == fields
 
-    for item in packs.values():
+    # Packs that tag network requirements offer a network plan; others do not.
+    network_packs = {
+        "pci-dss-readiness",
+        "iso-27001-readiness",
+        "gli-19-readiness",
+        "network-best-practices",
+    }
+    for pack_id, item in packs.items():
         assert item["inputSchema"]["properties"]
         assert item["requirementCount"] > 0
-        assert item["subjects"]["network"]["reason"]
-        assert not item["subjects"]["network"]["available"]
+        assert item["subjects"]["network"]["available"] == (pack_id in network_packs)
+        if pack_id not in network_packs:
+            assert item["subjects"]["network"]["reason"]
         assert "requirements" not in item
 
 

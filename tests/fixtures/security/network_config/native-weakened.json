@@ -1,0 +1,330 @@
+{
+ "analyzer": {
+  "name": "batfish",
+  "versions": {
+   "Batfish": "2026.08.27.3685",
+   "api_version": "0.0.0"
+  }
+ },
+ "answers": {
+  "definedStructures": [
+   {
+    "Source_Lines": "configs/core-partial.cfg:[6, 7, 8, 9, 10, 11]",
+    "Structure_Name": "Vlan10",
+    "Structure_Type": "interface"
+   },
+   {
+    "Source_Lines": "configs/edge-weakened.cfg:[20, 21, 22]",
+    "Structure_Name": "OUTSIDE-IN",
+    "Structure_Type": "extended ipv4 access-list"
+   },
+   {
+    "Source_Lines": "configs/edge-weakened.cfg:[10, 11, 12, 13]",
+    "Structure_Name": "GigabitEthernet0/0",
+    "Structure_Type": "interface"
+   },
+   {
+    "Source_Lines": "configs/edge-weakened.cfg:[21]",
+    "Structure_Name": "OUTSIDE-IN: permit ip any any",
+    "Structure_Type": "extended ipv4 access-list line"
+   },
+   {
+    "Source_Lines": "configs/edge-weakened.cfg:[22]",
+    "Structure_Name": "OUTSIDE-IN: deny tcp any host 10.10.10.20 eq telnet",
+    "Structure_Type": "extended ipv4 access-list line"
+   },
+   {
+    "Source_Lines": "configs/branch-legacy.cfg:[6, 7]",
+    "Structure_Name": "FastEthernet0/0",
+    "Structure_Type": "interface"
+   },
+   {
+    "Source_Lines": "configs/edge-weakened.cfg:[15, 16, 17, 18]",
+    "Structure_Name": "GigabitEthernet0/1",
+    "Structure_Type": "interface"
+   }
+  ],
+  "fileParseStatus": [
+   {
+    "File_Format": "UNKNOWN",
+    "File_Name": "configs/acme-unsupported.cfg",
+    "Nodes": [],
+    "Status": "UNKNOWN"
+   },
+   {
+    "File_Format": "CISCO_IOS",
+    "File_Name": "configs/branch-legacy.cfg",
+    "Nodes": [
+     "branch-rtr-1"
+    ],
+    "Status": "PASSED"
+   },
+   {
+    "File_Format": "CISCO_IOS",
+    "File_Name": "configs/core-partial.cfg",
+    "Nodes": [
+     "core-sw-1"
+    ],
+    "Status": "PARTIALLY_UNRECOGNIZED"
+   },
+   {
+    "File_Format": "CISCO_IOS",
+    "File_Name": "configs/edge-weakened.cfg",
+    "Nodes": [
+     "edge-rtr-1"
+    ],
+    "Status": "PASSED"
+   }
+  ],
+  "filterLineReachability": [
+   {
+    "Additional_Info": null,
+    "Blocking_Lines": [
+     "permit ip any any"
+    ],
+    "Different_Action": true,
+    "Reason": "BLOCKING_LINES",
+    "Sources": [
+     "edge-rtr-1: OUTSIDE-IN"
+    ],
+    "Unreachable_Line": "deny tcp any host 10.10.10.20 eq telnet",
+    "Unreachable_Line_Action": "DENY"
+   }
+  ],
+  "initIssues": [
+   {
+    "Details": "This syntax is unrecognized",
+    "Line_Text": "nested unrecognized line",
+    "Nodes": null,
+    "Parser_Context": "[s_interface_definition s_interface stanza cisco_configuration]",
+    "Source_Lines": [
+     "configs/core-partial.cfg:[11]"
+    ],
+    "Type": "Parse warning"
+   },
+   {
+    "Details": "This syntax is unrecognized",
+    "Line_Text": "another-unrecognized-block",
+    "Nodes": null,
+    "Parser_Context": "[s_interface_definition s_interface stanza cisco_configuration]",
+    "Source_Lines": [
+     "configs/core-partial.cfg:[10]"
+    ],
+    "Type": "Parse warning"
+   },
+   {
+    "Details": "This syntax is unrecognized",
+    "Line_Text": "fixture-unknown-command alpha beta",
+    "Nodes": null,
+    "Parser_Context": "[s_interface_definition s_interface stanza cisco_configuration]",
+    "Source_Lines": [
+     "configs/core-partial.cfg:[9]"
+    ],
+    "Type": "Parse warning"
+   },
+   {
+    "Details": "File format is unknown",
+    "Line_Text": null,
+    "Nodes": null,
+    "Parser_Context": null,
+    "Source_Lines": [
+     "configs/acme-unsupported.cfg:[]"
+    ],
+    "Type": "Parse status"
+   }
+  ],
+  "interfaceProperties": [
+   {
+    "Active": true,
+    "Incoming_Filter_Name": null,
+    "Interface": "branch-rtr-1[FastEthernet0/0]",
+    "Outgoing_Filter_Name": null
+   },
+   {
+    "Active": false,
+    "Incoming_Filter_Name": null,
+    "Interface": "core-sw-1[Vlan10]",
+    "Outgoing_Filter_Name": null
+   },
+   {
+    "Active": true,
+    "Incoming_Filter_Name": "OUTSIDE-IN",
+    "Interface": "edge-rtr-1[GigabitEthernet0/0]",
+    "Outgoing_Filter_Name": null
+   },
+   {
+    "Active": true,
+    "Incoming_Filter_Name": null,
+    "Interface": "edge-rtr-1[GigabitEthernet0/1]",
+    "Outgoing_Filter_Name": null
+   }
+  ],
+  "nodeProperties": [
+   {
+    "Configuration_Format": "CISCO_IOS",
+    "Interfaces": [
+     "GigabitEthernet0/0",
+     "GigabitEthernet0/1"
+    ],
+    "Logging_Servers": [],
+    "NTP_Servers": [],
+    "Node": "edge-rtr-1"
+   },
+   {
+    "Configuration_Format": "CISCO_IOS",
+    "Interfaces": [
+     "FastEthernet0/0"
+    ],
+    "Logging_Servers": [
+     "10.10.99.6"
+    ],
+    "NTP_Servers": [
+     "10.10.99.5"
+    ],
+    "Node": "branch-rtr-1"
+   },
+   {
+    "Configuration_Format": "CISCO_IOS",
+    "Interfaces": [
+     "Vlan10"
+    ],
+    "Logging_Servers": [
+     "10.10.99.6"
+    ],
+    "NTP_Servers": [
+     "10.10.99.5"
+    ],
+    "Node": "core-sw-1"
+   }
+  ],
+  "parseWarning": [
+   {
+    "Comment": "This syntax is unrecognized",
+    "Filename": "configs/core-partial.cfg",
+    "Line": 9,
+    "Parser_Context": "[s_interface_definition s_interface stanza cisco_configuration]",
+    "Text": "fixture-unknown-command alpha beta"
+   },
+   {
+    "Comment": "This syntax is unrecognized",
+    "Filename": "configs/core-partial.cfg",
+    "Line": 10,
+    "Parser_Context": "[s_interface_definition s_interface stanza cisco_configuration]",
+    "Text": "another-unrecognized-block"
+   },
+   {
+    "Comment": "This syntax is unrecognized",
+    "Filename": "configs/core-partial.cfg",
+    "Line": 11,
+    "Parser_Context": "[s_interface_definition s_interface stanza cisco_configuration]",
+    "Text": "nested unrecognized line"
+   }
+  ],
+  "searchFilters:ftp": [
+   {
+    "Action": "PERMIT",
+    "Filter_Name": "OUTSIDE-IN",
+    "Flow": "start=edge-rtr-1 [10.0.0.0:49152->8.8.8.8:21 TCP (SYN)]",
+    "Line_Content": "permit ip any any",
+    "Node": "edge-rtr-1",
+    "Trace": [
+     "Matched line permit ip any any"
+    ]
+   }
+  ],
+  "searchFilters:telnet": [
+   {
+    "Action": "PERMIT",
+    "Filter_Name": "OUTSIDE-IN",
+    "Flow": "start=edge-rtr-1 [10.0.0.0:49152->8.8.8.8:23 TCP (SYN)]",
+    "Line_Content": "permit ip any any",
+    "Node": "edge-rtr-1",
+    "Trace": [
+     "Matched line permit ip any any"
+    ]
+   }
+  ],
+  "searchFilters:tftp": [
+   {
+    "Action": "PERMIT",
+    "Filter_Name": "OUTSIDE-IN",
+    "Flow": "start=edge-rtr-1 [10.0.0.0:49152->8.8.8.8:69 UDP]",
+    "Line_Content": "permit ip any any",
+    "Node": "edge-rtr-1",
+    "Trace": [
+     "Matched line permit ip any any"
+    ]
+   }
+  ],
+  "undefinedReferences": [
+   {
+    "Context": "interface outgoing ip access-list",
+    "File_Name": "configs/edge-weakened.cfg",
+    "Lines": "configs/edge-weakened.cfg:[18]",
+    "Ref_Name": "CDE-OUT",
+    "Struct_Type": "ipv4 acl"
+   }
+  ]
+ },
+ "flows": [
+  {
+   "flow": {
+    "host": "10.10.10.20",
+    "port": 23,
+    "protocol": "tcp"
+   },
+   "testFilters": [
+    {
+     "Action": "PERMIT",
+     "Filter_Name": "OUTSIDE-IN",
+     "Flow": "start=edge-rtr-1 [10.10.10.1:49152->10.10.10.20:23 TCP (SYN)]",
+     "Line_Content": "permit ip any any",
+     "Node": "edge-rtr-1",
+     "Trace": [
+      "Matched line permit ip any any"
+     ]
+    },
+    {
+     "Action": "PERMIT",
+     "Filter_Name": "OUTSIDE-IN",
+     "Flow": "start=edge-rtr-1 [203.0.113.2:49152->10.10.10.20:23 TCP (SYN)]",
+     "Line_Content": "permit ip any any",
+     "Node": "edge-rtr-1",
+     "Trace": [
+      "Matched line permit ip any any"
+     ]
+    }
+   ]
+  },
+  {
+   "flow": {
+    "host": "10.10.10.20",
+    "port": 443,
+    "protocol": "tcp"
+   },
+   "testFilters": [
+    {
+     "Action": "PERMIT",
+     "Filter_Name": "OUTSIDE-IN",
+     "Flow": "start=edge-rtr-1 [10.10.10.1:49152->10.10.10.20:443 TCP (SYN)]",
+     "Line_Content": "permit ip any any",
+     "Node": "edge-rtr-1",
+     "Trace": [
+      "Matched line permit ip any any"
+     ]
+    },
+    {
+     "Action": "PERMIT",
+     "Filter_Name": "OUTSIDE-IN",
+     "Flow": "start=edge-rtr-1 [203.0.113.2:49152->10.10.10.20:443 TCP (SYN)]",
+     "Line_Content": "permit ip any any",
+     "Node": "edge-rtr-1",
+     "Trace": [
+      "Matched line permit ip any any"
+     ]
+    }
+   ]
+  }
+ ],
+ "schemaVersion": "network-config-native/v1"
+}

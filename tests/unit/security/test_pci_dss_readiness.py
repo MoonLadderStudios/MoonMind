@@ -122,7 +122,12 @@ def test_installed_pack_pins_edition_dates_and_reports_rights_unverified():
     assert claims["source-review"]["status"] == "Unverified"
     entry = next(item for item in readiness_catalog() if item["id"] == PACK_ID)
     assert entry["subjects"]["application"] == {"available": True}
-    assert not entry["subjects"]["network"]["available"]
+    # Requirement 1's network security controls are tagged for network plans.
+    assert entry["subjects"]["network"] == {"available": True}
+    assert not entry["subjects"]["endpoint"]["available"]
+    assert {r.id for r in current.requirements if "network" in r.subject_types} == {
+        r.id for r in current.requirements if r.id.startswith("1.")
+    }
     assert entry["requirementCount"] == len(current.requirements)
     assert {"assessor-validation", "asv-scan", "independent-testing"} <= set(
         entry["externalEvidence"]

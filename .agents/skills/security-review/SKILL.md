@@ -21,6 +21,10 @@ reusing the threat model below, and run no job. When a request names
 `securityPlanJobPath`, it is a planned job of a plan run: finish by writing its
 [outcome record](references/plan.md#running-a-planned-job) there.
 
+For exported network configurations, follow the
+[network review procedure](references/network.md): cited interpretations of
+sanitized exports for what the offline analyzer cannot decide.
+
 For selected web/API objectives, retain the edition-specific
 [procedure plan and coverage](references/report.md) before executing tests.
 Use the delivered [procedure pack](references/web-api.json), existing admitted

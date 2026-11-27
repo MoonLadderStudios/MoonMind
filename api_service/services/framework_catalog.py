@@ -17,6 +17,7 @@ from moonmind.security.framework_packs import (
 )
 from moonmind.security.framework_registry import (
     evidence_kinds,
+    pack_subjects,
     readiness_catalog,
     subject_availability,
 )
@@ -128,7 +129,7 @@ def _describe(entry, pack, now):
         entry["reason"] = f"{error}. Register an operative edition."
     else:
         entry["available"] = True
-        entry["subjects"] = subject_availability("application")
+        entry["subjects"] = subject_availability(*pack_subjects(pack))
         if skill:
             entry["subjects"]["endpoint"] = {
                 "available": True,

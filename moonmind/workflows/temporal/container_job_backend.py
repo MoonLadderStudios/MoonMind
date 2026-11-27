@@ -118,6 +118,10 @@ from moonmind.security.image_assessments import (
     inspect_sbom,
     normalize_image_report,
 )
+from moonmind.security.network_configs import input_name as network_input_name
+from moonmind.security.network_configs import prepare_exports as prepare_network_exports
+from moonmind.security.network_configs import snapshot_files as network_snapshot_files
+from moonmind.security.network_configs import summarize_network_config
 from moonmind.security.repository_scanners import (
     WITHHELD_LOG,
     RepositoryScan,
@@ -614,6 +618,7 @@ def _withholds_console(spec) -> bool:
         or spec.tls_assessment is not None
         or spec.web_assessment is not None
         or spec.cloud_assessment is not None
+        or spec.network_config_assessment is not None
         or (
             spec.workload_profile is not None
             and (spec.workload_profile.service_inventory is not None
@@ -3223,6 +3228,7 @@ class DockerContainerJobBackend:
         mounts.extend(await self._deliver_target_credential(request))
         mounts.extend(await self._prepare_web_assessment(request))
         await self._prepare_cloud_assessment(request)
+        await self._prepare_network_config_assessment(request)
         credential_args = await self._deliver_workload_credentials(request)
         args = [
             "create",
@@ -3478,9 +3484,17 @@ class DockerContainerJobBackend:
                     "input attachment artifact is not readable by the job owner",
                 ) from exc
             if len(payload) > item.max_bytes:
-                raise attachments.AttachmentStorageError(
-                    "input attachment exceeds its admitted bound"
+                if request.request.spec.network_config_assessment is None:
+                    raise attachments.AttachmentStorageError(
+                        "input attachment exceeds its admitted bound"
+                    )
+                # Each export is analyzed on its own, so an oversized one is
+                # that file's input_too_large gap, never the whole batch's
+                # failure. None of its bytes are captured.
+                captured = await asyncio.to_thread(
+                    attachments.capture_omitted, destination, "input_too_large"
                 )
+                return {**captured, "artifactRef": item.artifact_ref}
             captured = await asyncio.to_thread(
                 attachments.capture_bytes,
                 payload,
@@ -3646,6 +3660,53 @@ class DockerContainerJobBackend:
                 storage, "credentials", WEB_CREDENTIAL_TARGET, read_only=True
             )
         ]
+
+    def _network_exports(self, request: ContainerJobActivityRequest) -> dict:
+        """Captured export bytes by file name; an oversize capture is absent."""
+        settings = request.request.spec.network_config_assessment
+        storage = self._attachment_storage(request)
+        exports = {}
+        for index, export in enumerate(settings.exports):
+            path = storage.inputs / network_input_name(index) / "export"
+            if path.is_symlink() or not path.is_file():
+                exports[export.file_name] = None
+                continue
+            with path.open("rb") as source:
+                exports[export.file_name] = source.read(settings.max_input_bytes + 1)
+        return exports
+
+    async def _prepare_network_config_assessment(
+        self, request: ContainerJobActivityRequest
+    ) -> None:
+        """Write the sanitized snapshot the analyzer reads, on every create.
+
+        Secret values are replaced before the analyzer starts, so its answers,
+        logs and reports never see them. The raw exports stay captured inputs
+        that nothing parses or publishes.
+        """
+
+        settings = request.request.spec.network_config_assessment
+        if settings is None:
+            return
+        storage = self._attachment_storage(request)
+        try:
+            raw = await asyncio.to_thread(self._network_exports, request)
+            prepared = prepare_network_exports(settings, raw)
+            files = network_snapshot_files(settings, prepared)
+            root = storage.outputs / settings.output_directory
+            await asyncio.to_thread(
+                attachments.write_job_files,
+                root,
+                {
+                    path.removeprefix(f"{settings.output_directory}/"): body
+                    for path, body in files.items()
+                },
+            )
+        except (OSError, attachments.AttachmentStorageError) as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.WORKSPACE,
+                "network configuration snapshot could not be written",
+            ) from exc
 
     async def _prepare_cloud_assessment(
         self, request: ContainerJobActivityRequest
@@ -4452,6 +4513,8 @@ class DockerContainerJobBackend:
             return await self._collect_web_assessment_outputs(request)
         if request.request.spec.cloud_assessment is not None:
             return await self._collect_cloud_assessment_outputs(request, delivered)
+        if request.request.spec.network_config_assessment is not None:
+            return await self._collect_network_config_outputs(request)
         outputs = request.request.spec.outputs
         if not outputs or self._publish is None:
             return []
@@ -5543,6 +5606,129 @@ class DockerContainerJobBackend:
             summary.status = "partial"
             summary.limitations = sorted(set(summary.limitations + limitations))
         await publish("summary", summary.model_dump_json(by_alias=True).encode())
+        return manifest
+
+    async def _collect_network_config_outputs(
+        self, request: ContainerJobActivityRequest
+    ):
+        """Publish sanitized exports, the analyzer's answers and their summary.
+
+        The exports are sanitized again from the captured inputs rather than
+        read back from the analyzer's writable directory, and the summary is
+        worker-generated, never accepted from the workload.
+        """
+
+        if self._publish is None:
+            return []
+        spec = request.request.spec
+        settings = spec.network_config_assessment
+        raw = await asyncio.to_thread(self._network_exports, request)
+        prepared = prepare_network_exports(settings, raw)
+        manifest = []
+        remaining = self._settings.max_output_total_bytes
+        files = self._settings.max_output_files
+
+        async def publish(name, relative, payload, media_type, limit):
+            nonlocal remaining, files
+            if len(payload) > min(remaining, limit) or files < 1:
+                manifest.append(
+                    ContainerJobArtifact(
+                        name=name,
+                        relativePath=relative,
+                        collectionStatus="rejected",
+                        detail="Network configuration output exceeds collection bounds.",
+                    )
+                )
+                return None
+            suffix = ".json" if media_type == "application/json" else ".txt"
+            ref = await self._publish_artifact(
+                request, f"{request.job_id}-output-{name}{suffix}", payload
+            )
+            remaining -= len(payload)
+            files -= 1
+            manifest.append(
+                ContainerJobArtifact(
+                    name=name,
+                    relativePath=relative,
+                    artifactRef=ref,
+                    sizeBytes=len(payload),
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                    mediaType=media_type,
+                    collectionStatus="collected",
+                )
+            )
+            return ref
+
+        sanitized_refs = {}
+        for index, export in enumerate(settings.exports):
+            body = prepared.sanitized.get(export.file_name)
+            if body is None:
+                continue
+            ref = await publish(
+                f"export-{index}",
+                f"{settings.output_directory}/snapshot/{export.file_name}",
+                body,
+                "text/plain",
+                settings.max_input_bytes,
+            )
+            if ref:
+                sanitized_refs[export.file_name] = ref
+        entry = (
+            await asyncio.to_thread(
+                self._build_output_entries,
+                self._output_root(request),
+                list(spec.outputs),
+            )
+        )[0]
+        native, native_ref = None, None
+        if entry["payload"] is not None:
+            try:
+                native = _redact_strings(json.loads(entry["payload"]))
+                if not isinstance(native, dict):
+                    raise ValueError("analyzer answers are not an object")
+            except (ValueError, TypeError, RecursionError, UnicodeDecodeError):
+                native = None
+                manifest.append(
+                    ContainerJobArtifact(
+                        name="native",
+                        relativePath=entry["relative_path"],
+                        collectionStatus="rejected",
+                        detail="Analyzer answers failed validation.",
+                    )
+                )
+            else:
+                native_ref = await publish(
+                    "native",
+                    entry["relative_path"],
+                    json.dumps(native, sort_keys=True).encode(),
+                    "application/json",
+                    8 * 1024 * 1024,
+                )
+                if native_ref is None:
+                    native = None
+        else:
+            manifest.append(
+                ContainerJobArtifact(
+                    name="native",
+                    relativePath=entry["relative_path"],
+                    collectionStatus=entry["status"],
+                    detail=entry["detail"],
+                )
+            )
+        summary = summarize_network_config(
+            settings,
+            prepared,
+            native,
+            native_ref=native_ref or "unavailable",
+            sanitized_refs=sanitized_refs,
+        )
+        await publish(
+            "summary",
+            f"{settings.output_directory}/summary.json",
+            summary.model_dump_json(by_alias=True).encode(),
+            "application/json",
+            8 * 1024 * 1024,
+        )
         return manifest
 
     async def _collect_web_assessment_outputs(

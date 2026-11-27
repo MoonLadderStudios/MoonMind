@@ -86,7 +86,9 @@ it('opens the security plan from its start link and chooses standards from the c
   expect(await screen.findByLabelText('Assessment context')).toBeTruthy();
 
   const subject = within(step).getByLabelText('Subject type') as HTMLSelectElement;
-  expect(Array.from(subject.options).map((option) => option.value).filter(Boolean)).toEqual(['application']);
+  expect(Array.from(subject.options).map((option) => option.value).filter(Boolean)).toEqual(['application', 'network']);
+  // A network plan's exports and their provenance are structured items, not JSON.
+  expect(within(step).getByRole('button', { name: 'Add Network exports item' })).toBeTruthy();
   const standards = await within(step).findByRole('listbox', { name: 'Standards' }) as HTMLSelectElement;
   await waitFor(() => expect(standards.options).toHaveLength(3));
   const [general, iso, declared] = Array.from(standards.options);
@@ -108,6 +110,7 @@ it('opens the security plan from its start link and chooses standards from the c
   await waitFor(() => expect(expanded).toHaveLength(1));
   expect(expanded[0]).toEqual({
     subject_type: 'application',
+    network_exports: [],
     standards: [
       { id: 'owasp-asvs-l1', edition: '5.0.0' },
       { packId: 'operator-policy', edition: '2026', artifactRef: 'art_policy', revision: '2', sha256: 'c'.repeat(64) },

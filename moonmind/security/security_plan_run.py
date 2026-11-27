@@ -46,6 +46,12 @@ RUN_PRESETS = {
     "web-assessment": "security-web-api",
     "cloud-assessment": "security-aws-posture",
 }
+#: Planned job kinds that need no agent: their typed container job runs as a
+#: deterministic ``container.run_job`` step, so it still runs when the
+#: evidence-processing policy disables model delivery. The conclusion reads the
+#: summaries those jobs link to the run.
+CONTAINER_TOOL = "container.run_job"
+TOOL_JOB_KINDS = frozenset({"network-config"})
 #: Presets whose jobs run inside the admitted assessment scope.
 SCOPED_PRESET_KINDS = frozenset({"web-assessment", "cloud-assessment"})
 #: Concluding budget: offline evaluation of retained evidence only.
@@ -63,6 +69,7 @@ NATIVE_SUMMARY_VERSIONS = frozenset(
         "tls-assessment/v1",
         "dns-assessment/v1",
         "service-inventory/v1",
+        "network-config/v1",
     }
 )
 
@@ -228,7 +235,9 @@ def derive_plan_run(
         raise PlanRunError(f"unknown planned job IDs: {', '.join(unknown)}")
     launch, skipped = [], []
     for job in plan.jobs:
-        preset = RUN_PRESETS.get(job.kind)
+        preset = RUN_PRESETS.get(job.kind) or (
+            CONTAINER_TOOL if job.kind in TOOL_JOB_KINDS else None
+        )
         if job.id in excluded:
             reason = excluded[job.id]
         elif preset is None:
@@ -242,6 +251,78 @@ def derive_plan_run(
             reason = f"{missing[0].upper()}{missing[1:]}."
         skipped.append(ExcludedJob(job_id=job.id, kind=job.kind, reason=reason))
     return launch, skipped
+
+
+def tool_job_step(job_id: str, identity: str, kind: str, value: dict) -> dict[str, Any]:
+    """A planned job that needs no agent, as its typed container job.
+
+    The job's own worker sanitizes, analyzes and publishes its summary to this
+    run; the conclusion reads it there, so no agent writes a job record.
+    """
+    from moonmind.security.assessment_preset_inputs import assessment_job_spec
+
+    return {
+        "title": f"Planned job {job_id}: {kind}",
+        "type": "tool",
+        "instructions": (
+            f"Planned job {job_id} of security plan {identity}: run its typed "
+            "container job with no network or credential. Needs no agent."
+        ),
+        "tool": {
+            "id": CONTAINER_TOOL,
+            "inputs": {"spec": assessment_job_spec(kind, value)},
+        },
+        "annotations": {"securityPlanJob": {"jobId": job_id, "planIdentity": identity}},
+    }
+
+
+def tool_job_records(
+    plan: SecurityPlan, identity: str, summaries: Iterable[tuple[str, Mapping]]
+) -> dict[str, PlanJobRecord]:
+    """Outcome records for tool jobs, from the summaries their workers retained.
+
+    A summary is a job's evidence only when its admitted settings equal that
+    planned job's input exactly. The latest matching summary counts.
+    """
+    from moonmind.schemas.repository_scanner_models import NetworkConfigAssessment
+
+    planned = {}
+    for job in plan.jobs:
+        if job.kind == "network-config":
+            try:
+                planned[job.id] = NetworkConfigAssessment.model_validate(job.input)
+            except ValidationError:
+                continue
+    records = {}
+    for ref, payload in summaries:
+        if payload.get("schemaVersion") != "network-config/v1":
+            continue
+        try:
+            settings = NetworkConfigAssessment.model_validate(payload.get("settings"))
+        except ValidationError:
+            continue
+        status = payload.get("status")
+        for job_id, expected in planned.items():
+            if settings != expected:
+                continue
+            state = {"complete": "completed", "partial": "partial"}.get(
+                status, "failed"
+            )
+            records[job_id] = PlanJobRecord(
+                plan_identity=identity,
+                job_id=job_id,
+                state=state,
+                reason=(
+                    "The analyzer job retained its summary"
+                    + (
+                        "."
+                        if state == "completed"
+                        else f" with status {status}; see its gaps."
+                    )
+                ),
+                report_refs=[ref],
+            )
+    return records
 
 
 def job_step_overlay(job_id: str, identity: str) -> dict[str, Any]:
@@ -265,11 +346,37 @@ def job_step_overlay(job_id: str, identity: str) -> dict[str, Any]:
     }
 
 
-def _framework_pack(standard) -> dict:
+def _framework_pack(standard, plan: SecurityPlan) -> dict:
     exclude = {"title", "distribution"}
     if standard.artifact_ref is None:
         exclude.add("sha256")
-    return standard.model_dump(mode="json", by_alias=True, exclude=exclude)
+    selection = standard.model_dump(mode="json", by_alias=True, exclude=exclude)
+    if plan.subject.type == "network" and not selection.get("requirementChoices"):
+        selection["requirementChoices"] = _network_choices(standard, plan)
+    return selection
+
+
+def _network_choices(standard, plan: SecurityPlan) -> dict:
+    """A network plan run concludes under the reviewed plan's applicability.
+
+    Its requirements are selected by the standards' own subject tags. Standards
+    with profile inputs keep their readiness rules; only an installed standard
+    without them takes each explicit applicability and reason from the plan.
+    """
+    from moonmind.security.framework_registry import INSTALLED_PACK_IDS, installed_pack
+
+    if (
+        standard.artifact_ref is not None
+        or standard.pack_id not in INSTALLED_PACK_IDS
+        or installed_pack(standard.pack_id)[1].profile is not None
+    ):
+        return {}
+    return {
+        row.id: {"applicability": row.applicability, "applicabilityReason": row.reason}
+        for row in plan.requirements
+        if (row.pack_id, row.edition) == (standard.pack_id, standard.edition)
+        and row.applicability != "undetermined"
+    }
 
 
 def conclusion_step(
@@ -284,10 +391,13 @@ def conclusion_step(
     inputs = {
         "scope": plan.subject.scope.model_dump(mode="json", by_alias=True),
         "tools": [],
+        # Explicit: the saved environment's artifacts (such as network exports)
+        # are not this conclusion's reports; its jobs' retained summaries are.
+        "reportRefs": [],
         "budget": dict(CONCLUSION_BUDGET),
         "credentialRefs": [],
         "networkRefs": [],
-        "frameworkPacks": [_framework_pack(s) for s in plan.standards],
+        "frameworkPacks": [_framework_pack(s, plan) for s in plan.standards],
         "planRun": PlanRunInput(
             plan_ref=plan_ref, plan_identity=identity, excluded=excluded
         ).model_dump(mode="json", by_alias=True),
@@ -469,12 +579,15 @@ def plan_against_actual(
     excluded: Iterable[ExcludedJob],
     records: Mapping[str, PlanJobRecord],
     reports: Mapping[str, str],
+    model_delivery: str | None = None,
 ) -> dict[str, Any]:
     """Every planned job and requirement against what the run retained.
 
     A requirement is never ``met`` here: per-standard conclusions come from the
     framework evaluation, and planned evidence that did not materialize leaves
-    the requirement inconclusive or not assessed.
+    the requirement inconclusive or not assessed. When the environment's
+    evidence-processing policy keeps evidence from models, a requirement only
+    agent review can decide is not assessed, with that reason.
     """
     removed = {item.job_id: item.reason for item in excluded}
     jobs = []
@@ -546,6 +659,16 @@ def plan_against_actual(
             )
             reason = (
                 "Organisational evidence decides this requirement; no job collects it."
+            )
+        elif (row.methods or row.procedures) and model_delivery in {
+            "disabled",
+            "local_only",
+        }:
+            state = "not_assessed"
+            reason = (
+                "Only agent review decides this requirement, and the environment's "
+                f"evidence-processing policy sets model delivery to {model_delivery}; "
+                "review does not run and has no fallback."
             )
         elif row.methods or row.procedures:
             state = "review"

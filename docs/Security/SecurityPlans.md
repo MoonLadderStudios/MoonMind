@@ -51,12 +51,15 @@ Plans use the control evaluator's methods plus `external_only`:
 A requirement with `notAssessedReason` allows no method and carries a
 `no_evidence_path` gap. Only `deterministic_check` rows may name jobs, so
 external-only and organisational requirements are never presented as a scan.
-Every applicable or undetermined row needs a planned evidence path or a gap.
+Every applicable or undetermined row needs a planned evidence path or a gap; in
+a network plan with a `network-config` job, agent interpretation through the
+`security-review` Skill's network procedure is one.
 
 ## Jobs and authority
 
 Plan job kinds are `repository-scan`, `image-assessment`, `cloud-assessment`,
-`web-assessment` and `tls-assessment`, whose inputs are their typed contracts,
+`web-assessment`, `tls-assessment` and `network-config`, whose inputs are their
+typed contracts,
 and `dns-assessment`, `service-inventory` and `application-access`, whose inputs
 are a workload-profile selection plus the profile facts admission checks:
 `egressPolicyRef`, and for application access the mode's `actionClass` and the
@@ -71,7 +74,8 @@ Derived `authority` lists what an admitted assessment scope must name for the
 job: `profileRefs`, `actionClasses`, `targets`, `credentialPurposes`,
 `networkRefs`, `maxJobSeconds` and `maxRequestsPerSecond`. `maxJobSeconds` is
 the timeout the native job builder renders, including its overhead, because
-admission budgets the rendered job. Repository and image jobs are unscoped.
+admission budgets the rendered job. Repository, image and network configuration
+jobs are unscoped; a `network-config` job's targets are its exports.
 Targets must be candidates of the saved environment: origins from
 `originCandidates`, artifacts from `artifactRefs`, registry images, DNS names
 and native hosts from `assets` or origin hosts, and cloud accounts and regions
@@ -132,8 +136,10 @@ plan and retained reports.
 
 The `security-plan` preset is the Security workspace's start action, and goals
 that name a security plan select it. The operator picks a subject type
-(`application` until endpoint and network journeys land), a saved environment
-through the assessment picker, and standards from the catalog. The run holds
+(`application`, or `network` for [exported configurations](NetworkConfigAssessment.md);
+endpoint journeys have not landed), a saved environment through the assessment
+picker, and standards from the catalog. A network plan also names each export's
+artifact, device, export time and supplier. The run holds
 no assessment scope, credential, egress grant or job reservation, and launches
 no scanner, cloud, web or network job.
 
@@ -141,7 +147,11 @@ no scanner, cloud, web or network job.
    (an unavailable pack fails with its reason) and retains a
    `security-plan-context/v1`: the environment's target candidates, without
    credential, connection or network references, and every requirement with
-   its allowed methods. The planner receives it as trusted step context.
+   its allowed methods. For a network subject it adds the stated exports, the
+   analyzer's checks and review procedures, and marks each requirement the
+   standard's `subjectTypes` do not tag `network` as unselected; validation
+   requires those not applicable. The planner receives it as trusted step
+   context.
 2. The `security-review` Skill's [planning procedure](../../.agents/skills/security-review/references/plan.md)
    reads the repository read-only and writes a draft plan to
    `artifacts/security-plan/draft.json`. The agent runtime publishes those
@@ -151,8 +161,9 @@ no scanner, cloud, web or network job.
    environment records none) and validates against the packs the context
    retained, so an update installed between the steps does not move them. A
    draft that changes the subject type, adds or drops a standard, alters a
-   pack identity or makes an operator's requirement choice is rejected, as is
-   any draft that fails the validation above. A valid plan is retained and
+   pack identity, makes an operator's requirement choice or plans an export
+   provenance the operator did not state is rejected, as is any draft that
+   fails the validation above. A valid plan is retained and
    sealed with its packs, project snapshot, context and draft, and its
    readable plan and gap list become the run's primary report. A rejected
    draft is kept, sealed under a `security.plan-diagnostics` record and a
@@ -175,6 +186,11 @@ derives, in order:
   `cloud-assessment` job as its existing technical preset's step with the
   plan's job input, so each keeps its readiness check, budget, admission and
   native evidence;
+- each `network-config` job as a `container.run_job` step with its typed job.
+  It needs no agent, so it runs even when the evidence-processing policy
+  disables model delivery, and writes no record: the conclusion reads the
+  summary its worker links to the run when the summary's admitted input equals
+  the job's;
 - one concluding `security.assess` over the plan's standards as
   `frameworkPacks`, bound by `planRun: {planRef, planIdentity, excluded}`.
 
@@ -209,7 +225,10 @@ each requirement as `evidence_collected`, `inconclusive`, `not_assessed`,
 `review`, `organisational`, `external_only` or `not_applicable`, naming who
 can close external and organisational rows. Missing, malformed or uncollected
 evidence leaves a requirement inconclusive or not assessed; zero findings
-never mean met. A restarted job's latest record counts. Pass
+never mean met. When the environment's evidence-processing policy sets model
+delivery to `disabled` or `local_only`, a requirement only agent review decides
+is `not_assessed` with that reason. In a network plan, a standard without
+profile inputs concludes under the reviewed plan's applicability. A restarted job's latest record counts. Pass
 `previous_assessment_ref` to compare with an earlier conclusion, which reports
 a changed pack edition as an assessment-intelligence change. The run
 authorizes no remediation; findings feed the existing finding-to-fix journey.

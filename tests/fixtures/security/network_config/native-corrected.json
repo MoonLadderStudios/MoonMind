@@ -1,0 +1,156 @@
+{
+ "analyzer": {
+  "name": "batfish",
+  "versions": {
+   "Batfish": "2026.08.27.3685",
+   "api_version": "0.0.0"
+  }
+ },
+ "answers": {
+  "definedStructures": [
+   {
+    "Source_Lines": "configs/edge-corrected.cfg:[24]",
+    "Structure_Name": "MGMT: permit 10.10.99.0 0.0.0.255",
+    "Structure_Type": "standard ipv4 access-list line"
+   },
+   {
+    "Source_Lines": "configs/edge-corrected.cfg:[20, 21, 22]",
+    "Structure_Name": "OUTSIDE-IN",
+    "Structure_Type": "extended ipv4 access-list"
+   },
+   {
+    "Source_Lines": "configs/edge-corrected.cfg:[11, 12, 13, 14]",
+    "Structure_Name": "GigabitEthernet0/0",
+    "Structure_Type": "interface"
+   },
+   {
+    "Source_Lines": "configs/edge-corrected.cfg:[21]",
+    "Structure_Name": "OUTSIDE-IN: permit tcp any host 10.10.10.20 eq 443",
+    "Structure_Type": "extended ipv4 access-list line"
+   },
+   {
+    "Source_Lines": "configs/edge-corrected.cfg:[23, 24]",
+    "Structure_Name": "MGMT",
+    "Structure_Type": "standard ipv4 access-list"
+   },
+   {
+    "Source_Lines": "configs/edge-corrected.cfg:[22]",
+    "Structure_Name": "OUTSIDE-IN: deny ip any any log",
+    "Structure_Type": "extended ipv4 access-list line"
+   },
+   {
+    "Source_Lines": "configs/edge-corrected.cfg:[16, 17, 18]",
+    "Structure_Name": "GigabitEthernet0/1",
+    "Structure_Type": "interface"
+   }
+  ],
+  "fileParseStatus": [
+   {
+    "File_Format": "CISCO_IOS",
+    "File_Name": "configs/edge-corrected.cfg",
+    "Nodes": [
+     "edge-rtr-1"
+    ],
+    "Status": "PASSED"
+   }
+  ],
+  "filterLineReachability": [],
+  "initIssues": [],
+  "interfaceProperties": [
+   {
+    "Active": true,
+    "Incoming_Filter_Name": "OUTSIDE-IN",
+    "Interface": "edge-rtr-1[GigabitEthernet0/0]",
+    "Outgoing_Filter_Name": null
+   },
+   {
+    "Active": true,
+    "Incoming_Filter_Name": null,
+    "Interface": "edge-rtr-1[GigabitEthernet0/1]",
+    "Outgoing_Filter_Name": null
+   }
+  ],
+  "nodeProperties": [
+   {
+    "Configuration_Format": "CISCO_IOS",
+    "Interfaces": [
+     "GigabitEthernet0/0",
+     "GigabitEthernet0/1"
+    ],
+    "Logging_Servers": [
+     "10.10.99.6"
+    ],
+    "NTP_Servers": [
+     "10.10.99.5"
+    ],
+    "Node": "edge-rtr-1"
+   }
+  ],
+  "parseWarning": [],
+  "searchFilters:ftp": [],
+  "searchFilters:telnet": [],
+  "searchFilters:tftp": [],
+  "undefinedReferences": []
+ },
+ "flows": [
+  {
+   "flow": {
+    "host": "10.10.10.20",
+    "port": 23,
+    "protocol": "tcp"
+   },
+   "testFilters": [
+    {
+     "Action": "DENY",
+     "Filter_Name": "OUTSIDE-IN",
+     "Flow": "start=edge-rtr-1 [203.0.113.2:49152->10.10.10.20:23 TCP (SYN)]",
+     "Line_Content": "deny ip any any log",
+     "Node": "edge-rtr-1",
+     "Trace": [
+      "Matched line deny ip any any log"
+     ]
+    },
+    {
+     "Action": "DENY",
+     "Filter_Name": "OUTSIDE-IN",
+     "Flow": "start=edge-rtr-1 [10.10.10.1:49152->10.10.10.20:23 TCP (SYN)]",
+     "Line_Content": "deny ip any any log",
+     "Node": "edge-rtr-1",
+     "Trace": [
+      "Matched line deny ip any any log"
+     ]
+    }
+   ]
+  },
+  {
+   "flow": {
+    "host": "10.10.10.20",
+    "port": 443,
+    "protocol": "tcp"
+   },
+   "testFilters": [
+    {
+     "Action": "PERMIT",
+     "Filter_Name": "OUTSIDE-IN",
+     "Flow": "start=edge-rtr-1 [203.0.113.2:49152->10.10.10.20:443 TCP (SYN)]",
+     "Line_Content": "permit tcp any host 10.10.10.20 eq 443",
+     "Node": "edge-rtr-1",
+     "Trace": [
+      "Matched line permit tcp any host 10.10.10.20 eq 443"
+     ]
+    },
+    {
+     "Action": "PERMIT",
+     "Filter_Name": "OUTSIDE-IN",
+     "Flow": "start=edge-rtr-1 [10.10.10.1:49152->10.10.10.20:443 TCP (SYN)]",
+     "Line_Content": "permit tcp any host 10.10.10.20 eq 443",
+     "Node": "edge-rtr-1",
+     "Trace": [
+      "Matched line permit tcp any host 10.10.10.20 eq 443"
+     ]
+    }
+   ]
+  }
+ ],
+ "schemaVersion": "network-config-native/v1"
+}

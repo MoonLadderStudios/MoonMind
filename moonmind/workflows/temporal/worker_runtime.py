@@ -2462,6 +2462,7 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
             *request.request.spec.entrypoint[1:],
             *request.request.spec.command,
         )
+        network_config = request.request.spec.network_config_assessment is not None
         source_workflow = None
         source_link = None
         requested_assessment = assessment_marked(request.request.spec)
@@ -2484,6 +2485,31 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
                 game_math = game_math or "moonmind.security.game_math" in (
                     *saved.spec.entrypoint[1:], *saved.spec.command
                 )
+                network_config = (
+                    network_config or saved.spec.network_config_assessment is not None
+                )
+            if (
+                network_config
+                and record is not None
+                and not (scoped or requested_assessment or game_math)
+            ):
+                # Configuration exports are confidential evidence of the
+                # workflow that admitted the analyzer job; its later steps,
+                # such as a plan's conclusion, read them from there.
+                principal = f"{record.owner_type}:{record.owner_id}"
+                source_workflow = saved.source.workflow_id
+                source = (
+                    await session.get(TemporalExecutionCanonicalRecord, source_workflow)
+                    if source_workflow
+                    else None
+                )
+                if source is not None and source.run_id:
+                    source_link = {
+                        "namespace": source.namespace,
+                        "workflow_id": source.workflow_id,
+                        "run_id": source.run_id,
+                        "link_type": "output.container-job",
+                    }
             if scoped or requested_assessment or game_math:
                 record = await _container_job_admitted_record(session, request)
                 # Finished effects survive revocation, cancellation and loss of
@@ -2518,9 +2544,13 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
                     request.ownership_token.encode()
                 ).hexdigest(),
             },
-            **({"redaction_level": "restricted"} if scoped or game_math else {}),
+            **(
+                {"redaction_level": "restricted"}
+                if scoped or game_math or network_config
+                else {}
+            ),
         )
-        if scoped or game_math:
+        if scoped or game_math or network_config:
             await artifact_service.grant_operator_output_read(
                 artifact_id=artifact.artifact_id
             )
@@ -2550,7 +2580,7 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
                 ],
                 access=ArtifactAccessContext.for_activity(),
             )
-        if (scoped or game_math) and source_workflow:
+        if (scoped or game_math or network_config) and source_workflow:
             await artifact_service.delegate_read_access(
                 artifact_ids=[artifact.artifact_id],
                 workflow_id=source_workflow,

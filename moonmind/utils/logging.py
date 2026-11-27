@@ -63,6 +63,69 @@ _AUTHORIZATION_PREFIX_PATTERN = re.compile(_AUTHORIZATION_HEAD + r"\Z")
 _URL_USERINFO_PATTERN = re.compile(
     r"(?i)(\b[a-z][a-z0-9+.-]*://)[^\s/?#\"'<>`]+@"
 )
+# Secret constructs of exported network device and cloud network
+# configurations: password hashes, reversible or cleartext passwords, SNMP
+# communities, pre-shared keys and AAA/routing keys. Only the value is replaced,
+# within its line, so a sanitized export keeps every line number and the
+# surrounding syntax an offline analyzer parses.
+_DEVICE_SECRET_VALUE = r'(?:"(?P<qvalue>[^"\r\n]*)"|(?P<value>[^\s"<]+))'
+_DEVICE_STORAGE_TYPE = r"(?:(?:[0-9]|sha512|pbkdf2|md5|scrypt)\s+)?"
+_DEVICE_CONFIG_SECRET_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE | re.MULTILINE)
+    for pattern in (
+        # Cisco IOS, IOS XE, NX-OS, ASA and Arista EOS local credentials.
+        r"\benable\s+(?:secret|password)\s+(?:level\s+\d+\s+)?"
+        + _DEVICE_STORAGE_TYPE
+        + _DEVICE_SECRET_VALUE,
+        r"\busername\s+\S+(?:\s+(?:privilege\s+\d+|role\s+\S+|view\s+\S+))*"
+        r"\s+(?:secret|password)\s+" + _DEVICE_STORAGE_TYPE + _DEVICE_SECRET_VALUE,
+        r"\bpasswd\s+" + _DEVICE_SECRET_VALUE,
+        # Line and AAA-server sub-commands: indented and lowercase, so prose
+        # such as a "Password complexity" title is left alone.
+        r"^[ \t]+(?-i:password)[ \t]+(?:[0-9][ \t]+)?"
+        + _DEVICE_SECRET_VALUE
+        + r"[ \t]*$",
+        # SNMP communities and SNMPv3 user keys.
+        r"\bsnmp-server\s+community\s+" + _DEVICE_SECRET_VALUE,
+        r"\bsnmp-server\s+host\s+\S+(?:\s+(?:informs|traps|vrf\s+\S+))*"
+        r"(?:\s+version\s+(?:1|2c))?\s+(?!(?:version|informs|traps|vrf)\b)"
+        + _DEVICE_SECRET_VALUE,
+        r"\bsnmp-server\s+user\s+\S+\s+\S+(?:\s+remote\s+\S+)?\s+v3(?:\s+encrypted)?"
+        r"\s+auth\s+\S+\s+"
+        + _DEVICE_SECRET_VALUE
+        + r"(?:\s+priv\s+(?:(?:3des|des|aes)\s+)?(?:\d+\s+)?(?P<value2>[^\s\"<]+))?",
+        r"\bset\s+snmp\s+community\s+" + _DEVICE_SECRET_VALUE,
+        r"^[ \t]*community\s+" + _DEVICE_SECRET_VALUE + r"\s*\{",
+        # IKE/IPsec pre-shared keys.
+        r"\bcrypto\s+isakmp\s+key\s+(?:[0-9]\s+)?" + _DEVICE_SECRET_VALUE,
+        r"\bpre-shared-key\s+(?:(?:local|remote)\s+)?"
+        r"(?:address\s+\S+(?:\s+\S+)?\s+key\s+)?"
+        r"(?:(?:[0-9]|ascii-text|hexadecimal|hex)\s+)?" + _DEVICE_SECRET_VALUE,
+        # AAA, key chain, NTP, routing-protocol and wireless keys.
+        r"\b(?:tacacs-server|radius-server)\s+(?:host\s+\S+\s+(?:\S+\s+)*?)?key\s+"
+        r"(?:[0-9]\s+)?" + _DEVICE_SECRET_VALUE,
+        r"^[ \t]+(?-i:key)[ \t]+(?:[0-9][ \t]+)?" + _DEVICE_SECRET_VALUE + r"[ \t]*$",
+        r"\bserver-private\s+\S+\s+key\s+(?:[0-9]\s+)?" + _DEVICE_SECRET_VALUE,
+        r"\bkey-string\s+(?:[0-9]\s+)?" + _DEVICE_SECRET_VALUE,
+        r"\bntp\s+authentication-key\s+\d+\s+md5\s+" + _DEVICE_SECRET_VALUE,
+        r"\bip\s+ospf\s+(?:authentication-key|message-digest-key\s+\d+\s+md5)\s+"
+        r"(?:[0-9]\s+)?" + _DEVICE_SECRET_VALUE,
+        r"\bneighbor\s+\S+\s+password\s+(?:[0-9]\s+)?" + _DEVICE_SECRET_VALUE,
+        r"\bwpa-psk\s+(?:ascii|hex)\s+(?:[0-9]\s+)?" + _DEVICE_SECRET_VALUE,
+        # Junos.
+        r"\b(?:encrypted-password|plain-text-password-value)\s+" + _DEVICE_SECRET_VALUE,
+        r'\b(?:authentication-key|secret)\s+"(?P<qvalue>\$9\$[^"\r\n]*)"',
+        # FortiOS.
+        r"\bset\s+(?:password|passwd|psksecret|secret|key|auth-pwd|auth-password"
+        r"|priv-pwd|priv-password|ppk-secret)\s+(?:ENC\s+)?" + _DEVICE_SECRET_VALUE,
+        # PAN-OS and other XML exports.
+        r"<(?P<tag>phash|password|pre-shared-key|pre_shared_key|key|community-string"
+        r"|secret|auth-password|priv-password)>(?P<value>[^<]*)</(?P=tag)>",
+        # Cloud network exports.
+        r'"(?:PreSharedKey|preSharedKey|pre_shared_key|SharedKey|sharedKey|AuthKey'
+        r'|authKey)"\s*:\s*"(?P<qvalue>(?:\\.|[^"\\])*)"',
+    )
+)
 _PRIVATE_KEY_END = "-----END "
 _PRIVATE_KEY_BEGIN_PATTERN = re.compile(
     r"-----BEGIN (?P<label>(?:[A-Z0-9]+ )*PRIVATE KEY)\b(?:-----)?", re.IGNORECASE
@@ -158,6 +221,26 @@ def _redact_private_key_blocks(text: str) -> str:
             + "[REDACTED_PRIVATE_KEY]"
             + redacted[end:]
         )
+
+def _redact_device_secret(match: re.Match) -> str:
+    text, start = match.group(0), match.start()
+    for name in ("value2", "value", "qvalue"):
+        if name in match.re.groupindex and match.group(name) is not None:
+            begin, end = match.start(name) - start, match.end(name) - start
+            text = text[:begin] + "[REDACTED]" + text[end:]
+    return text
+
+
+def redact_device_config_secrets(text: str) -> str:
+    """Replace device and cloud network configuration secret values in place.
+
+    Lines, line numbers and the surrounding syntax stay intact, so locators
+    into a sanitized export still point at the operator's original lines.
+    """
+    for pattern in _DEVICE_CONFIG_SECRET_PATTERNS:
+        text = pattern.sub(_redact_device_secret, text)
+    return text
+
 
 def _redact_auth_paths(text: str) -> str:
     output: list[str] = []
@@ -405,7 +488,7 @@ def redact_credential_text(text: str | None) -> str:
     redacted = _COOKIE_HEADER_PATTERN.sub(r"\1 [REDACTED]", redacted)
     redacted = _URL_USERINFO_PATTERN.sub(r"\1[REDACTED_USERINFO]@", redacted)
     redacted = _redact_secret_assignments(redacted)
-    return redacted
+    return redact_device_config_secrets(redacted)
 
 
 def redact_sensitive_text(text: str | None) -> str:

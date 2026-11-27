@@ -47,9 +47,18 @@ def test_create_inputs_are_a_subject_type_and_catalog_fed_standards():
     assert {"security", "assessment"} <= set(preset["tags"])
     assert preset["annotations"]["workflowPublish"] == {"mode": "none"}
     schema = preset["annotations"]["inputSchema"]
-    assert set(schema["properties"]) == {"subject_type", "standards"}
+    assert set(schema["properties"]) == {"subject_type", "standards", "network_exports"}
     # Only subjects an installed journey honours.
-    assert schema["properties"]["subject_type"]["enum"] == ["application"]
+    assert schema["properties"]["subject_type"]["enum"] == ["application", "network"]
+    # Each export's provenance is the operator's structured statement.
+    export = schema["properties"]["network_exports"]["items"]
+    assert set(export["required"]) == {
+        "artifactRef",
+        "fileName",
+        "device",
+        "exportedAt",
+        "supplier",
+    }
     standards = schema["properties"]["standards"]
     assert standards["type"] == "array" and standards["minItems"] == 1
     assert standards["x-moonmind-options"] == "framework-packs"
@@ -64,6 +73,7 @@ async def test_preset_expands_to_context_planning_and_retain_steps(tmp_path):
         assert inputs["phase"] == phase
         assert inputs["subjectType"] == "application"
         assert inputs["standards"] == STANDARDS
+        assert inputs["networkExports"] == []
         # A planning run holds no assessment scope, credential or egress grant.
         assert not {"scope", "credentialRefs", "networkRefs", "budget"} & set(inputs)
     assert planning["skill"]["id"] == "security-review"
