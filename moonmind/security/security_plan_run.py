@@ -272,8 +272,16 @@ def _framework_pack(standard, plan: SecurityPlan) -> dict:
     if standard.artifact_ref is None:
         exclude.add("sha256")
     selection = standard.model_dump(mode="json", by_alias=True, exclude=exclude)
-    if plan.subject.type != "application" and not selection.get("requirementChoices"):
-        choices = _subject_choices(standard, plan)
+    if plan.subject.type != "application":
+        # An explicit choice keeps its own fields; a requirement whose choice
+        # leaves applicability open takes the validated plan's.
+        choices = dict(selection.get("requirementChoices") or {})
+        for requirement_id, planned in _subject_choices(standard, plan).items():
+            choice = choices.get(requirement_id) or {}
+            if choice.get("applicability", "undetermined") == "undetermined" and not (
+                choice.get("notApplicableReason")
+            ):
+                choices[requirement_id] = {**choice, **planned}
         if choices:
             selection["requirementChoices"] = choices
     return selection

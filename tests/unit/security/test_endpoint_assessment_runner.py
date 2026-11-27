@@ -166,6 +166,40 @@ def test_image_layers_apply_in_order_with_whiteouts(tmp_path, layout):
     assert tree(root) == {"etc", "etc/b", "etc/c", "opt", "opt/z"}
 
 
+def image(tmp_path, *layers) -> Path:
+    archive = tmp_path / "image.tar"
+    with tarfile.open(archive, "w") as bundle:
+        for index, entries in enumerate(layers):
+            add(bundle, f"l{index}/layer.tar", data=layer(entries))
+        add(
+            bundle,
+            "manifest.json",
+            data=json.dumps(
+                [{"Layers": [f"l{index}/layer.tar" for index in range(len(layers))]}]
+            ).encode(),
+        )
+    return archive
+
+
+@pytest.mark.parametrize("with_directory", [False, True])
+def test_an_opaque_whiteout_keeps_only_its_own_layer_beneath_it(
+    tmp_path, with_directory
+):
+    lower = [
+        ("etc", "dir"),
+        ("etc/lower", "file", b"l"),
+        ("etc/sub", "dir"),
+        ("etc/sub/old", "file", b"o"),
+    ]
+    # The layer's own entries precede its opaque marker in the archive.
+    upper = [("etc/sub", "dir")] if with_directory else []
+    upper += [("etc/sub/new", "file", b"n"), ("etc/.wh..wh..opq",)]
+    root = tmp_path / "root"
+    root.mkdir()
+    runner.unpack_input("image", image(tmp_path, lower, upper), root, 1 << 20)
+    assert tree(root) == {"etc", "etc/sub", "etc/sub/new"}
+
+
 def test_multi_image_archives_are_refused(tmp_path):
     archive = tmp_path / "image.tar"
     with tarfile.open(archive, "w") as bundle:
@@ -222,6 +256,50 @@ def test_rules_needing_live_state_or_file_metadata_are_classified(tmp_path):
         "xccdf_org.x_rule_extends": "runtime",
         "xccdf_org.x_rule_proc": "runtime",
         "xccdf_org.x_rule_var": "runtime",
+    }
+
+
+def test_rules_sharing_a_dependency_are_each_classified(tmp_path):
+    xccdf = "http://checklists.nist.gov/xccdf/1.2"
+    oval = "http://oval.mitre.org/XMLSchema/oval-definitions-5"
+    rules = "".join(
+        f'<Rule id="xccdf_org.x_rule_{name}"><check system="{oval}">'
+        f'<check-content-ref name="oval:x:def:{name}"/></check></Rule>'
+        for name in ("both", "a", "b")
+    )
+    definitions = "".join(
+        f'<definition class="compliance" id="oval:x:def:{name}" version="1">'
+        '<criteria operator="AND">'
+        + "".join(f'<criterion test_ref="oval:x:tst:{test}"/>' for test in tests)
+        + "</criteria></definition>"
+        for name, tests in (("both", "ab"), ("a", "a"), ("b", "b"))
+    )
+    tests = "".join(
+        f'<unix:file_test id="oval:x:tst:{name}" version="1" check="all">'
+        f'<unix:object object_ref="oval:x:obj:{name}"/>'
+        '<unix:state state_ref="oval:x:ste:owner"/></unix:file_test>'
+        for name in ("a", "b")
+    )
+    objects = "".join(
+        f'<unix:file_object id="oval:x:obj:{name}" version="1">'
+        f"<unix:filepath>/etc/{name}</unix:filepath></unix:file_object>"
+        for name in ("a", "b")
+    )
+    path = tmp_path / "ds.xml"
+    path.write_text(
+        f'<collection><Benchmark xmlns="{xccdf}" id="xccdf_org.x_benchmark_s">'
+        f"{rules}</Benchmark>"
+        f'<oval_definitions xmlns="{oval}" xmlns:unix="{oval}#unix">'
+        f"<definitions>{definitions}</definitions><tests>{tests}</tests>"
+        f"<objects>{objects}</objects><states>"
+        '<unix:file_state id="oval:x:ste:owner" version="1">'
+        '<unix:user_id datatype="int">0</unix:user_id></unix:file_state>'
+        "</states></oval_definitions></collection>"
+    )
+    assert runner.classify_offline_rules(path) == {
+        "xccdf_org.x_rule_both": "metadata",
+        "xccdf_org.x_rule_a": "metadata",
+        "xccdf_org.x_rule_b": "metadata",
     }
 
 

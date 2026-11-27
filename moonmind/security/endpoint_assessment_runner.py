@@ -198,30 +198,30 @@ def classify_offline_rules(datastream: Path) -> dict[str, str]:
                 own.setdefault(node, set()).add("metadata")
             element.clear()
 
-    memo: dict[tuple, frozenset] = {}
-
-    def needs(start) -> frozenset:
-        # Iterative depth-first walk; content can be deep and shared.
-        stack, order, seen = [start], [], set()
+    # Spread each need from the nodes that have it to everything that reaches
+    # them. Shared and deep dependencies are then complete for every parent,
+    # whatever order the content lists them in.
+    parents: dict[tuple, set] = {}
+    for node, children in edges.items():
+        for child in children:
+            parents.setdefault(child, set()).add(node)
+    reached: dict[tuple, set] = {}
+    for kind in ("runtime", "metadata"):
+        stack = [node for node, kinds in own.items() if kind in kinds]
+        seen = set(stack)
         while stack:
             node = stack.pop()
-            if node in seen or node in memo:
-                continue
-            seen.add(node)
-            order.append(node)
-            stack.extend(edges.get(node, ()))
-        for node in reversed(order):
-            found = set(own.get(node, ()))
-            for child in edges.get(node, ()):
-                found |= memo.get(child, frozenset())
-            memo[node] = frozenset(found)
-        return memo.get(start, frozenset())
+            reached.setdefault(node, set()).add(kind)
+            for parent in parents.get(node, ()):
+                if parent not in seen:
+                    seen.add(parent)
+                    stack.append(parent)
 
     result = {}
     for rule_id, definitions in rules.items():
         found = set()
         for definition in definitions:
-            found |= needs(definition)
+            found |= reached.get(definition, set())
         if "runtime" in found:
             result[rule_id] = "runtime"
         elif "metadata" in found:
@@ -276,6 +276,25 @@ class _Unpacker:
         elif path.is_dir():
             shutil.rmtree(path)
 
+    def _hide_lower(self, parent: Path) -> None:
+        """Remove lower-layer entries beneath ``parent``; keep this layer's own.
+
+        The layer's entries may precede its opaque marker, with or without
+        their directories, so a directory stays while it holds one of them.
+        """
+        holding = set()
+        for current, directories, files in os.walk(parent, topdown=False):
+            here = Path(current)
+            for name in directories + files:
+                child = here / name
+                relative = child.relative_to(self.root).as_posix()
+                if relative in self.layer or relative in holding:
+                    holding.add(here.relative_to(self.root).as_posix())
+                elif child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+
     def whiteout(self, member: tarfile.TarInfo) -> bool:
         """Apply an image-layer whiteout to lower layers; True when it was one."""
         name = self._name(member)
@@ -289,10 +308,7 @@ class _Unpacker:
                 and parent.is_dir()
                 and not parent.is_symlink()
             ):
-                for child in list(parent.iterdir()):
-                    relative = child.relative_to(self.root).as_posix()
-                    if relative not in self.layer:
-                        self._remove(relative)
+                self._hide_lower(parent)
             return True
         if base.startswith(".wh."):
             target = f"{directory}/{base[4:]}".lstrip("/")

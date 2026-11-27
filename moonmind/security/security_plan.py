@@ -1446,9 +1446,11 @@ def _endpoint_sections(plan: SecurityPlan) -> list[str]:
     if not jobs:
         lines.append("- None: no endpoint-assessment job is planned.")
     lines += [
-        "- Each rule is reported with its result: pass and fail are evidence; "
-        "every other result is a coverage state with its reason, and errors or "
-        "unevaluated required rules leave the run partial.",
+        (
+            "- Each rule is reported with its result: pass and fail are evidence; "
+            "every other result is a coverage state with its reason, and errors or "
+            "unevaluated required rules leave the run partial."
+        ),
         f"- {OBSERVATION_STATEMENTS['offline-copy']}",
         f"- {OBSERVATION_STATEMENTS['operator-supplied']}",
         "",

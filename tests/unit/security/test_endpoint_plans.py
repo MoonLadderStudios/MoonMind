@@ -296,6 +296,22 @@ def test_a_plan_run_launches_the_endpoint_preset_and_concludes_per_rule():
     )
 
 
+def test_a_partial_requirement_choice_keeps_the_planned_applicability_of_the_rest():
+    raw = draft()
+    raw["standards"][0]["requirementChoices"] = {
+        "EP-1": {"applicability": "applicable", "applicabilityReason": "Confirmed."},
+        "EP-2": {"responsibilityReason": "The host team runs web-01."},
+    }
+    plan = validate(raw)
+    step = conclusion_step(plan, plan_ref="art_plan", identity="a" * 64, excluded=[])
+    choices = step["tool"]["inputs"]["frameworkPacks"][0]["requirementChoices"]
+    assert set(choices) == {row.id for row in plan.requirements}
+    assert {choice["applicability"] for choice in choices.values()} == {"applicable"}
+    assert choices["EP-1"]["applicabilityReason"] == "Confirmed."
+    assert choices["EP-2"]["responsibilityReason"] == "The host team runs web-01."
+    assert choices["EP-3"]["applicabilityReason"] == "web-01 runs Debian 12."
+
+
 def test_an_application_plan_run_keeps_operator_choices_untouched():
     raw = copy.deepcopy(draft())
     raw["subject"]["type"] = "application"
