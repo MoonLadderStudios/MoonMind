@@ -75,6 +75,8 @@ from moonmind.security.web_api_methodology import (
 )
 from moonmind.security.workload_profiles import (
     CLOUD_ASSESSMENT_PROFILE_REF,
+    ENDPOINT_ACTION_CLASS,
+    ENDPOINT_HOST_PROFILE_REF,
     TLS_ACTION_CLASS,
     TLS_ASSESSMENT_PROFILE_REF,
     WEB_ASSESSMENT_PROFILE_REF,
@@ -278,6 +280,7 @@ class AuthorityTarget(Contract):
         "cloud_account",
         "dns_names",
         "network_hosts",
+        "endpoint_host",
     ]
     ref: Text
     routes: list[WebRoute] = Field(default_factory=list, exclude_if=_empty)
@@ -709,6 +712,12 @@ def native_job(kind: str, value: Mapping):
         )
     if kind == "web-assessment" and isinstance(value.get("identity"), dict):
         value["identity"] = {**value["identity"], "credentialRef": _PLACEHOLDER_REF}
+    if kind == "endpoint-assessment" and value.get("target") == "host":
+        # A live host's assessment and host-inspection credential are bound
+        # at launch from the saved authorization.
+        value.update(
+            credentialRef=_PLACEHOLDER_REF, assessmentRef=_PLACEHOLDER_ASSESSMENT
+        )
     try:
         return model.model_validate(value), {}, None
     except ValidationError as exc:
@@ -743,6 +752,33 @@ def job_authority(kind: str, model, facts, scope=None) -> JobAuthority:
         return JobAuthority(
             scoped=False,
             targets=[AuthorityTarget(kind="workspace_path", ref=model.input_path)],
+            max_job_seconds=_job_seconds(kind, model),
+        )
+    if kind == "endpoint-assessment" and model.target == "host":
+        # A live host runs only inside an admitted scope: its host target,
+        # the native reach to its one port, and a host-inspection grant.
+        host = model.host
+        return JobAuthority(
+            scoped=True,
+            profile_refs=[ENDPOINT_HOST_PROFILE_REF],
+            action_classes=[ENDPOINT_ACTION_CLASS],
+            targets=[
+                AuthorityTarget(
+                    kind="endpoint_host",
+                    ref=host.authority,
+                    names=[host.address],
+                    ports=[host.port],
+                    exclusions=list(model.skip_rule_ids),
+                ),
+                AuthorityTarget(
+                    kind="network_hosts",
+                    ref="native",
+                    names=[host.address],
+                    ports=[host.port],
+                ),
+            ],
+            credential_purposes=["host_inspection"],
+            network_refs=[model.egress_policy_ref],
             max_job_seconds=_job_seconds(kind, model),
         )
     if kind == "endpoint-assessment":
@@ -1424,7 +1460,17 @@ def _endpoint_sections(plan: SecurityPlan) -> list[str]:
     for job in jobs:
         value = job.input
         rules = value.get("ruleIds") or []
-        if value.get("target") == "results":
+        host = value.get("host") if isinstance(value.get("host"), dict) else {}
+        if value.get("target") == "host":
+            what = (
+                f"evaluates {_safe(value.get('profile'))} from "
+                f"{_safe(value.get('datastream'))} on the live host "
+                f"{_safe(host.get('address'))} port {_safe(host.get('port', 22))} "
+                f"over SSH (pinned host key, "
+                + ("sudo -n" if host.get("elevated") else "no elevation")
+                + "), inside a reviewed authorization with a host_inspection grant"
+            )
+        elif value.get("target") == "results":
             what = (
                 f"imports operator-produced OpenSCAP results "
                 f"{_safe(value.get('inputArtifactRef'))}"
@@ -1453,6 +1499,7 @@ def _endpoint_sections(plan: SecurityPlan) -> list[str]:
         ),
         f"- {OBSERVATION_STATEMENTS['offline-copy']}",
         f"- {OBSERVATION_STATEMENTS['operator-supplied']}",
+        f"- {OBSERVATION_STATEMENTS['live-host']}",
         "",
         "### Required inputs",
     ]

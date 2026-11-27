@@ -40,8 +40,11 @@ from pydantic import (
 
 from moonmind.schemas.repository_scanner_models import (
     CLOUD_ACTION_CLASS,
+    XCCDF_ID,
     WebRoute,
+    XccdfRuleId,
     cloud_regions,
+    host_key,
     route_within,
     web_origin,
     web_route,
@@ -207,8 +210,9 @@ class ProfileOutput(_Model):
 
 #: Distinct workload credential uses. Private target-registry access is the
 #: separate ``imageAssessment.targetCredentialRef`` path; model credentials stay
-#: with Provider Profiles. A grant for one purpose never fills another's slot.
-CredentialPurpose = Literal["cloud_inventory", "application_auth"]
+#: with Provider Profiles. A grant for one purpose never fills another's slot,
+#: so a source, cloud, registry or application credential cannot inspect a host.
+CredentialPurpose = Literal["cloud_inventory", "application_auth", "host_inspection"]
 #: Container directory of file-delivered workload credentials.
 WORKLOAD_CREDENTIALS_TARGET = "/run/moonmind-credentials"
 
@@ -241,6 +245,10 @@ class ProfileCredential(_Model):
             raise ValueError("cloud inventory credentials, and only they, use aws-sts")
         if self.issuer == "aws-sts" and self.delivery != "file":
             raise ValueError("issued cloud sessions are delivered as files")
+        if self.purpose == "host_inspection" and self.delivery != "file":
+            # The SSH client reads a key file; an environment value would
+            # reach every child process of the job.
+            raise ValueError("host-inspection credentials are delivered as files")
         return self
 
 
@@ -437,6 +445,73 @@ def _service_inventory_command(spec, profile, mode) -> list[str] | None:
     return build_service_inventory_command(plan)
 
 
+#: The deployment profile that evaluates a live host, its one action class and
+#: its one credential slot. Scope ``profileRefs`` and grants name the profile.
+ENDPOINT_HOST_PROFILE_REF = "endpoint-host"
+ENDPOINT_HOST_MODE = "evaluate"
+ENDPOINT_ACTION_CLASS = "endpoint-evaluation"
+ENDPOINT_HOST_SLOT = "host"
+ENDPOINT_RUNNER = ("-I", "-m", "moonmind.security.endpoint_assessment_runner")
+
+
+def _endpoint_host_command(spec, profile, mode) -> list[str] | None:
+    """Render the fixed live-host evaluation of an ``endpoint-host`` profile.
+
+    The selection's native network must be exactly the host's own derived
+    selection, its one credential the host-inspection slot named by the
+    assessment, and its egress the profile's own native policy, so the
+    request can reach only the admitted host and port.
+    """
+    selection = spec.workload_profile
+    assessment = selection.endpoint_assessment
+    if assessment is None:
+        return None
+    if assessment.target != "host" or assessment.host is None:
+        raise ValueError("profile endpoint jobs evaluate a live host")
+    expected_outputs = {
+        item["name"]: item["relativePath"] for item in assessment.outputs()
+    }
+    slots = profile.credentials
+    selected = selection.credentials or []
+    if (
+        selection.native_network != assessment.host.native_selection()
+        or selection.assessment_ref != assessment.assessment_ref
+        or spec.input_attachments != []
+        or selection.arguments
+        or selection.configuration_exceptions
+        or selection.dns_assessment is not None
+        or selection.service_inventory is not None
+        or profile.entrypoint != ("python",)
+        or mode.argv != ENDPOINT_RUNNER
+        or mode.action_class != ENDPOINT_ACTION_CLASS
+        or mode.arguments
+        or profile.environment
+        or profile.caches
+        or profile.configuration_exceptions
+        or profile.egress_policy_ref != assessment.egress_policy_ref
+        or len(slots) != 1
+        or slots[0].name != ENDPOINT_HOST_SLOT
+        or slots[0].purpose != "host_inspection"
+        or len(selected) != 1
+        or selected[0].slot != ENDPOINT_HOST_SLOT
+        or selected[0].credential_ref != assessment.credential_ref
+        or selected[0].account != assessment.host.account
+        or len(profile.outputs) != len(expected_outputs)
+        or {item.name: item.relative_path for item in profile.outputs}
+        != expected_outputs
+        or spec.timeout_seconds != assessment.timeout_seconds + 15
+    ):
+        raise ValueError(
+            "live endpoint evaluation requires its fixed host profile, one "
+            "host-inspection credential and the host's own native selection"
+        )
+    return [
+        *ENDPOINT_RUNNER,
+        assessment.model_dump_json(by_alias=True),
+        f"/outputs/{assessment.output_directory}",
+    ]
+
+
 def resolve_profile_job(spec, profiles):
     """Return ``spec`` with its profile's concrete launch content.
 
@@ -464,8 +539,19 @@ def resolve_profile_job(spec, profiles):
     if profile.dns_resolver is not None and dns_plan is None:
         raise ValueError("DNS resolver profiles require an explicit DNS selection")
     inventory_command = _service_inventory_command(spec, profile, mode)
+    endpoint_command = _endpoint_host_command(spec, profile, mode)
+    if (
+        any(item.purpose == "host_inspection" for item in profile.credentials)
+        and endpoint_command is None
+    ):
+        raise ValueError("host-inspection profiles evaluate only an admitted host")
     inputs = frozenset(item.name for item in spec.input_attachments or ())
-    if not inputs and inventory_command is None and dns_plan is None:
+    if (
+        not inputs
+        and inventory_command is None
+        and dns_plan is None
+        and endpoint_command is None
+    ):
         raise ValueError("workload profile jobs read captured input attachments")
     declared = {argument.name: argument for argument in mode.arguments}
     if set(selection.arguments) - set(declared):
@@ -486,6 +572,8 @@ def resolve_profile_job(spec, profiles):
         command = build_dns_command(dns_plan)
     if inventory_command is not None:
         command = inventory_command
+    if endpoint_command is not None:
+        command = endpoint_command
     exceptions = {item.name: item for item in profile.configuration_exceptions}
     if len(set(selection.configuration_exceptions)) != len(
         selection.configuration_exceptions
@@ -583,12 +671,60 @@ TLS_ASSESSMENT_PROFILE_REF = "tls-assessment"
 TLS_ACTION_CLASS = "tls-inspection"
 
 
+class EndpointProfileChoice(_Model):
+    """One shipped datastream and XCCDF profile a live host may be evaluated with."""
+
+    datastream: str = Field(pattern=r"^ssg-[a-z0-9]{2,32}-ds\.xml$")
+    profile: str = Field(pattern=XCCDF_ID.replace("KIND", "profile"), max_length=176)
+
+
+class EndpointHostTarget(_Model):
+    """A live host an operator admits for read-only OpenSCAP evaluation.
+
+    Only this explicit address and port is a target: hosts saved in an
+    environment or found by inventory stay candidates until listed here.
+    ``hostKey`` is the pinned identity checked before credentials are used.
+    Jobs evaluate only the listed profiles, skip at least ``excludedRuleIds``,
+    and use ``sudo -n`` only when ``elevated`` admits it. Reaching the host
+    still needs the scope's native network authority and a host-inspection
+    credential grant.
+    """
+
+    address: str = Field(max_length=253)
+    port: int = Field(22, ge=1, le=65535)
+    os_family: Literal["linux"] = Field(alias="osFamily")
+    host_key: str = Field(alias="hostKey", max_length=8192)
+    profiles: tuple[EndpointProfileChoice, ...] = Field(min_length=1, max_length=32)
+    excluded_rule_ids: tuple[XccdfRuleId, ...] = Field(
+        (), alias="excludedRuleIds", max_length=256
+    )
+    elevated: bool = False
+
+    @field_validator("address")
+    @classmethod
+    def _one_host(cls, value: str) -> str:
+        from moonmind.schemas.repository_scanner_models import _live_host_address
+
+        return _live_host_address(value)
+
+    _key = field_validator("host_key")(lambda value: host_key(value))
+
+    @model_validator(mode="after")
+    def _unique(self) -> "EndpointHostTarget":
+        if len(set(self.profiles)) != len(self.profiles):
+            raise ValueError("endpoint profiles must be unique")
+        if len(set(self.excluded_rule_ids)) != len(self.excluded_rule_ids):
+            raise ValueError("excluded endpoint rules must be unique")
+        return self
+
+
 class AssessmentTarget(_Model):
     """One admitted input path, input artifact, web origin or cloud account.
 
     A web origin carries the route prefixes and methods that may be tested
     and the prefixes that may not; jobs stay within all of them. A cloud
-    account carries its provider and the regions that may be assessed.
+    account carries its provider and the regions that may be assessed. An
+    endpoint host carries its address, port, pinned identity and profiles.
     """
 
     workspace_path: str | None = Field(None, alias="workspacePath", max_length=1000)
@@ -604,6 +740,7 @@ class AssessmentTarget(_Model):
     realtime: RealtimeScope | None = None
     dns_assessment: DNSAssessment | None = Field(None, alias="dnsAssessment")
     native_network: NativeNetworkSelection | None = Field(None, alias="nativeNetwork")
+    endpoint_host: EndpointHostTarget | None = Field(None, alias="endpointHost")
 
     @model_serializer(mode="wrap")
     def _legacy_shape(self, handler):
@@ -614,6 +751,9 @@ class AssessmentTarget(_Model):
         if self.dns_assessment is None:
             value.pop("dnsAssessment", None)
             value.pop("dns_assessment", None)
+        if self.endpoint_host is None:
+            value.pop("endpointHost", None)
+            value.pop("endpoint_host", None)
         if self.realtime is None:
             value.pop("realtime", None)
         return value
@@ -646,11 +786,13 @@ class AssessmentTarget(_Model):
             self.cloud_account,
             self.native_network,
             self.dns_assessment,
+            self.endpoint_host,
         ]
         if sum(item is not None for item in named) != 1:
             raise ValueError(
-                "exactly one of workspacePath, artifactRef, webOrigin or "
-                "cloudAccount, nativeNetwork or dnsAssessment is required"
+                "exactly one of workspacePath, artifactRef, webOrigin, "
+                "cloudAccount, nativeNetwork, dnsAssessment or endpointHost "
+                "is required"
             )
         if (self.web_origin is not None) != bool(self.web_routes):
             raise ValueError("web origins, and only they, admit routes")
@@ -833,6 +975,13 @@ class AdmittedAssessmentScope(_Model):
             raise ValueError("an assessment admits at most one DNS query budget")
         if sum(target.native_network is not None for target in self.targets) > 1:
             raise ValueError("an assessment admits at most one native network budget")
+        hosts = [
+            (t.endpoint_host.address, t.endpoint_host.port)
+            for t in self.targets
+            if t.endpoint_host is not None
+        ]
+        if len(set(hosts)) != len(hosts):
+            raise ValueError("an endpoint host is admitted once per assessment")
         return self
 
     @field_validator("exclusions")
@@ -879,9 +1028,15 @@ def selection_within_scope(spec, scope: AdmittedAssessmentScope) -> bool:
             not spec.input_attachments
             and selection.dns_assessment is None
             and selection.service_inventory is None
+            and selection.endpoint_assessment is None
         )
     ):
         return False
+    if selection.endpoint_assessment is not None:
+        try:
+            endpoint_host_within_scope(spec, scope)
+        except PermissionError:
+            return False
     if selection.service_inventory is not None and (
         selection.native_network is None or spec.input_attachments != []
     ):
@@ -936,6 +1091,63 @@ def selection_within_scope(spec, scope: AdmittedAssessmentScope) -> bool:
         ):
             return False
     return True
+
+
+def endpoint_host_within_scope(spec, scope: AdmittedAssessmentScope) -> None:
+    """A live endpoint job names exactly an admitted host, identity and profile.
+
+    Raises ``PermissionError`` with the first readable reason. Native reach,
+    the action class and the credential grant are checked by their own owners.
+    """
+    selection = spec.workload_profile
+    assessment = selection.endpoint_assessment
+    host = assessment.host
+    if assessment.target != "host" or host is None:
+        raise PermissionError("profile endpoint jobs evaluate a live host")
+    if (
+        assessment.assessment_ref != scope.assessment_ref
+        or selection.assessment_ref != scope.assessment_ref
+    ):
+        raise PermissionError("endpoint job belongs to another assessment")
+    if spec.input_attachments:
+        raise PermissionError("a live endpoint job reads no input artifact")
+    if (
+        selection.native_network is None
+        or selection.native_network != host.native_selection()
+    ):
+        raise PermissionError("endpoint job may reach only its own host and port")
+    if assessment.egress_policy_ref not in scope.network_refs:
+        raise PermissionError("endpoint network access is not admitted")
+    hosts = [t.endpoint_host for t in scope.targets if t.endpoint_host is not None]
+    by_address = [t for t in hosts if t.address == host.address]
+    if not by_address:
+        raise PermissionError(f"host {host.address} is not an admitted endpoint")
+    matches = [t for t in by_address if t.port == host.port]
+    if not matches:
+        raise PermissionError(
+            f"port {host.port} is not admitted for host {host.address}"
+        )
+    target = matches[0]
+    if target.host_key != host.host_key:
+        raise PermissionError(
+            "host identity differs from the pinned key in the authorization"
+        )
+    if (
+        EndpointProfileChoice(
+            datastream=assessment.datastream, profile=assessment.profile
+        )
+        not in target.profiles
+    ):
+        raise PermissionError(
+            f"profile {assessment.profile} from {assessment.datastream} is not "
+            f"admitted for host {host.address}"
+        )
+    if not set(target.excluded_rule_ids) <= set(assessment.skip_rule_ids):
+        raise PermissionError("endpoint job omits a rule the authorization excludes")
+    if host.elevated and not target.elevated:
+        raise PermissionError("elevated evaluation is not admitted for this host")
+    if spec.timeout_seconds > scope.max_job_seconds:
+        raise PermissionError("endpoint timeout exceeds the assessment budget")
 
 
 def tls_assessment_within_scope(spec, scope: AdmittedAssessmentScope) -> None:
@@ -1100,6 +1312,12 @@ def resolved_job_within_scope(spec, scope: AdmittedAssessmentScope, profiles) ->
     if getattr(spec, "cloud_assessment", None) is not None:
         cloud_assessment_within_scope(spec, scope)
         return
+    if (
+        spec.workload_profile is not None
+        and spec.workload_profile.endpoint_assessment is not None
+    ):
+        # Readable reason first; the shared check below still applies.
+        endpoint_host_within_scope(spec, scope)
     if not selection_within_scope(spec, scope):
         raise PermissionError("container job is outside the admitted assessment scope")
     profile = _profile(profiles, spec.workload_profile.profile_ref)
@@ -1149,6 +1367,10 @@ def resolved_job_within_scope(spec, scope: AdmittedAssessmentScope, profiles) ->
 
 __all__ = [
     "CLOUD_ASSESSMENT_PROFILE_REF",
+    "ENDPOINT_ACTION_CLASS",
+    "ENDPOINT_HOST_MODE",
+    "ENDPOINT_HOST_PROFILE_REF",
+    "ENDPOINT_HOST_SLOT",
     "TLS_ACTION_CLASS",
     "TLS_ASSESSMENT_PROFILE_REF",
     "WEB_ASSESSMENT_PROFILE_REF",
@@ -1158,9 +1380,12 @@ __all__ = [
     "AssessmentTarget",
     "CredentialGrant",
     "CredentialPurpose",
+    "EndpointHostTarget",
+    "EndpointProfileChoice",
     "ProfileCredential",
     "WorkloadProfile",
     "cloud_assessment_within_scope",
+    "endpoint_host_within_scope",
     "parse_workload_profiles",
     "resolve_profile_job",
     "resolved_job_within_scope",

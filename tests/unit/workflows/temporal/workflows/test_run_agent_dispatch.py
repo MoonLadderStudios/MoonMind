@@ -515,6 +515,54 @@ def test_repository_and_image_job_steps_run_outside_the_admitted_scope(
     )
 
 
+@pytest.mark.parametrize(("target", "scoped"), [("rootfs", False), ("host", True)])
+def test_only_a_live_endpoint_step_runs_inside_the_admitted_scope(target, scoped):
+    """Offline endpoint jobs run unscoped; a live host needs its scope (#5440)."""
+    info = SimpleNamespace(
+        namespace="default", workflow_id="mm:plan-run", run_id="run-1", parent=None
+    )
+    gates = {
+        RUN_ASSESSMENT_SCOPE_AUTHORITY_PATCH,
+        RUN_EXECUTION_FANOUT_AUTHORIZATION_PATCH,
+        RUN_ASSESSMENT_UNSCOPED_JOB_STEPS_PATCH,
+    }
+    scope = {
+        "assessmentRef": "lab",
+        "profileRefs": ["endpoint-host"],
+        "actionClasses": ["endpoint-evaluation"],
+        "targets": [{"workspacePath": "."}],
+        "maxJobs": 4,
+        "maxJobSeconds": 1800,
+        "evidenceIntent": "Plan run",
+    }
+    with (
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=info,
+        ),
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: patch_id in gates,
+        ),
+    ):
+        request = MoonMindRunWorkflow()._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": "omnigent"}},
+            node_id="job-1",
+            tool_name="omnigent",
+            node_annotations={
+                "securityAssessment": {
+                    "kind": "endpoint-assessment",
+                    "admission": {"target": target, "asset": "web-01"},
+                    "phase": "collect",
+                }
+            },
+            workflow_parameters={"assessmentScope": scope},
+        )
+    policy = request.step_execution.skill_source_policy
+    assert ("assessmentScope" in policy) is scoped
+    assert policy["executionFanout"]["authorized"] is False
+
+
 def _resolved_skill(skill_name: str) -> ResolvedSkillEntry:
     return ResolvedSkillEntry(
         skill_name=skill_name,

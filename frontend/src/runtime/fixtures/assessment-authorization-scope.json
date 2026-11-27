@@ -31,7 +31,7 @@
     "targets": {
       "items": {
         "additionalProperties": false,
-        "description": "One admitted input path, input artifact, web origin or cloud account.\n\nA web origin carries the route prefixes and methods that may be tested\nand the prefixes that may not; jobs stay within all of them. A cloud\naccount carries its provider and the regions that may be assessed.",
+        "description": "One admitted input path, input artifact, web origin or cloud account.\n\nA web origin carries the route prefixes and methods that may be tested\nand the prefixes that may not; jobs stay within all of them. A cloud\naccount carries its provider and the regions that may be assessed. An\nendpoint host carries its address, port, pinned identity and profiles.",
         "properties": {
           "workspacePath": {
             "maxLength": 1000,
@@ -534,6 +534,89 @@
             "title": "Native Network",
             "type": "object"
           },
+          "endpointHost": {
+            "additionalProperties": false,
+            "description": "A live host an operator admits for read-only OpenSCAP evaluation.\n\nOnly this explicit address and port is a target: hosts saved in an\nenvironment or found by inventory stay candidates until listed here.\n``hostKey`` is the pinned identity checked before credentials are used.\nJobs evaluate only the listed profiles, skip at least ``excludedRuleIds``,\nand use ``sudo -n`` only when ``elevated`` admits it. Reaching the host\nstill needs the scope's native network authority and a host-inspection\ncredential grant.",
+            "properties": {
+              "address": {
+                "maxLength": 253,
+                "title": "Address",
+                "type": "string"
+              },
+              "port": {
+                "default": 22,
+                "maximum": 65535,
+                "minimum": 1,
+                "title": "Port",
+                "type": "integer"
+              },
+              "osFamily": {
+                "const": "linux",
+                "title": "Os Family",
+                "type": "string",
+                "enum": [
+                  "linux"
+                ]
+              },
+              "hostKey": {
+                "maxLength": 8192,
+                "title": "Host Key",
+                "type": "string"
+              },
+              "profiles": {
+                "items": {
+                  "additionalProperties": false,
+                  "description": "One shipped datastream and XCCDF profile a live host may be evaluated with.",
+                  "properties": {
+                    "datastream": {
+                      "pattern": "^ssg-[a-z0-9]{2,32}-ds\\.xml$",
+                      "title": "Datastream",
+                      "type": "string"
+                    },
+                    "profile": {
+                      "maxLength": 176,
+                      "pattern": "^xccdf_[A-Za-z0-9.-]+_profile_[A-Za-z0-9_.-]{1,128}$",
+                      "title": "Profile",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "datastream",
+                    "profile"
+                  ],
+                  "title": "EndpointProfileChoice",
+                  "type": "object"
+                },
+                "maxItems": 32,
+                "minItems": 1,
+                "title": "Profiles",
+                "type": "array"
+              },
+              "excludedRuleIds": {
+                "default": [],
+                "items": {
+                  "pattern": "^xccdf_[A-Za-z0-9.-]+_rule_[A-Za-z0-9_.-]{1,128}$",
+                  "type": "string"
+                },
+                "maxItems": 256,
+                "title": "Excluded Rule Ids",
+                "type": "array"
+              },
+              "elevated": {
+                "default": false,
+                "title": "Elevated",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "address",
+              "osFamily",
+              "hostKey",
+              "profiles"
+            ],
+            "title": "Endpoint Host",
+            "type": "object"
+          },
           "cloudAccount": {
             "pattern": "^[0-9]{12}$",
             "type": "string",
@@ -643,7 +726,8 @@
           "purpose": {
             "enum": [
               "cloud_inventory",
-              "application_auth"
+              "application_auth",
+              "host_inspection"
             ],
             "title": "Purpose",
             "type": "string"

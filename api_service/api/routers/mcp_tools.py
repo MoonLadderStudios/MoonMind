@@ -808,11 +808,25 @@ def _enforce_container_capability_scope(
     if scope is not None and profile is not None and profile.assessment_ref is None:
         profile.assessment_ref = scope.assessment_ref
     if not container_job_matches_capability(submission, capability):
+        message = "Container request exceeds the session capability."
+        if (
+            scope is not None
+            and profile is not None
+            and profile.endpoint_assessment is not None
+        ):
+            from moonmind.security.workload_profiles import endpoint_host_within_scope
+
+            # Name what the authorization does not admit: host, port,
+            # identity, profile, exclusions or elevation.
+            try:
+                endpoint_host_within_scope(submission.spec, scope)
+            except PermissionError as reason:
+                message = f"{message[:-1]}: {reason}."
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
                 "code": "container_capability_scope_mismatch",
-                "message": "Container request exceeds the session capability.",
+                "message": message,
             },
         )
     if capability.workspace_read_only or scope is not None:

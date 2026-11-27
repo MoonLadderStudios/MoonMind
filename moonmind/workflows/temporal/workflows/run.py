@@ -1556,6 +1556,22 @@ RUN_ASSESSMENT_UNSCOPED_JOB_STEPS_PATCH = "run-assessment-unscoped-job-steps-v1"
 _UNSCOPED_ASSESSMENT_JOB_KINDS = frozenset(
     {"repository-scan", "image-assessment", "endpoint-assessment"}
 )
+
+
+def _live_endpoint_hint(hint: Mapping[str, Any]) -> bool:
+    """A live host endpoint step needs the scope; offline ones do not.
+
+    No recorded history can name one: the endpoint contract refused a
+    ``host`` target before it existed, so recorded decisions are unchanged.
+    """
+    admission = hint.get("admission")
+    return (
+        hint.get("kind") == "endpoint-assessment"
+        and isinstance(admission, Mapping)
+        and admission.get("target") == "host"
+    )
+
+
 # Tool steps receive the run's runtime selection so issue search can check
 # provider capacity before claiming work. Replay-gated so histories that
 # recorded the old tool Activity arguments keep replaying them.
@@ -24839,6 +24855,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 and self._workflow_patch_enabled(
                     RUN_ASSESSMENT_UNSCOPED_JOB_STEPS_PATCH
                 )
+                and not _live_endpoint_hint(hint)
             )
             # Run parameters are the operator's admission; step inputs, Skills
             # and model output cannot set or widen this scope.

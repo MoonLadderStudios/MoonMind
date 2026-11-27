@@ -1,8 +1,8 @@
 slug: security-endpoint
 title: Endpoint configuration assessment
 description: Evaluate a ComplianceAsCode profile with OpenSCAP against a captured root filesystem or
-  image archive offline, or import OpenSCAP results produced on the endpoint. Never reaches the host
-  and never remediates.
+  image archive offline, import OpenSCAP results produced on the endpoint, or evaluate a live Linux
+  host that a reviewed authorization admits. Never remediates.
 tags:
 - security
 - assessment
@@ -35,20 +35,23 @@ annotations:
           and report every rule's result. No remediation.
       assessment:
         additionalProperties: false
-        description: 'Offline OpenSCAP evaluation of an endpoint, or import of its results.
+        description: 'OpenSCAP evaluation of an endpoint, offline or live, or import of its results.
 
 
           rootfs and image read a captured root filesystem tar or Docker/OCI image archive and
           evaluate a ComplianceAsCode profile shipped in the scanner image, with no network. results
           imports ARF or XCCDF results the operator produced with OpenSCAP on the endpoint. Neither is
-          MoonMind''s own observation of the running device. Evaluation is read-only: there is no
-          remediation, fix-generation or command input.'
+          MoonMind''s own observation of the running device. host evaluates a running Linux host over
+          SSH through the admitted native gateway, only inside a reviewed authorization that admits the
+          host, its pinned key and the profile. Evaluation is read-only: there is no remediation,
+          fix-generation or command input.'
         properties:
           target:
             enum:
             - rootfs
             - image
             - results
+            - host
             title: Target
             type: string
             default: rootfs
@@ -92,6 +95,95 @@ annotations:
               pattern: ^xccdf_[A-Za-z0-9.-]+_rule_[A-Za-z0-9_.-]{1,128}$
             description: Rules the selected standards name. Any the profile leaves unselected, or that
               end without pass or fail, leave the run partial.
+          assessmentRef:
+            pattern: ^[a-z0-9][a-z0-9.-]{0,127}$
+            type: string
+            title: Assessment reference
+            description: Live hosts only. The reviewed authorization's assessment reference.
+          credentialRef:
+            type: string
+            title: Host-inspection credential reference
+            description: Live hosts only. A host_inspection grant's secret reference (an OpenSSH private
+              key); never the key itself.
+          egressPolicyRef:
+            pattern: ^[a-z0-9][a-z0-9.-]{0,127}$
+            type: string
+            title: Native egress policy
+            description: Live hosts only. The endpoint-host profile's native egress policy.
+          host:
+            type: object
+            title: Live host
+            description: Live hosts only. Must match a host target of the reviewed authorization.
+            additionalProperties: false
+            required:
+            - address
+            - account
+            - hostKey
+            - limits
+            properties:
+              address:
+                type: string
+                title: Address
+                description: One IPv4 address or exact DNS name.
+              port:
+                type: integer
+                title: SSH port
+                default: 22
+                minimum: 1
+                maximum: 65535
+              account:
+                type: string
+                title: Login account
+                pattern: ^[a-z_][a-z0-9_-]{0,31}$
+              hostKey:
+                type: string
+                title: Pinned SSH host key
+                description: The host's OpenSSH public host key, such as ssh-ed25519 AAAA...
+              elevated:
+                type: boolean
+                title: Evaluate through sudo -n
+                default: false
+              targetNetworkRef:
+                type: string
+                title: Private route network
+              targetContainerRef:
+                type: string
+                title: Private route container
+              limits:
+                type: object
+                title: Native limits
+                additionalProperties: false
+                required:
+                - maxConnections
+                - maxBytes
+                - maxConnectionsPerSecond
+                - maxConcurrentConnections
+                - maxDurationSeconds
+                properties:
+                  maxConnections:
+                    type: integer
+                    title: Max connections
+                  maxBytes:
+                    type: integer
+                    title: Max bytes
+                  maxConnectionsPerSecond:
+                    type: integer
+                    title: Max connections per second
+                  maxConcurrentConnections:
+                    type: integer
+                    title: Max concurrent connections
+                  maxDurationSeconds:
+                    type: integer
+                    title: Max duration seconds
+          skipRuleIds:
+            type: array
+            title: Skipped rule IDs
+            maxItems: 256
+            items:
+              type: string
+              pattern: ^xccdf_[A-Za-z0-9.-]+_rule_[A-Za-z0-9_.-]{1,128}$
+            description: Live hosts only. Rules the evaluation skips; it must include every rule the
+              authorization excludes.
           outputDirectory:
             default: endpoint-assessment
             title: Output directory
@@ -117,7 +209,6 @@ annotations:
         required:
         - target
         - asset
-        - inputArtifactRef
         title: Assessment
         type: object
         x-moonmind-input-contract: endpoint-assessment
@@ -131,16 +222,18 @@ steps:
   instructions: 'Use the portable security-review Skill and the supplied goal and assessment arguments.
     Execute the compiled job_spec through moonmind container run --spec <file> --request-id <collection-id>.
     Serialize job_spec as JSON and reuse the collection ID on retry without changing the target,
-    content, profile, tailoring, rules, timeout or input. Use the existing container-job owner; retain
-    the job ID and the results and summary artifact references. Reconcile uncertain submissions before
-    retrying. Stop with actionable diagnostics if readiness or admission fails; never install
-    substitutes, reach the endpoint or broaden scope.
+    host, content, profile, tailoring, rules, timeout or input. Use the existing container-job owner;
+    retain the job ID and the results and summary artifact references. Reconcile uncertain submissions
+    before retrying. Stop with actionable diagnostics if readiness or admission fails; never install
+    substitutes, reach the endpoint yourself or broaden scope. Only the admitted live-host job reaches
+    a host.
 
 
     Interpret this step''s collected evidence for the supplied goal. Reuse completed evidence; never
     repeat collection. Save an evidence-referenced security-review/v1 interpretation and readable report
     with per-rule results, coverage states and their reasons, and honest exclusions: an offline copy or
-    imported result is not an observation of the running device. Compare baseline_ref only when
+    imported result is not an observation of the running device, and a live result describes the host
+    only at its recorded time. Compare baseline_ref only when
     supplied and accessible. Preserve native results if interpretation fails.
 
 

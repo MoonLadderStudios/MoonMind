@@ -479,10 +479,17 @@ class WorkloadProfileSelection(ContractModel):
     service_inventory: ServiceInventoryOptions | None = Field(
         None, alias="serviceInventory"
     )
+    # A live host's read-only OpenSCAP evaluation (``target: host`` only).
+    endpoint_assessment: EndpointAssessment | None = Field(
+        None, alias="endpointAssessment"
+    )
 
     @model_serializer(mode="wrap")
     def _legacy_native_shape(self, handler):
         value = handler(self)
+        if self.endpoint_assessment is None:
+            value.pop("endpointAssessment", None)
+            value.pop("endpoint_assessment", None)
         if self.service_inventory is None:
             value.pop("serviceInventory", None)
             value.pop("service_inventory", None)
@@ -826,7 +833,7 @@ class WorkloadCredentialAuthorization(ContractModel):
     assessment_ref: str = Field(alias="assessmentRef", pattern=_REF_PATTERN)
     profile_ref: str = Field(alias="profileRef", pattern=_REF_PATTERN)
     slot: str = Field(pattern=_REF_PATTERN)
-    purpose: Literal["cloud_inventory", "application_auth"]
+    purpose: Literal["cloud_inventory", "application_auth", "host_inspection"]
     credential_ref: str = Field(alias="credentialRef", max_length=1024)
     account: str = Field(max_length=255)
     expires_at: datetime = Field(alias="expiresAt")

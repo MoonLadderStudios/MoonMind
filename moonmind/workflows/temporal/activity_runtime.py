@@ -9024,6 +9024,9 @@ class TemporalAgentRuntimeActivities:
                 ContainerJobFailureClass.IMAGE_USE_DENIED,
                 ContainerJobFailureClass.REPOSITORY_SCOPE_MISMATCH,
                 ContainerJobFailureClass.CREDENTIAL_UNRESOLVED,
+                # Time only moves forward: an expired grant stays expired, and
+                # a retry would observe the stopped job instead of the cause.
+                ContainerJobFailureClass.CREDENTIAL_EXPIRED,
                 ContainerJobFailureClass.LAUNCH,
                 ContainerJobFailureClass.ASSESSMENT_AUTHORITY_DENIED,
             }

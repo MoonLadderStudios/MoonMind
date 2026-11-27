@@ -690,3 +690,96 @@ async def test_activity_heartbeat_cancellation_stops_readiness_work(monkeypatch)
             }
         )
     assert cancelled and beats == [{"phase": "assessment_readiness"}]
+
+
+def live_endpoint_parameters():
+    from dataclasses import replace
+    from datetime import UTC, datetime, timedelta
+
+    from moonmind.security.egress_policy import ScopedEgressPolicy
+    from tests.unit.security.test_endpoint_hosts import (
+        PROFILE,
+        assessment,
+        grant,
+        scope,
+    )
+
+    selection = assessment()
+    current = grant(expiresAt=(datetime.now(UTC) + timedelta(hours=4)).isoformat())
+    native = ScopedEgressPolicy.model_validate(
+        {
+            "policyRef": "native-lab",
+            "allowedWorkflowIds": ["wf"],
+            "allowedImageSourceRefs": ["repository-security"],
+            "nativeNetwork": PROFILE.native_network.model_dump(
+                mode="json", by_alias=True
+            ),
+        }
+    )
+    settings = replace(
+        configured(), workload_profiles=(PROFILE,), egress_policies=(native,)
+    )
+    return {
+        "assessmentScope": scope(grants=[current]).model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        ),
+        "workflow": {
+            "steps": [
+                {
+                    "skill": {
+                        "id": "security-review",
+                        "args": {"assessment": selection},
+                    },
+                    "annotations": {
+                        "securityAssessment": {
+                            "kind": "endpoint-assessment",
+                            "phase": "collect",
+                            "admission": copy.deepcopy(selection),
+                        }
+                    },
+                }
+            ]
+        },
+    }, settings
+
+
+@pytest.mark.asyncio
+async def test_live_endpoint_checks_its_host_credential_before_image_preparation(
+    monkeypatch,
+):
+    from api_service.services import assessment_authorizations as authority
+    from moonmind.security.workload_profiles import AdmittedAssessmentScope
+
+    p, settings = live_endpoint_parameters()
+    canonical = AdmittedAssessmentScope.model_validate(p["assessmentScope"])
+    monkeypatch.setattr(
+        authority, "canonical_assessment_scope", AsyncMock(return_value=canonical)
+    )
+    backend = SimpleNamespace(
+        _settings=settings,
+        assessment_readiness=AsyncMock(
+            return_value={"status": "ready", "diagnostics": [], "checks": []}
+        ),
+    )
+    missing = SimpleNamespace(
+        execute=AsyncMock(return_value=SimpleNamespace(first=lambda: None))
+    )
+    owner = {"principalId": "operator", "principalType": "user"}
+    result = await readiness.check_assessment_runtime_readiness(
+        p, owner=owner, workflow_id="wf", run_id="run", backend=backend, session=missing
+    )
+    assert result["diagnostics"][0]["code"] == "credential_unavailable"
+    backend.assessment_readiness.assert_not_awaited()
+
+    monkeypatch.setattr(
+        readiness, "credential_metadata", AsyncMock(return_value="ready")
+    )
+    result = await readiness.check_assessment_runtime_readiness(
+        p, owner=owner, workflow_id="wf", run_id="run", backend=backend, session=missing
+    )
+    assert result["status"] == "ready", result
+    readiness.credential_metadata.assert_awaited_once()
+    assert readiness.credential_metadata.await_args.kwargs == {"revision": 2}
+    probe = backend.assessment_readiness.await_args
+    assert probe.args[0].request.spec.image_source_ref == "repository-security"
+    assert probe.kwargs["kind"] == "endpoint-assessment"

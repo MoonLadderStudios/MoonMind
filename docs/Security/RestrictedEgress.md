@@ -372,6 +372,14 @@ Selected exports support validated summary copies; native execution and lease
 attestation schemas are explicitly withheld. Exporting changes neither retained
 bytes nor access grants.
 
+### Live endpoint hosts
+
+The `endpoint-host` profile is the other source-free native specialization.
+Its selection's `nativeNetwork` must equal the single address and port of the
+job's [live endpoint host](EndpointAssessment.md#live-hosts), so the job's SSH
+sessions reach only that endpoint through CONNECT tunnels, under the same
+reservations, receipts and cleanup as any native job.
+
 ### Bounded HTTPS TLS inspection
 
 `moonmind container tls-assessment --admission tls.json` submits a typed

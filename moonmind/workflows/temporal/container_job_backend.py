@@ -112,6 +112,7 @@ from moonmind.security.egress_conformance_evidence import serialize_conformance_
 from moonmind.security.endpoint_assessments import (
     EndpointExecution,
     EndpointResultsError,
+    endpoint_assessment_of,
     parse_results,
     sanitize_results,
     summarize,
@@ -624,8 +625,11 @@ def _withholds_console(spec) -> bool:
         or spec.endpoint_assessment is not None
         or (
             spec.workload_profile is not None
-            and (spec.workload_profile.service_inventory is not None
-                 or spec.workload_profile.dns_assessment is not None)
+            and (
+                spec.workload_profile.service_inventory is not None
+                or spec.workload_profile.dns_assessment is not None
+                or spec.workload_profile.endpoint_assessment is not None
+            )
         )
     )
 
@@ -2970,6 +2974,28 @@ class DockerContainerJobBackend:
             args.extend(("--env-file", str(env_file)))
         return args
 
+    async def _recheck_host_credentials(
+        self, request: ContainerJobActivityRequest
+    ) -> None:
+        """Fail a running host evaluation closed once its credential lapses.
+
+        Each observation rechecks the grant's expiry and resolves the secret
+        at its admitted revision, so expiry, revocation and rotation stop the
+        job with the existing credential failure classes. The value is not kept.
+        """
+
+        selection = request.request.spec.workload_profile
+        if selection is None or selection.endpoint_assessment is None:
+            return
+        try:
+            for _, decision in self._workload_decisions(
+                request, datetime.now(timezone.utc)
+            ):
+                await self._resolve_workload_secret(decision)
+        except ContainerJobBackendError:
+            await self.stop_container(request)
+            raise
+
     async def _renew_workload_sessions(
         self, request: ContainerJobActivityRequest
     ) -> None:
@@ -3892,6 +3918,7 @@ class DockerContainerJobBackend:
         # here never fails the observation of container liveness/terminality.
         log_cursor = await self._collect_live_logs(request, ref)
         if state.get("Running"):
+            await self._recheck_host_credentials(request)
             await self._renew_workload_sessions(request)
             return ContainerJobActivityResult(
                 containerRef=ref,
@@ -4476,7 +4503,7 @@ class DockerContainerJobBackend:
             return await self._collect_scanner_outputs(request)
         if request.request.spec.image_assessment is not None:
             return await self._collect_image_assessment_outputs(request)
-        if request.request.spec.endpoint_assessment is not None:
+        if endpoint_assessment_of(request.request.spec) is not None:
             return await self._collect_endpoint_assessment_outputs(request)
         if request.request.spec.tls_assessment is not None:
             return await self._collect_tls_assessment_outputs(request)
@@ -5222,7 +5249,7 @@ class DockerContainerJobBackend:
         if self._publish is None:
             return []
         spec = request.request.spec
-        assessment = spec.endpoint_assessment
+        assessment = endpoint_assessment_of(spec)
         entries = await asyncio.to_thread(
             self._build_output_entries, self._output_root(request), list(spec.outputs)
         )

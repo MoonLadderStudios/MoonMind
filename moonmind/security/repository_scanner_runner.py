@@ -53,6 +53,7 @@ class BoundedProcesses:
         capture: Path | None = None,
         errors: Path | None = None,
         limit_file_size: bool = True,
+        stdin: Path | None = None,
     ) -> tuple[int | None, str]:
         """Return ``(exit_code, state)``; output goes only to private files."""
         if self.stopped():
@@ -76,12 +77,14 @@ class BoundedProcesses:
         try:
             with capture.open("wb") if capture else open(os.devnull, "wb") as stdout, (
                 errors.open("wb") if errors else open(os.devnull, "wb")
-            ) as stderr:
+            ) as stderr, (
+                stdin.open("rb") if stdin else open(os.devnull, "rb")
+            ) as source:
                 child = subprocess.Popen(
                     argv,
                     cwd=cwd,
                     env=env,
-                    stdin=subprocess.DEVNULL,
+                    stdin=source,
                     stdout=stdout,
                     stderr=stderr,
                     start_new_session=True,

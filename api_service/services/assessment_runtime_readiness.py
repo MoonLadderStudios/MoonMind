@@ -40,7 +40,10 @@ from moonmind.security.workload_credentials import (
     authorize_workload_credentials,
     owner_principal,
 )
-from moonmind.security.workload_profiles import AdmittedAssessmentScope
+from moonmind.security.workload_profiles import (
+    AdmittedAssessmentScope,
+    resolve_profile_job,
+)
 
 _PROBE_CODES = frozenset(
     [
@@ -207,6 +210,26 @@ async def credential_metadata(session, reference, *, revision=None):
     return "ready"
 
 
+def _live_endpoint(kind, selected) -> bool:
+    """A live host evaluation: a scoped profile job with a host credential."""
+    return (
+        kind == "endpoint-assessment"
+        and isinstance(selected, dict)
+        and selected.get("target") == "host"
+    )
+
+
+def _image_source_ref(settings, job) -> str:
+    """A typed job's own image source, or its deployment profile's."""
+    selection = job.get("workloadProfile")
+    if selection is None:
+        return job["imageSourceRef"]
+    for profile in settings.workload_profiles:
+        if profile.profile_ref == selection["profileRef"]:
+            return profile.image_source_ref
+    raise KeyError("workload profile is not configured")
+
+
 async def check_assessment_runtime_readiness(
     parameters, *, owner, workflow_id, run_id, backend, session
 ):
@@ -260,7 +283,7 @@ async def check_assessment_runtime_readiness(
                 continue
             kind, selected = hint["kind"], hint["admission"]
             job = assessment_job_spec(kind, selected)
-            source = settings.image_source(job["imageSourceRef"])
+            source = settings.image_source(_image_source_ref(settings, job))
             image_auth = None
             if isinstance(source, RegistryImageSource):
                 image_auth = authorizer.authorize_reference(
@@ -271,8 +294,12 @@ async def check_assessment_runtime_readiness(
                 if not image_auth.authorized:
                     raise PermissionError("tool image denied")
             credentials = []
-            if kind in {"cloud-assessment", "web-assessment"}:
+            if kind in {"cloud-assessment", "web-assessment"} or _live_endpoint(
+                kind, selected
+            ):
                 spec = ContainerJobSpec.model_validate(job)
+                if spec.workload_profile is not None:
+                    spec = resolve_profile_job(spec, settings.workload_profiles)
                 credentials = authorize_workload_credentials(
                     spec,
                     scope,
@@ -302,9 +329,11 @@ async def check_assessment_runtime_readiness(
     except (ValueError, PermissionError, TypeError, KeyError):
         return readiness_failure("assessment_authority_unavailable")
     checks = []
-    for kind, _, _, _, refs in admitted:
+    for kind, selected, _, _, refs in admitted:
         for reference, revision in refs:
-            if kind in {"cloud-assessment", "web-assessment"}:
+            if kind in {"cloud-assessment", "web-assessment"} or _live_endpoint(
+                kind, selected
+            ):
                 # Match the existing worker's DatabaseSecretResolver. Registry
                 # target credentials have a different, broader resolver owner.
                 try:
@@ -373,7 +402,7 @@ async def check_assessment_runtime_readiness(
                         "runId": run_id,
                     },
                     "spec": {
-                        "imageSourceRef": job["imageSourceRef"],
+                        "imageSourceRef": _image_source_ref(settings, job),
                         "inputAttachments": [],
                         "resources": {
                             "cpuMillis": 1000,

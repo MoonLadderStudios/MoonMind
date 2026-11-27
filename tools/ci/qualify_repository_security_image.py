@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -52,6 +53,7 @@ def container(
     entrypoint="python",
     mounts=(),
     network="none",
+    extra=(),
 ):
     argv = [
         "docker",
@@ -79,6 +81,7 @@ def container(
     ]
     for host, target in mounts:
         argv.extend(("--mount", f"type=bind,src={host},dst={target},readonly"))
+    argv.extend(extra)
     argv.extend(("--entrypoint", entrypoint, image, *args))
     return [str(value) for value in argv]
 
@@ -353,6 +356,507 @@ def qualify_endpoint(image, source, output, scratch, evidence) -> dict:
             kind: {rule: found[kind][0][rule] for rule in ENDPOINT_RULES}
             for kind in found
         },
+    }
+
+
+#: The live fixture host: Debian 12 with sshd and Debian's OpenSCAP, the
+#: endpoint fixture's APT settings, and an ``inspector`` login. The ``slow``
+#: variant's evaluation never finishes, for the timeout and stop journeys.
+ENDPOINT_HOST = "endpoint.qualification.test"
+ENDPOINT_HOST_BASE = "debian:bookworm-slim"
+_FIXTURE_HOST = """\
+FROM {base}
+RUN apt-get -o Acquire::Retries=3 update \\
+    && apt-get install --no-install-recommends -y openssh-server \\
+    && {{ apt-get install --no-install-recommends -y openscap-scanner \\
+         || apt-get install --no-install-recommends -y libopenscap8; }} \\
+    && rm -rf /var/lib/apt/lists/* \\
+    && useradd --create-home --shell /bin/sh inspector \\
+    && install -d -m 0700 -o inspector -g inspector /home/inspector/.ssh \\
+    && mkdir -p /run/sshd \\
+    && rm -f /etc/ssh/ssh_host_* \\
+    && ssh-keygen -q -t ed25519 -N '' -f /etc/ssh/ssh_host_ed25519_key
+COPY authorized_keys /home/inspector/.ssh/authorized_keys
+COPY etc/ /etc/
+COPY bin/ /usr/local/bin/
+RUN chown inspector:inspector /home/inspector/.ssh/authorized_keys \\
+    && chmod 0600 /home/inspector/.ssh/authorized_keys
+CMD ["/usr/sbin/sshd", "-D", "-e", "-o", "LogLevel=VERBOSE", \\
+     "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no"]
+"""
+#: The slow host's first evaluation stalls; later ones run normally, so a
+#: stopped run can be restarted on the same host.
+_SLOW_OSCAP = (
+    "#!/bin/sh\n"
+    'if [ "$1" = xccdf ] && mkdir /tmp/.moonmind-stalled 2>/dev/null; then sleep 900; fi\n'
+    'exec /usr/bin/oscap "$@"\n'
+)
+
+
+def ssh_keypair(image: str, directory: Path, name: str, evidence: Path) -> Path:
+    """An ed25519 key made with the scanner image's own OpenSSH client."""
+    owned_directory(directory)
+    invoke(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--user",
+            "1000:1000",
+            "--mount",
+            f"type=bind,src={directory},dst=/keys",
+            "--entrypoint",
+            "ssh-keygen",
+            image,
+            "-q",
+            "-t",
+            "ed25519",
+            "-N",
+            "",
+            "-C",
+            "qualification",
+            "-f",
+            f"/keys/{name}",
+        ],
+        evidence / f"endpoint-host-key-{name}.json",
+    )
+    return directory / name
+
+
+def fixture_host_image(variant: str, public_key: Path, scratch: Path, evidence) -> str:
+    context = scratch / f"fixture-host-{variant}"
+    if context.exists():
+        shutil.rmtree(context)
+    fixture = ENDPOINT_FIXTURES / ("weakened" if variant == "weakened" else "hardened")
+    shutil.copytree(fixture / "etc/apt", context / "etc/apt")
+    (context / "bin").mkdir()
+    if variant == "slow":
+        (context / "bin/oscap").write_text(_SLOW_OSCAP)
+        (context / "bin/oscap").chmod(0o755)
+    shutil.copyfile(public_key.with_suffix(".pub"), context / "authorized_keys")
+    (context / "Dockerfile").write_text(_FIXTURE_HOST.format(base=ENDPOINT_HOST_BASE))
+    tag = f"moonmind-qualification-endpoint-host:{variant}-{os.getpid()}"
+    invoke(
+        ["docker", "build", "--pull", "-t", tag, str(context)],
+        evidence / f"endpoint-host-build-{variant}.json",
+        timeout=900,
+    )
+    return tag
+
+
+class EndpointHostLab:
+    """Two internal networks joined only by the native TCP gateway.
+
+    The job shares one network with the gateway, and the fixture host the
+    other, so the job reaches the host only through admitted CONNECT tunnels.
+    """
+
+    def __init__(self, image: str, scratch: Path, evidence: Path):
+        self.image, self.scratch, self.evidence = image, scratch, evidence
+        self.prefix = f"moonmind-qual-endpoint-{os.getpid()}"
+        octet = 16 + os.getpid() % 200
+        self.jobs = (f"{self.prefix}-jobs", f"10.231.{octet}")
+        self.targets = (f"{self.prefix}-targets", f"10.232.{octet}")
+        self.containers: list[str] = []
+
+    def __enter__(self):
+        for name, net in (self.jobs, self.targets):
+            command(
+                "docker",
+                "network",
+                "create",
+                "--internal",
+                "--subnet",
+                f"{net}.0/24",
+                name,
+            )
+        return self
+
+    def __exit__(self, *_):
+        for name in reversed(self.containers):
+            subprocess.run(
+                ["docker", "rm", "-f", name], check=False, capture_output=True
+            )
+        for name, _ in (self.jobs, self.targets):
+            subprocess.run(
+                ["docker", "network", "rm", name], check=False, capture_output=True
+            )
+
+    def host(self, label: str, tag: str) -> str:
+        name = f"{self.prefix}-host-{label}"
+        self.containers.append(name)
+        command(
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            name,
+            "--network",
+            self.targets[0],
+            "--ip",
+            f"{self.targets[1]}.3",
+            tag,
+        )
+        return name
+
+    def gateway(self, label: str, port: int, limits: dict) -> Path:
+        """One lease's gateway admitting only the fixture host and port."""
+        state = self.scratch.parent / f"endpoint-gateway-{label}"
+        owned_directory(state)
+        config = self.scratch.parent / f"endpoint-gateway-{label}.json"
+        config.write_text(
+            json.dumps(
+                {
+                    "leaseId": f"qualification-{label}",
+                    "deadlineUnix": time.time() + 900,
+                    "listenHost": f"{self.jobs[1]}.2",
+                    "listenPort": 3128,
+                    "clientIp": f"{self.jobs[1]}.3",
+                    "endpoints": [
+                        {
+                            "authority": f"{ENDPOINT_HOST}:{port}",
+                            "address": f"{self.targets[1]}.3",
+                            "port": port,
+                        }
+                    ],
+                    "maxConnections": limits["maxConnections"],
+                    "maxConcurrentConnections": limits["maxConcurrentConnections"],
+                    "maxConnectionsPerSecond": limits["maxConnectionsPerSecond"],
+                    "maxBytes": limits["maxBytes"],
+                    "handshakeSeconds": 10,
+                    "connectSeconds": 5,
+                    "idleSeconds": 30,
+                }
+            )
+        )
+        config.chmod(0o644)
+        name = f"{self.prefix}-gateway-{label}"
+        self.containers.append(name)
+        command(
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            name,
+            "--network",
+            self.jobs[0],
+            "--ip",
+            f"{self.jobs[1]}.2",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--mount",
+            f"type=bind,src={config},dst=/config.json,readonly",
+            "--mount",
+            f"type=bind,src={state},dst=/state",
+            "--entrypoint",
+            "python",
+            self.image,
+            "-I",
+            "/opt/moonmind-scanner-python/moonmind/security/native_tcp_gateway.py",
+            "--config",
+            "/config.json",
+            "--state-directory",
+            "/state",
+        )
+        command(
+            "docker",
+            "network",
+            "connect",
+            "--ip",
+            f"{self.targets[1]}.2",
+            self.targets[0],
+            name,
+        )
+        for _ in range(100):
+            snapshot = state / "snapshot.json"
+            if (
+                snapshot.exists()
+                and json.loads(snapshot.read_text()).get("status") == "running"
+            ):
+                return state
+            time.sleep(0.1)
+        raise ImageError(f"endpoint host {label}: native gateway did not start")
+
+    def retire(self, *names: str) -> None:
+        """Remove finished fixtures so the next journey can reuse their addresses."""
+        for name in names:
+            subprocess.run(
+                ["docker", "rm", "-f", name], check=False, capture_output=True
+            )
+            if name in self.containers:
+                self.containers.remove(name)
+
+    def remote_directories(self, host: str) -> list[str]:
+        listing = subprocess.run(
+            [
+                "docker",
+                "exec",
+                host,
+                "sh",
+                "-c",
+                "ls -d /tmp/tmp.* 2>/dev/null || true",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return listing.stdout.split()
+
+
+def run_endpoint_host(
+    lab, source, output, label, assessment, key: Path, *, detach=False
+):
+    """The admitted runner in the scanner image, reaching the host via the gateway."""
+    result = output / f"endpoint-host-{label}"
+    if result.exists():
+        shutil.rmtree(result)
+    argv = container(
+        lab.image,
+        source,
+        output,
+        "-I",
+        "-m",
+        "moonmind.security.endpoint_assessment_runner",
+        json.dumps(assessment),
+        f"/scan-output/endpoint-host-{label}",
+        scratch=lab.scratch,
+        network=lab.jobs[0],
+        mounts=((key, "/run/moonmind-credentials/host"),),
+        extra=(
+            "--ip",
+            f"{lab.jobs[1]}.3",
+            "--env",
+            f"MOONMIND_EGRESS_PROXY=http://{lab.jobs[1]}.2:3128",
+            *(("--detach", "--name", f"{lab.prefix}-job-{label}") if detach else ()),
+        ),
+    )
+    if detach:
+        lab.containers.append(f"{lab.prefix}-job-{label}")
+        command(*argv)
+        return result
+    invoke(
+        argv, lab.evidence / f"endpoint-host-{label}.json", exits=(0, 2), timeout=600
+    )
+    return result
+
+
+def endpoint_host_execution(result: Path, evidence: Path, label: str) -> dict:
+    for path in result.iterdir():
+        shutil.copyfile(path, evidence / f"endpoint-host-{label}-{path.name}")
+    return json.loads((result / "execution.json").read_text())
+
+
+def qualify_endpoint_host(image, source, output, scratch, evidence, offline) -> dict:
+    """Controlled live-host journeys through the real gateway, SSH and OpenSCAP.
+
+    Success on hardened and weakened hosts must match the offline results;
+    an unknown host key stops before authentication; a wrong key, a closed
+    port, a timeout and a stop each end with their bounded code, and every
+    run that reached the host removes its temporary directory.
+    """
+    keys = scratch.parent / "endpoint-host-keys"
+    client = ssh_keypair(image, keys, "client", evidence)
+    stranger = ssh_keypair(image, keys, "stranger", evidence)
+    tags = {
+        variant: fixture_host_image(variant, client, scratch.parent, evidence)
+        for variant in ("hardened", "weakened", "slow")
+    }
+    # Each fixture image has its own generated host key; pin the one in use.
+    host_keys = {
+        variant: " ".join(
+            command(
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "--entrypoint",
+                "cat",
+                tag,
+                "/etc/ssh/ssh_host_ed25519_key.pub",
+            ).split()[:2]
+        )
+        for variant, tag in tags.items()
+    }
+    limits = {
+        "maxConnections": 8,
+        "maxBytes": 512 * 1024 * 1024,
+        "maxConnectionsPerSecond": 4,
+        "maxConcurrentConnections": 1,
+        "maxDurationSeconds": 600,
+    }
+
+    def assessment(port, key, timeout):
+        return {
+            "target": "host",
+            "asset": "qualification-endpoint",
+            "datastream": "ssg-debian12-ds.xml",
+            "profile": ENDPOINT_PROFILE,
+            "ruleIds": list(ENDPOINT_RULES),
+            "assessmentRef": "qualification",
+            "credentialRef": "db://qualification-host",
+            "egressPolicyRef": "native-qualification",
+            "timeoutSeconds": timeout,
+            "host": {
+                "address": ENDPOINT_HOST,
+                "port": port,
+                "account": "inspector",
+                "hostKey": key,
+                "limits": {**limits, "maxDurationSeconds": min(timeout, 600)},
+            },
+        }
+
+    record, journeys = {}, {}
+    with EndpointHostLab(image, scratch, evidence) as lab:
+
+        def journey(
+            label,
+            variant,
+            *,
+            port=22,
+            key=None,
+            credential=client,
+            timeout=600,
+            host=None,
+            keep_host=False,
+        ):
+            host = host or lab.host(label, tags[variant])
+            state = lab.gateway(label, port, limits)
+            pinned = key or host_keys[variant]
+            result = run_endpoint_host(
+                lab,
+                source,
+                output,
+                label,
+                assessment(port, pinned, timeout),
+                credential,
+            )
+            execution = endpoint_host_execution(result, evidence, label)
+            gateway = json.loads((state / "snapshot.json").read_text())
+            logs = subprocess.run(
+                ["docker", "logs", host], check=False, capture_output=True, text=True
+            )
+            (evidence / f"endpoint-host-{label}-sshd.log").write_text(
+                logs.stderr + logs.stdout
+            )
+            journeys[label] = {
+                "state": execution["state"],
+                "limitations": execution["limitations"],
+                "gateway": {
+                    name: gateway.get(name)
+                    for name in (
+                        "attempts",
+                        "bytesReserved",
+                        "dialOutcomes",
+                        "endpoints",
+                    )
+                },
+                "remoteDirectoriesLeft": lab.remote_directories(host),
+            }
+            lab.retire(f"{lab.prefix}-gateway-{label}")
+            if not keep_host:
+                lab.retire(host)
+            return result, execution, journeys[label], logs.stderr + logs.stdout
+
+        for kind in ("hardened", "weakened"):
+            result, execution, seen, _ = journey(kind, kind)
+            if (
+                execution["state"] != "succeeded"
+                or not (result / "results.xml").is_file()
+            ):
+                raise ImageError(f"endpoint host {kind}: {execution['limitations']}")
+            found = endpoint_results(result / "results.xml")
+            record[kind] = {rule: found.get(rule) for rule in ENDPOINT_RULES}
+            if record[kind] != offline[kind]:
+                raise ImageError(
+                    f"endpoint host {kind}: live {record[kind]} differs from offline {offline[kind]}"
+                )
+            if seen["remoteDirectoriesLeft"] or seen["gateway"]["attempts"] != 5:
+                raise ImageError(f"endpoint host {kind}: unexpected transport {seen}")
+
+        expectations = (
+            (
+                "unknown-identity",
+                "hardened",
+                {"key": " ".join(stranger.with_suffix(".pub").read_text().split()[:2])},
+                "host_identity_unverified",
+            ),
+            (
+                "wrong-credential",
+                "hardened",
+                {"credential": stranger},
+                "host_authentication_failed",
+            ),
+            ("unreachable", "hardened", {"port": 2222}, "host_unreachable"),
+        )
+        for label, variant, changes, code in expectations:
+            _, execution, seen, logs = journey(label, variant, **changes)
+            if code not in execution["limitations"] or execution["state"] != "failed":
+                raise ImageError(f"endpoint host {label}: {execution}")
+            if label == "unknown-identity" and (
+                "publickey" in logs or "Accepted" in logs
+            ):
+                # Key exchange failed first: no credential was offered.
+                raise ImageError(
+                    "endpoint host: authentication followed an unknown key"
+                )
+
+        _, execution, seen, _ = journey("timeout", "slow", timeout=60)
+        if execution["state"] != "timed_out" or seen["remoteDirectoriesLeft"]:
+            raise ImageError(f"endpoint host timeout: {execution} {seen}")
+
+        host = lab.host("stop", tags["slow"])
+        lab.gateway("stop", 22, limits)
+        result = run_endpoint_host(
+            lab,
+            source,
+            output,
+            "stop",
+            assessment(22, host_keys["slow"], 600),
+            client,
+            detach=True,
+        )
+        for _ in range(600):
+            if lab.remote_directories(host):
+                break
+            time.sleep(0.1)
+        command("docker", "stop", "--time", "20", f"{lab.prefix}-job-stop")
+        execution = endpoint_host_execution(result, evidence, "stop")
+        journeys["stop"] = {
+            "state": execution["state"],
+            "limitations": execution["limitations"],
+            "remoteDirectoriesLeft": lab.remote_directories(host),
+        }
+        lab.retire(f"{lab.prefix}-job-stop", f"{lab.prefix}-gateway-stop")
+        if (
+            execution["state"] != "canceled"
+            or journeys["stop"]["remoteDirectoriesLeft"]
+        ):
+            raise ImageError(f"endpoint host stop: {journeys['stop']}")
+
+        # The stopped run restarts as a new run under a new lease on the same
+        # host; the stopped run's evidence stays retained beside it.
+        result, execution, seen, _ = journey("restart", "slow", host=host)
+        found = (
+            endpoint_results(result / "results.xml")
+            if (result / "results.xml").is_file()
+            else {}
+        )
+        if (
+            execution["state"] != "succeeded"
+            or seen["remoteDirectoriesLeft"]
+            or {rule: found.get(rule) for rule in ENDPOINT_RULES} != offline["hardened"]
+        ):
+            raise ImageError(f"endpoint host restart: {execution}")
+    return {
+        "host": ENDPOINT_HOST,
+        "base": ENDPOINT_HOST_BASE,
+        "hostKeyType": host_keys["hardened"].split()[0],
+        "rules": record,
+        "journeys": journeys,
     }
 
 
@@ -708,9 +1212,13 @@ print(json.dumps(inventory))
             raise ImageError("image SBOM is missing its SPDX package inventory")
         shutil.copyfile(sbom, evidence / "sbom.spdx.json")
         endpoint = qualify_endpoint(image, source, output, scratch, evidence)
+        endpoint_host = qualify_endpoint_host(
+            image, source, output, scratch, evidence, endpoint["rules"]
+        )
         record.update(
             qualification="passed",
             endpoint=endpoint,
+            endpointHost=endpoint_host,
             sbomSha256=hashlib.sha256(sbom.read_bytes()).hexdigest(),
             rules=inventory["defaultRules"],
             qualificationRules=snapshot(FIXTURES),
