@@ -389,9 +389,10 @@ CMD ["/usr/sbin/sshd", "-D", "-e", "-o", "LogLevel=VERBOSE", \\
 """
 #: The slow host's first evaluation stalls; later ones run normally, so a
 #: stopped run can be restarted on the same host.
+_STALL_MARKER = "/tmp/.moonmind-stalled"
 _SLOW_OSCAP = (
     "#!/bin/sh\n"
-    'if [ "$1" = xccdf ] && mkdir /tmp/.moonmind-stalled 2>/dev/null; then sleep 900; fi\n'
+    f'if [ "$1" = xccdf ] && mkdir {_STALL_MARKER} 2>/dev/null; then sleep 900; fi\n'
     'exec /usr/bin/oscap "$@"\n'
 )
 
@@ -611,6 +612,15 @@ class EndpointHostLab:
             text=True,
         )
         return listing.stdout.split()
+
+    def evaluation_stalled(self, host: str) -> bool:
+        """The slow host's one stalled evaluation has started."""
+        probe = subprocess.run(
+            ["docker", "exec", host, "test", "-d", _STALL_MARKER],
+            check=False,
+            capture_output=True,
+        )
+        return probe.returncode == 0
 
 
 def run_endpoint_host(
@@ -837,10 +847,15 @@ def qualify_endpoint_host(image, source, output, scratch, evidence, offline) -> 
             deadline=deadline,
             detach=True,
         )
+        # Stop inside the stalled evaluation, not just after the remote
+        # directory appears: preparation precedes the upload, so an earlier
+        # stop leaves the stall for the restart below to hit.
         for _ in range(600):
-            if lab.remote_directories(host):
+            if lab.evaluation_stalled(host):
                 break
             time.sleep(0.1)
+        else:
+            raise ImageError("endpoint host stop: the evaluation never started")
         command("docker", "stop", "--time", "20", f"{lab.prefix}-job-stop")
         execution = endpoint_host_execution(result, evidence, "stop")
         journeys["stop"] = {
