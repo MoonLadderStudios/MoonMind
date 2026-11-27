@@ -7726,13 +7726,16 @@ export interface components {
         };
         /**
          * EndpointAssessment
-         * @description Offline OpenSCAP evaluation of an endpoint, or import of its results.
+         * @description OpenSCAP evaluation of an endpoint, offline or live, or result import.
          *
          *     ``rootfs`` and ``image`` read a captured root filesystem tar or Docker/OCI
          *     image archive and evaluate a ComplianceAsCode profile shipped in the
          *     scanner image, with no network. ``results`` imports ARF or XCCDF results
          *     the operator produced with OpenSCAP on the endpoint. Neither is MoonMind's
-         *     own observation of the running device. Evaluation is read-only: the
+         *     own observation of the running device. ``host`` evaluates a running host
+         *     inside an admitted assessment: the shipped datastream is evaluated there
+         *     with the host's own ``oscap``, reached only through the admitted native
+         *     gateway with a host-inspection credential. Evaluation is read-only: the
          *     contract has no remediation, fix-generation or command input.
          */
         EndpointAssessment: {
@@ -7740,11 +7743,11 @@ export interface components {
              * Target
              * @enum {string}
              */
-            target: "rootfs" | "image" | "results";
+            target: "rootfs" | "image" | "results" | "host";
             /** Asset */
             asset: string;
             /** Inputartifactref */
-            inputArtifactRef: string;
+            inputArtifactRef?: string | null;
             /** Datastream */
             datastream?: string | null;
             /** Profile */
@@ -7753,6 +7756,15 @@ export interface components {
             tailoringArtifactRef?: string | null;
             /** Ruleids */
             ruleIds?: string[];
+            /** Assessmentref */
+            assessmentRef?: string | null;
+            /** Credentialref */
+            credentialRef?: string | null;
+            /** Egresspolicyref */
+            egressPolicyRef?: string | null;
+            host?: components["schemas"]["EndpointHost"] | null;
+            /** Skipruleids */
+            skipRuleIds?: string[];
             /**
              * Outputdirectory
              * @default endpoint-assessment
@@ -7773,6 +7785,41 @@ export interface components {
              * @default 1800
              */
             timeoutSeconds: number;
+        };
+        /**
+         * EndpointHost
+         * @description One running Linux host, reached over SSH through the native gateway.
+         *
+         *     ``address`` and ``port`` are the only endpoint the job's native network
+         *     selection names; ``limits`` are its reserved connection, byte, rate and
+         *     time budgets. ``hostKey`` pins the host's identity: SSH checks it before
+         *     any credential is used, and an unknown or changed key stops the job.
+         *     ``account`` is the login the host-inspection credential belongs to.
+         *     ``elevated`` runs the evaluation through ``sudo -n``; it is never implied.
+         *     Private addresses name the labeled container route that reaches them.
+         */
+        EndpointHost: {
+            /** Address */
+            address: string;
+            /**
+             * Port
+             * @default 22
+             */
+            port: number;
+            /** Account */
+            account: string;
+            /** Hostkey */
+            hostKey: string;
+            /**
+             * Elevated
+             * @default false
+             */
+            elevated: boolean;
+            /** Targetnetworkref */
+            targetNetworkRef?: string | null;
+            /** Targetcontainerref */
+            targetContainerRef?: string | null;
+            limits: components["schemas"]["NativeNetworkLimits"];
         };
         /** EndpointPolicy */
         EndpointPolicy: {
@@ -14907,6 +14954,7 @@ export interface components {
             nativeNetwork?: components["schemas"]["NativeNetworkSelection"] | null;
             dnsAssessment?: components["schemas"]["DNSAssessment"] | null;
             serviceInventory?: components["schemas"]["ServiceInventoryOptions"] | null;
+            endpointAssessment?: components["schemas"]["EndpointAssessment"] | null;
             /** Credentials */
             credentials?: components["schemas"]["WorkloadCredentialSelection"][] | null;
         };

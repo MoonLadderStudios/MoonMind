@@ -30,7 +30,7 @@ READINESS_ACTIONS = {
     "feed_cache_unavailable": "Prepare the selected scanner feed cache with the supported feed refresh or offline import journey.",
     "scanner_image_unavailable": "Review the deployment scanner image source and its image preparation diagnostics.",
     "scanner_probe_unavailable": "The scanner runtime could not be verified. Review the worker and scanner image, then retry.",
-    "credential_backend_unavailable": "Cloud and web workload credentials require an active managed db:// secret; select a supported credential before retrying.",
+    "credential_backend_unavailable": "Cloud, web and host-inspection workload credentials require an active managed db:// secret; select a supported credential before retrying.",
     "credential_unavailable": "The selected credential is missing, disabled, malformed or no longer at its admitted revision. Review its backend, grant and active secret.",
     "credential_resolution_unavailable": "The selected registry credential could not be checked in time. Restore its configured secret backend and retry.",
     "worker_unavailable": "The container worker could not complete readiness checks. Restore the worker and retry.",
@@ -65,7 +65,7 @@ INPUT_HELP = {
     "image-assessment": "Registry targets need imageReference and egressPolicyRef; archives/SBOMs need inputArtifactRef. Vulnerability matching needs databaseCacheRef and databaseDigest; SBOM generation does not.",
     "cloud-assessment": "Select AWS, account, credentialRef, regions and egressPolicyRef, with exactly one nonempty checks or services selection.",
     "web-assessment": "API mode needs apiDefinition; active mode needs activeStrength. Admit all start, authentication and definition endpoint paths in routes, outside exclusions.",
-    "endpoint-assessment": "Name the endpoint asset and inputArtifactRef. A rootfs or image target also needs a shipped datastream (ssg-<product>-ds.xml) and its XCCDF profile; imported ARF or XCCDF results need neither. No remediation, fix or command input exists.",
+    "endpoint-assessment": "Name the endpoint asset and inputArtifactRef. A rootfs or image target also needs a shipped datastream (ssg-<product>-ds.xml) and its XCCDF profile; imported ARF or XCCDF results need neither. A live host target names host (address, port, account, pinned hostKey, native limits), assessmentRef, credentialRef and egressPolicyRef instead of an artifact. No remediation, fix or command input exists.",
 }
 
 

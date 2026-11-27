@@ -5,9 +5,9 @@ ARG SECURITY_BASE_IDENTITY=unknown
 
 # OpenSCAP comes from the signed Debian archive with its security updates.
 # Debian 12 ships oscap in libopenscap8; later releases name the package
-# openscap-scanner.
+# openscap-scanner. The OpenSSH client reaches admitted live endpoint hosts.
 RUN apt-get -o Acquire::Retries=3 update \
-    && apt-get install --no-install-recommends -y git ca-certificates openssl libstdc++6 \
+    && apt-get install --no-install-recommends -y git ca-certificates openssl libstdc++6 openssh-client \
     && { apt-get install --no-install-recommends -y openscap-scanner \
          || apt-get install --no-install-recommends -y libopenscap8; } \
     && oscap --version \

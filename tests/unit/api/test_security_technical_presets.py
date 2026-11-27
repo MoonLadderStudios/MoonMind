@@ -430,3 +430,78 @@ def test_web_preset_requires_matching_authorization_reference_before_expansion()
         schema=schema, submitted={"assessment": value}
     )
     assert result["assessment"]["assessmentRef"] == "web-review"
+
+
+@pytest.mark.asyncio
+async def test_live_endpoint_preset_compiles_the_endpoint_host_profile_job(
+    tmp_path, monkeypatch
+):
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from api_service.api.routers.presets import router
+    from api_service.db.base import get_async_session
+    from api_service.services.single_user_conversion import run_guarded_upgrade
+    from moonmind.config.settings import settings
+    from moonmind.schemas.repository_scanner_models import EndpointAssessment
+    from moonmind.security.endpoint_assessments import build_endpoint_assessment_job
+    from tests.unit.api.test_presets_service import template_db
+    from tests.unit.security.test_endpoint_hosts import assessment
+
+    live = assessment()
+    monkeypatch.delenv("MOONMIND_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.setattr(settings.feature_flags, "preset_catalog", True)
+    async with template_db(tmp_path) as maker:
+        async with maker() as session:
+            await run_guarded_upgrade(session, operator_authorized=True)
+            seed_dir = tmp_path / "seeds"
+            seed_dir.mkdir()
+            source = ROOT / "api_service/data/presets/security-endpoint.yaml"
+            (seed_dir / source.name).write_text(source.read_text())
+            await PresetCatalogService(session).import_seed_templates(seed_dir=seed_dir)
+
+        async def sessions():
+            async with maker() as session:
+                yield session
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_async_session] = sessions
+        async with AsyncClient(
+            transport=ASGITransport(app=app, client=("127.0.0.1", 12345)),
+            base_url="http://localhost",
+        ) as client:
+            response = await client.post(
+                "/api/presets/security-endpoint:expand",
+                json={"inputs": {"goal": "Assess the lab host", "assessment": live}},
+            )
+            assert response.status_code == 200, response.text
+            step = response.json()["steps"][0]
+            selection = step["annotations"]["securityAssessment"]
+            job = build_endpoint_assessment_job(
+                EndpointAssessment.model_validate(selection["admission"])
+            )
+            assert selection["jobSpec"] == job
+            profile = job["workloadProfile"]
+            assert profile["profileRef"] == "endpoint-host"
+            assert profile["credentials"] == [
+                {
+                    "slot": "host",
+                    "credentialRef": "db://host-key",
+                    "account": "inspector",
+                }
+            ]
+            assert profile["endpointAssessment"]["host"]["address"] == "93.184.216.34"
+            assert (
+                "Only the admitted live-host job reaches a host" in step["instructions"]
+            )
+            refused = await client.post(
+                "/api/presets/security-endpoint:expand",
+                json={
+                    "inputs": {
+                        "goal": "Assess the lab host",
+                        "assessment": dict(live, host=dict(live["host"], command="id")),
+                    }
+                },
+            )
+            assert refused.status_code == 422, refused.text

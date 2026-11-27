@@ -145,16 +145,21 @@ def job_record_path(job_id: str) -> str:
     return f"{JOB_RECORD_DIRECTORY}/{job_id}.json"
 
 
+def _live_endpoint(kind: str, value: Mapping) -> bool:
+    """A live endpoint job runs in scope; offline endpoint jobs do not."""
+    return kind == "endpoint-assessment" and value.get("target") == "host"
+
+
 def _bind(
     kind: str, value: dict, binding: LaunchBinding | None, assessment_ref: str | None
 ) -> dict:
     value = copy.deepcopy(value)
     binding = binding or LaunchBinding()
     reference = binding.assessment_ref or assessment_ref
-    if reference and kind in SCOPED_PRESET_KINDS:
+    if reference and (kind in SCOPED_PRESET_KINDS or _live_endpoint(kind, value)):
         value["assessmentRef"] = reference
     if binding.credential_ref:
-        if kind == "cloud-assessment":
+        if kind == "cloud-assessment" or _live_endpoint(kind, value):
             value["credentialRef"] = binding.credential_ref
         elif kind == "image-assessment":
             # A private target registry; the image contract admits it for
@@ -170,10 +175,14 @@ def _bind(
 
 def _unbound(kind: str, value: Mapping) -> str | None:
     """Why a job still lacks the launch-bound references its contract needs."""
-    if kind in SCOPED_PRESET_KINDS and not value.get("assessmentRef"):
+    if (kind in SCOPED_PRESET_KINDS or _live_endpoint(kind, value)) and not value.get(
+        "assessmentRef"
+    ):
         return "needs the saved authorization's assessment reference (Assessment reference)"
     if kind == "cloud-assessment" and not value.get("credentialRef"):
         return "needs a cloud credentialRef from the saved authorization under Launch bindings"
+    if _live_endpoint(kind, value) and not value.get("credentialRef"):
+        return "needs the host_inspection credentialRef from the saved authorization under Launch bindings"
     identity = value.get("identity")
     if (
         kind == "web-assessment"
@@ -359,7 +368,12 @@ def _scoped_step_gap(kind: str, admission: Mapping, scope) -> str | None:
     """Why the selected authorization would refuse this job, or None."""
     from moonmind.schemas.container_job_models import ContainerJobSpec
     from moonmind.security.assessment_preset_inputs import assessment_job_spec
-    from moonmind.security.workload_profiles import resolved_job_within_scope
+    from moonmind.security.workload_profiles import (
+        ENDPOINT_ACTION_CLASS,
+        endpoint_host_within_scope,
+        resolved_job_within_scope,
+        selection_within_scope,
+    )
 
     value = dict(admission)
     if kind == "web-assessment" and not value.get("assessmentRef"):
@@ -369,12 +383,27 @@ def _scoped_step_gap(kind: str, admission: Mapping, scope) -> str | None:
     except (TypeError, ValueError):
         return "its job input is incomplete or invalid"
     try:
-        resolved_job_within_scope(spec, scope, None)
+        if _live_endpoint(kind, value):
+            # The review has no deployment profiles; check the host, its
+            # native reach and the action class the profile must declare.
+            endpoint_host_within_scope(spec, scope)
+            if ENDPOINT_ACTION_CLASS not in scope.action_classes:
+                raise PermissionError(
+                    "live endpoint evaluation is not an admitted action"
+                )
+            if not selection_within_scope(spec, scope):
+                raise PermissionError(
+                    "endpoint job is outside the admitted assessment scope"
+                )
+        else:
+            resolved_job_within_scope(spec, scope, None)
     except (PermissionError, ValueError) as exc:
         return str(exc)
     needed = []
     if kind == "cloud-assessment":
         needed.append(("cloud_inventory", value.get("credentialRef")))
+    if _live_endpoint(kind, value):
+        needed.append(("host_inspection", value.get("credentialRef")))
     identity = value.get("identity")
     if kind == "web-assessment" and isinstance(identity, Mapping):
         needed.append(("application_auth", identity.get("credentialRef")))
@@ -407,8 +436,11 @@ def review_items(plan_document: Mapping[str, Any], scope) -> list[str] | None:
         )
         if (
             isinstance(hint, Mapping)
-            and hint.get("kind") in {"web-assessment", "cloud-assessment"}
             and isinstance(hint.get("admission"), Mapping)
+            and (
+                hint.get("kind") in {"web-assessment", "cloud-assessment"}
+                or _live_endpoint(str(hint.get("kind")), hint["admission"])
+            )
         ):
             gap = _scoped_step_gap(hint["kind"], hint["admission"], scope)
             if gap:

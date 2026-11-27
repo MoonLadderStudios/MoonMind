@@ -371,3 +371,40 @@ async def test_direct_preview_checks_project_references_in_initial_parameters(
         validate.await_args.args[0]["assessmentProject"]
         == parameters["assessmentProject"]
     )
+
+
+def test_live_endpoint_review_names_host_identity_reference_and_conduct():
+    from moonmind.schemas.repository_scanner_models import host_key_fingerprint
+    from tests.unit.security.test_endpoint_hosts import KEY
+    from tests.unit.security.test_endpoint_hosts import scope as host_scope
+
+    auth = record()
+    auth = auth.model_copy(update={"scope": host_scope()})
+    review = build_assessment_proposal(payload(), auth)
+    sections = {
+        s["label"]: [item.replace("\\", "") for item in s["items"]]
+        for s in review["sections"]
+    }
+    targets = " ".join(sections["Targets"])
+    assert "Live linux endpoint 93.184.216.34 port 22" in targets
+    assert host_key_fingerprint(KEY) in targets
+    assert (
+        "xccdf_org.ssgproject.content_profile_standard from ssg-debian12-ds.xml"
+        in targets
+    )
+    # Connection, byte, rate and time budgets of the native authority.
+    assert "maxConnections" in targets and "maxDurationSeconds" in targets
+    assert any(
+        "db://host-key: host_inspection, account/identity inspector" in item
+        for item in sections["Identities"]
+    )
+    conduct = " ".join(sections["Endpoint host operations"])
+    assert "pinned identity" in conduct and "oscap xccdf eval" in conduct
+    assert "Elevated rights on 93.184.216.34: not used" in conduct
+    assert "No remediation" in " ".join(sections["Endpoint host exclusions"])
+    assert any(
+        "content_rule_package_aide_installed" in item for item in sections["Exclusions"]
+    )
+    assert sections["Validity"]
+    # Only references: no credential value exists anywhere in the proposal.
+    assert "BEGIN OPENSSH" not in str(review)

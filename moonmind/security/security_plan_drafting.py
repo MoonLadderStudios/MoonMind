@@ -272,7 +272,7 @@ def planning_context(
 
         document["endpoint"] = {
             "jobKind": "endpoint-assessment",
-            "targets": ["rootfs", "image", "results"],
+            "targets": ["rootfs", "image", "results", "host"],
             "datastreams": list(SHIPPED_DATASTREAMS),
             "generalProfile": GENERAL_PROFILE,
             "unsupportedPlatforms": list(UNSUPPORTED_PLATFORMS),
@@ -396,7 +396,9 @@ def operator_points(
                 text=(
                     "Which root filesystem, image archive or OpenSCAP results does "
                     "this endpoint plan assess? Upload it as an artifact of the saved "
-                    "environment; MoonMind does not reach live hosts."
+                    "environment. MoonMind reaches a live host only when a saved "
+                    "authorization admits it with a pinned host key and a "
+                    "host-inspection grant."
                 ),
             )
         )

@@ -190,7 +190,29 @@ def assessment_input_readiness(
             )
         return result()
     job = assessment_job_spec(kind, value)
-    source_ref = job["imageSourceRef"]
+    selection = job.get("workloadProfile")
+    if selection is not None:
+        # A live endpoint is a deployment profile job; its profile owns the
+        # image and egress policy.
+        profile = next(
+            (
+                item
+                for item in settings.workload_profiles
+                if item.profile_ref == selection["profileRef"]
+            ),
+            None,
+        )
+        if profile is None:
+            diagnostic(
+                "missing_image_source",
+                "assessment",
+                f"Configure the {selection['profileRef']} workload profile in deployment settings.",
+            )
+            return result()
+        source_ref = profile.image_source_ref
+        job = {**job, "egressPolicyRef": profile.egress_policy_ref}
+    else:
+        source_ref = job["imageSourceRef"]
     runtime["scannerImage"] = "unverified"
     if not settings.enabled or not settings.endpoint:
         diagnostic(
@@ -242,6 +264,8 @@ def assessment_input_readiness(
         runtime["identityCredential"] = "unverified"
     elif kind == "image-assessment" and assessment.target_credential_ref:
         runtime["registryCredential"] = "unverified"
+    elif kind == "endpoint-assessment" and assessment.target == "host":
+        runtime["hostCredential"] = "unverified"
     return result()
 
 
@@ -266,14 +290,17 @@ def require_assessment_step_readiness(
     from moonmind.schemas.container_job_models import ContainerJobSpec
     from moonmind.schemas.repository_scanner_models import (
         CloudAssessment,
+        EndpointAssessment,
         WebAssessment,
     )
     from moonmind.security.assessment_preset_inputs import validate_assessment_input
     from moonmind.security.cloud_assessments import build_cloud_assessment_job
+    from moonmind.security.endpoint_assessments import build_endpoint_assessment_job
     from moonmind.security.web_assessments import build_web_assessment_job
     from moonmind.security.workload_credentials import authorize_workload_credentials
     from moonmind.security.workload_profiles import (
         AdmittedAssessmentScope,
+        resolve_profile_job,
         resolved_job_within_scope,
     )
 
@@ -333,10 +360,12 @@ def require_assessment_step_readiness(
                     for item in observation["diagnostics"]
                 )
             )
-        live = kind in {"cloud-assessment", "web-assessment"}
+        live = kind in {"cloud-assessment", "web-assessment"} or (
+            kind == "endpoint-assessment" and selected.get("target") == "host"
+        )
         if live and assessment_scope is None:
             raise ValueError(
-                f"{field}: Review and admit the target assessment scope before starting cloud or web collection."
+                f"{field}: Review and admit the target assessment scope before starting cloud, web or live endpoint collection."
             )
         if not live and assessment_scope is not None:
             raise ValueError(
@@ -345,16 +374,22 @@ def require_assessment_step_readiness(
         if live:
             try:
                 scope = AdmittedAssessmentScope.model_validate(assessment_scope)
-                model, builder = (
-                    (CloudAssessment, build_cloud_assessment_job)
-                    if kind == "cloud-assessment"
-                    else (WebAssessment, build_web_assessment_job)
-                )
+                model, builder = {
+                    "cloud-assessment": (CloudAssessment, build_cloud_assessment_job),
+                    "web-assessment": (WebAssessment, build_web_assessment_job),
+                    "endpoint-assessment": (
+                        EndpointAssessment,
+                        build_endpoint_assessment_job,
+                    ),
+                }[kind]
                 job = builder(model.model_validate(selected))
                 spec = ContainerJobSpec.model_validate(job)
+                if spec.workload_profile is not None:
+                    spec = resolve_profile_job(spec, settings.workload_profiles)
                 resolved_job_within_scope(spec, scope, settings.workload_profiles)
                 if principal is None and (
                     spec.cloud_assessment is not None
+                    or spec.workload_profile is not None
                     or spec.web_assessment.identity is not None
                 ):
                     raise ValueError("missing admission principal")

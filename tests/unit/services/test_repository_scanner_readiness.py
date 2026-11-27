@@ -455,3 +455,78 @@ def test_feed_component_state_uses_the_matching_published_manifest(
             "feedComponents"
         ].values()
     ) == {"unverified"}
+
+
+def test_live_endpoint_readiness_is_scoped_and_checks_the_host_profile():
+    from datetime import UTC, datetime, timedelta
+
+    import pytest
+
+    from api_service.services.repository_scanner_readiness import (
+        assessment_input_readiness,
+        require_assessment_step_readiness,
+    )
+    from tests.unit.security.test_endpoint_hosts import (
+        PROFILE,
+        assessment,
+        grant,
+        scope,
+    )
+
+    settings = configured()
+    selection = assessment()
+    missing = assessment_input_readiness(settings, "endpoint-assessment", selection)
+    assert [d["code"] for d in missing["diagnostics"]] == ["missing_image_source"]
+    native = ScopedEgressPolicy.model_validate(
+        {
+            "policyRef": "native-lab",
+            "allowedWorkflowIds": ["mm:endpoint"],
+            "allowedImageSourceRefs": ["repository-security"],
+            "nativeNetwork": PROFILE.native_network.model_dump(
+                mode="json", by_alias=True
+            ),
+        }
+    )
+    settings = replace(
+        settings, workload_profiles=(PROFILE,), egress_policies=(native,)
+    )
+    ready = assessment_input_readiness(settings, "endpoint-assessment", selection)
+    assert ready["diagnostics"] == []
+    assert ready["runtimeChecks"]["hostCredential"] == "unverified"
+    workflow = {
+        "steps": [
+            {
+                "skill": {"id": "security-review", "args": {"assessment": selection}},
+                "annotations": {
+                    "securityAssessment": {
+                        "kind": "endpoint-assessment",
+                        "admission": selection,
+                        "phase": "collect",
+                    }
+                },
+            }
+        ]
+    }
+    with pytest.raises(ValueError, match="live endpoint collection"):
+        require_assessment_step_readiness(workflow, settings=settings)
+    current = grant(expiresAt=(datetime.now(UTC) + timedelta(hours=4)).isoformat())
+    admitted = scope(grants=[current]).model_dump(
+        mode="json", by_alias=True, exclude_none=True
+    )
+    assert (
+        require_assessment_step_readiness(
+            workflow,
+            settings=settings,
+            assessment_scope=admitted,
+            principal="user:operator",
+        )[0]["status"]
+        == "unverified"
+    )
+    admitted["grants"] = []
+    with pytest.raises(ValueError, match="credential grants"):
+        require_assessment_step_readiness(
+            workflow,
+            settings=settings,
+            assessment_scope=admitted,
+            principal="user:operator",
+        )

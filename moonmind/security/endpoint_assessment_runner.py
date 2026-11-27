@@ -1,4 +1,4 @@
-"""One offline OpenSCAP evaluation, or one result import, per Container Job.
+"""One OpenSCAP evaluation, or one result import, per Container Job.
 
 A captured root filesystem tar or Docker/OCI image archive is unpacked as the
 unprivileged scanner user into private scratch and evaluated with
@@ -6,12 +6,17 @@ unprivileged scanner user into private scratch and evaluated with
 Unpacking cannot keep file ownership, and an offline copy has no processes,
 kernel or services, so rules whose checks read either are classified from the
 shipped content and reported as not assessed instead of pass or fail.
+
+A live host is evaluated in place over SSH through the admitted native
+gateway, with the pinned host key as the only known host and the delivered
+host-inspection key as the only identity.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -20,6 +25,7 @@ import stat
 import sys
 import tarfile
 import tempfile
+import time
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -628,6 +634,325 @@ def run_endpoint_assessment(
     return 0 if ok else 2
 
 
+# --- Live host ---------------------------------------------------------------
+
+#: The delivered host-inspection credential: an OpenSSH private key file.
+HOST_CREDENTIAL = Path("/run/moonmind-credentials/host")
+#: The one known_hosts name; SSH checks the host only against this entry.
+HOST_ALIAS = "moonmind-endpoint"
+_REMOTE_DIRECTORY = re.compile(r"/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+){0,8}")
+_CLEANUP_SECONDS = 10
+#: Evaluation stops this long before the gateway closes, so the cleanup
+#: session (plus stopping the interrupted step) still has a route to the host.
+_CLEANUP_RESERVE_SECONDS = _CLEANUP_SECONDS + 5
+
+
+def _evaluation_seconds(assessment: EndpointAssessment, environ) -> float:
+    """Time the evaluation may use while leaving the cleanup reserve.
+
+    The gateway closes at the lease's original deadline, which the worker
+    passes as ``MOONMIND_EGRESS_DEADLINE``, and never later than the host's
+    native duration. Without a usable deadline the native duration is
+    counted from this runner's start.
+    """
+    window = float(
+        min(assessment.timeout_seconds, assessment.host.limits.max_duration_seconds)
+    )
+    try:
+        deadline = float(environ.get("MOONMIND_EGRESS_DEADLINE", "nan"))
+    except ValueError:
+        deadline = math.nan
+    if math.isfinite(deadline):
+        window = min(window, deadline - time.time())
+    return max(0.0, window - _CLEANUP_RESERVE_SECONDS)
+
+
+def _private_copy(source: Path, destination: Path) -> Path:
+    """Copy the key into private scratch; SSH refuses group-readable keys."""
+    try:
+        body = _regular(source, 64 * 1024, "host_credential_unavailable").read_bytes()
+    except OSError as exc:
+        raise InputError("host_credential_unavailable") from exc
+    if not body.strip():
+        raise InputError("host_credential_unavailable")
+    fd = os.open(
+        destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+    )
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(body if body.endswith(b"\n") else body + b"\n")
+    return destination
+
+
+def ssh_command(
+    assessment: EndpointAssessment, *, known_hosts: Path, identity: Path, remote: str
+) -> list[str]:
+    """One non-interactive SSH session to the admitted host, through the gateway.
+
+    The pinned key is the only known host and the only accepted algorithm, so
+    an unknown or changed host stops in key exchange, before authentication
+    uses the credential. No agent, forwarding, TTY, local command or
+    multiplexing is enabled; the identity is a file path, never a value.
+    """
+    host = assessment.host
+    key_type = host.host_key.split()[0]
+    options = {
+        "BatchMode": "yes",
+        "StrictHostKeyChecking": "yes",
+        "UserKnownHostsFile": str(known_hosts),
+        "GlobalKnownHostsFile": "/dev/null",
+        "HostKeyAlias": HOST_ALIAS,
+        "HostKeyAlgorithms": (
+            "rsa-sha2-512,rsa-sha2-256" if key_type == "ssh-rsa" else key_type
+        ),
+        "CheckHostIP": "no",
+        "UpdateHostKeys": "no",
+        "VerifyHostKeyDNS": "no",
+        "IdentitiesOnly": "yes",
+        "IdentityFile": str(identity),
+        "IdentityAgent": "none",
+        "PreferredAuthentications": "publickey",
+        "PasswordAuthentication": "no",
+        "KbdInteractiveAuthentication": "no",
+        "ForwardAgent": "no",
+        "ForwardX11": "no",
+        "ClearAllForwardings": "yes",
+        "PermitLocalCommand": "no",
+        "ControlMaster": "no",
+        "ControlPath": "none",
+        "RequestTTY": "no",
+        "ConnectTimeout": "20",
+        # Keepalives keep a long evaluation inside the gateway's idle limit.
+        "ServerAliveInterval": "10",
+        "ServerAliveCountMax": "3",
+        "ProxyCommand": (
+            f"{sys.executable} -I -m moonmind.security.endpoint_host_tunnel %h %p"
+        ),
+        "LogLevel": "ERROR",
+    }
+    argv = ["ssh", "-F", "/dev/null", "-T", "-p", str(host.port), "-l", host.account]
+    for name, value in options.items():
+        argv += ["-o", f"{name}={value}"]
+    return [*argv, "--", host.address, remote]
+
+
+def remote_commands(assessment: EndpointAssessment, directory: str) -> dict[str, str]:
+    """The only remote commands: fixed text plus pattern-checked identifiers.
+
+    The datastream and results stay in a private temporary directory that is
+    removed afterwards. ``sudo -n`` is used only when the host's admission
+    names elevated evaluation, and never prompts.
+    """
+    if not _REMOTE_DIRECTORY.fullmatch(directory) or ".." in directory.split("/"):
+        raise InputError("remote_preparation_failed")
+    sudo = "sudo -n " if assessment.host.elevated else ""
+    skipped = "".join(f" --skip-rule {rule}" for rule in assessment.skip_rule_ids)
+    return {
+        "upload": f"cat > {directory}/content.xml",
+        "evaluate": (
+            f"{sudo}oscap xccdf eval --profile {assessment.profile}{skipped} "
+            f"--results-arf {directory}/results.xml {directory}/content.xml"
+            " >/dev/null"
+        ),
+        "fetch": f"{sudo}cat -- {directory}/results.xml",
+        "cleanup": f"{sudo}rm -rf -- {directory}",
+    }
+
+
+#: Creates the private directory and reports OpenSCAP's version.
+PREPARE = "umask 077 && d=$(mktemp -d) && printf '%s\\n' \"$d\" && oscap --version"
+
+
+def ssh_failure(stderr: bytes) -> str:
+    """A bounded code for an SSH failure; the text itself is never retained."""
+    from moonmind.security.endpoint_host_tunnel import DIAGNOSTIC
+
+    text = stderr[:65536].decode("utf-8", "replace")
+    if DIAGNOSTIC in text:
+        outcome = text.split(DIAGNOSTIC, 1)[1].split()[0:1]
+        return {
+            "timed_out": "host_connect_timed_out",
+            "denied": "host_connection_denied",
+        }.get(outcome[0] if outcome else "", "host_unreachable")
+    if (
+        "Host key verification failed" in text
+        or "IDENTIFICATION HAS CHANGED" in text
+        or "host key is known" in text
+        or "no matching host key type" in text
+    ):
+        return "host_identity_unverified"
+    if "Permission denied" in text or "Too many authentication failures" in text:
+        return "host_authentication_failed"
+    if "Load key" in text or "invalid format" in text:
+        return "host_credential_invalid"
+    if "Connection timed out" in text:
+        return "host_connect_timed_out"
+    if "Connection refused" in text or "Connection closed" in text:
+        return "host_unreachable"
+    return "host_connection_failed"
+
+
+class _HostStop(Exception):
+    """A live step failed; its code is already recorded."""
+
+
+def run_live_host_assessment(
+    assessment: EndpointAssessment,
+    *,
+    output: Path,
+    content: Path = Path(CONTENT_DIRECTORY),
+    credential: Path = HOST_CREDENTIAL,
+    environ=None,
+) -> int:
+    """Evaluate the admitted host in place and retain only its rebuilt result.
+
+    Each step is one SSH session; any failure stops the run with a bounded
+    code. The remote directory is removed even after a timeout or stop, and
+    the local key copy is removed with the private scratch.
+    """
+    environ = os.environ if environ is None else environ
+    output.mkdir(parents=True, exist_ok=True)
+    processes = BoundedProcesses(
+        _evaluation_seconds(assessment, environ), _MAX_RAW_BYTES
+    )
+    previous = signal.signal(signal.SIGTERM, processes.cancel)
+    execution = EndpointExecution(target="host", version="unavailable", state="failed")
+    limitations: list[str] = []
+    remote = None
+    with tempfile.TemporaryDirectory(prefix="moonmind-endpoint-host-") as scratch:
+        work = Path(scratch)
+        os.chmod(work, 0o700)
+        raw = work / "raw"
+        raw.mkdir(mode=0o700)
+        env = {
+            "PATH": "/usr/local/bin:/usr/bin:/bin",
+            "HOME": str(work),
+            "TMPDIR": str(work),
+            "SHELL": "/bin/sh",
+            **{
+                name: environ[name]
+                for name in ("MOONMIND_EGRESS_PROXY", "MOONMIND_EGRESS_DEADLINE")
+                if name in environ
+            },
+        }
+
+        def session(
+            command, *, runner=processes, stdin=None, capture=None, record=True
+        ):
+            errors = work / "stderr"
+            code, state = runner.run(
+                ssh_command(
+                    assessment,
+                    known_hosts=work / "known_hosts",
+                    identity=work / "identity",
+                    remote=command,
+                ),
+                cwd=work,
+                env=env,
+                stdin=stdin,
+                capture=capture,
+                errors=errors,
+            )
+            stderr = errors.read_bytes()[:65536] if errors.exists() else b""
+            errors.unlink(missing_ok=True)
+            if state != "succeeded" or code == 255:
+                if record and state != "succeeded":
+                    execution.state = state
+                elif record:
+                    limitations.append(ssh_failure(stderr))
+                raise _HostStop
+            return code, stderr
+
+        try:
+            datastream, digest, release = _content(content, assessment.datastream)
+            execution.content_file = assessment.datastream
+            execution.content_digest = digest
+            execution.content_release = release
+            (work / "known_hosts").write_text(
+                f"{HOST_ALIAS} {assessment.host.host_key}\n"
+            )
+            _private_copy(credential, work / "identity")
+            prepared = raw / "prepare"
+            code, _ = session(PREPARE, capture=prepared)
+            lines = (
+                prepared.read_bytes()[:4096].decode("utf-8", "replace").splitlines()
+                if prepared.exists()
+                else []
+            )
+            if lines and _REMOTE_DIRECTORY.fullmatch(lines[0]):
+                remote = lines[0]
+            if code == 127 or (remote and code):
+                limitations.append("remote_scanner_unavailable")
+                raise _HostStop
+            if code or remote is None:
+                limitations.append("remote_preparation_failed")
+                raise _HostStop
+            match = re.search(r"\b[0-9]+\.[0-9]+\.[0-9]+\b", "\n".join(lines[1:]))
+            if match:
+                execution.version = match[0]
+            else:
+                limitations.append("scanner_version_unavailable")
+            commands = remote_commands(assessment, remote)
+            code, _ = session(commands["upload"], stdin=datastream)
+            if code:
+                limitations.append("remote_upload_failed")
+                raise _HostStop
+            code, stderr = session(commands["evaluate"])
+            execution.exit_code = code
+            # 0: every rule passed; 2: at least one failed; else an error.
+            if code not in (0, 2):
+                limitations.append(
+                    "elevation_refused"
+                    if assessment.host.elevated and b"sudo:" in stderr
+                    else "scanner_exit_failure"
+                )
+                raise _HostStop
+            arf = raw / "arf.xml"
+            code, _ = session(commands["fetch"], capture=arf)
+            if code or not arf.is_file():
+                limitations.append("missing_malformed_or_truncated_results")
+                raise _HostStop
+            execution.state = "succeeded"
+            limitations.extend(
+                _retain(assessment, arf.read_bytes(), output, keep_target=False)
+            )
+        except InputError as exc:
+            limitations.extend([exc.code, "scanner_prerequisite_failed"])
+        except _HostStop:
+            pass  # The failed step already recorded its state or code.
+        except Exception:  # noqa: BLE001
+            limitations.append("scanner_prerequisite_failed")
+        finally:
+            signal.signal(signal.SIGTERM, previous)
+            if remote is not None:
+                # A short session of its own inside the reserved time before
+                # the gateway closes: a stop or elapsed budget still removes
+                # what this job placed on the host.
+                cleanup = BoundedProcesses(_CLEANUP_SECONDS, 1 << 20)
+                try:
+                    code, _ = session(
+                        remote_commands(assessment, remote)["cleanup"],
+                        runner=cleanup,
+                        record=False,
+                    )
+                    if code:
+                        limitations.append("remote_cleanup_unconfirmed")
+                except (_HostStop, InputError):
+                    limitations.append("remote_cleanup_unconfirmed")
+            if processes.canceled and execution.state in ("succeeded", "failed"):
+                execution.state = "canceled"
+            execution.limitations = sorted(set(limitations))
+            (output / "execution.json").write_text(
+                execution.model_dump_json(by_alias=True)
+            )
+    ok = execution.state == "succeeded" and not execution.limitations
+    print(
+        "Endpoint assessment finished; checked evidence is ready."
+        if ok
+        else "Endpoint assessment incomplete; inspect retained limitations."
+    )
+    return 0 if ok else 2
+
+
 def _retain(assessment, body: bytes, output: Path, *, keep_target: bool) -> list[str]:
     """Rebuild the allow-listed ``TestResult``; nothing else leaves the job."""
     try:
@@ -668,6 +993,9 @@ def readiness(
         except (InputError, OSError, ValueError):
             print("The selected ComplianceAsCode datastream is unavailable.")
             return 2
+    if assessment.target == "host" and shutil.which("ssh") is None:
+        print("The SSH client for live host evaluation is unavailable.")
+        return 2
     print(f"OpenSCAP {match[0].decode()} ready.")
     return 0
 
@@ -677,6 +1005,8 @@ def main(argv: list[str]) -> int:
         if argv[1] == "--readiness":
             return readiness(EndpointAssessment.model_validate_json(argv[2]))
         assessment = EndpointAssessment.model_validate_json(argv[1])
+        if assessment.target == "host":
+            return run_live_host_assessment(assessment, output=Path(argv[2]))
         return run_endpoint_assessment(assessment, output=Path(argv[2]))
     # Never print raw exceptions: they can carry paths or input text.
     except Exception:  # noqa: BLE001

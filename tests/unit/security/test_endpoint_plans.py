@@ -119,12 +119,16 @@ def draft(**job_changes):
     }
 
 
-def validate(raw, packs=None):
+def validate(raw, packs=None, environment=ENVIRONMENT):
     packs = packs or {(PACK, endpoint_pack().edition): endpoint_pack()}
     plan = derive_security_plan(raw, packs=packs)
     return validate_security_plan(
-        plan, packs=packs, snapshot=snapshot(**ENVIRONMENT), now=NOW
+        plan, packs=packs, snapshot=snapshot(**environment), now=NOW
     )
+
+
+#: A saved environment naming the live host as a candidate asset.
+LIVE_ENVIRONMENT = {**ENVIRONMENT, "assets": [*ENVIRONMENT["assets"], "93.184.216.34"]}
 
 
 def test_endpoint_is_a_planning_subject():
@@ -274,7 +278,9 @@ def test_an_endpoint_plan_without_an_endpoint_job_asks_for_the_input():
         for p in operator_points(plan, snapshot(**ENVIRONMENT))
         if "endpoint plan" in p.text
     ]
-    assert "does not reach live hosts" in point.text
+    assert "reaches a live host only when a saved authorization admits it" in (
+        point.text
+    )
 
 
 def test_a_plan_run_launches_the_endpoint_preset_and_concludes_per_rule():
@@ -321,3 +327,96 @@ def test_an_application_plan_run_keeps_operator_choices_untouched():
         "requirementChoices" not in step["tool"]["inputs"]["frameworkPacks"][0]
         or not step["tool"]["inputs"]["frameworkPacks"][0]["requirementChoices"]
     )
+
+
+def live_input(**changes):
+    from tests.unit.security.test_endpoint_hosts import assessment
+
+    value = assessment(**changes)
+    value.pop("assessmentRef")
+    value.pop("credentialRef")
+    value["ruleIds"] = []
+    return value
+
+
+def live_draft(environment=None, **changes):
+    raw = draft()
+    raw["subject"]["project"]["digest"] = snapshot(
+        **(environment or LIVE_ENVIRONMENT)
+    ).digest
+    raw["jobs"][0]["input"] = live_input(**changes)
+    raw["jobs"][0]["sources"] = source("environment_field", "environments.prod.assets")
+    return raw
+
+
+def test_a_live_endpoint_plan_lists_the_job_with_its_required_authority():
+    with pytest.raises(SecurityPlanError) as raised:
+        validate(live_draft(ENVIRONMENT))
+    assert any(
+        "outside the saved environment's candidates" in d
+        for d in raised.value.diagnostics
+    )
+    plan = validate(live_draft(), environment=LIVE_ENVIRONMENT)
+    (job,) = plan.jobs
+    authority = job.authority
+    assert authority.scoped is True
+    assert authority.profile_refs == ["endpoint-host"]
+    assert authority.action_classes == ["endpoint-evaluation"]
+    assert authority.credential_purposes == ["host_inspection"]
+    assert authority.network_refs == ["native-lab"]
+    assert [(t.kind, t.ref, t.ports) for t in authority.targets] == [
+        ("endpoint_host", "93.184.216.34:22", [22]),
+        ("network_hosts", "native", [22]),
+    ]
+    assert authority.targets[0].exclusions == [
+        "xccdf_org.ssgproject.content_rule_package_aide_installed"
+    ]
+    assert authority.max_job_seconds == 915
+    text = render_security_plan(plan)
+    assert "on the live host 93.184.216.34 port 22" in text.replace("\\", "")
+    assert "host_inspection" in text
+
+
+def test_a_live_endpoint_plan_names_purposes_never_references():
+    raw = live_draft()
+    raw["jobs"][0]["input"]["credentialRef"] = "db://host-key"
+    with pytest.raises(SecurityPlanError) as raised:
+        validate(raw, environment=LIVE_ENVIRONMENT)
+    assert any("bound at launch" in d for d in raised.value.diagnostics)
+    with pytest.raises(SecurityPlanError):
+        validate(live_draft(host={"command": "id"}), environment=LIVE_ENVIRONMENT)
+
+
+def test_a_live_plan_run_binds_references_and_the_review_checks_the_host():
+    from moonmind.security.security_plan_run import LaunchBinding, review_items
+    from tests.unit.security.test_endpoint_hosts import OTHER_KEY, host_target, scope
+
+    plan = validate(live_draft(), environment=LIVE_ENVIRONMENT)
+    launch, excluded = derive_plan_run(plan)
+    assert launch == [] and "assessment reference" in excluded[0].reason
+    launch, excluded = derive_plan_run(plan, assessment_ref="lab")
+    assert launch == [] and "host_inspection credentialRef" in excluded[0].reason
+    binding = LaunchBinding(assessmentRef="lab", credentialRef="db://host-key")
+    launch, excluded = derive_plan_run(plan, bindings={"endpoint-scan": binding})
+    assert excluded == []
+    ((_, preset, value),) = launch
+    assert preset == "security-endpoint"
+    assert (value["assessmentRef"], value["credentialRef"]) == ("lab", "db://host-key")
+
+    def review(admitted):
+        step = {
+            "title": "Endpoint scan",
+            "annotations": {
+                "securityAssessment": {
+                    "kind": "endpoint-assessment",
+                    "admission": value,
+                }
+            },
+        }
+        return review_items({"workflow": {"steps": [step]}}, admitted)
+
+    assert review(scope()) is None
+    (gap,) = review(scope(host_target(hostKey=OTHER_KEY)))
+    assert "host identity differs" in gap
+    (gap,) = review(scope(grants=[]))
+    assert "no host_inspection credential grant" in gap

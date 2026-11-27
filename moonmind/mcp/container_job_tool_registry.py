@@ -109,9 +109,14 @@ def classify_container_job_error(exc: Exception) -> ContainerJobToolError:
             http_status=403,
         )
     if isinstance(exc, ContainerJobScopeDeniedError):
+        message = "Container job exceeds the admitted assessment scope."
+        if isinstance(exc.__cause__, PermissionError):
+            # Scope and grant refusals are curated reasons naming references,
+            # never values; validation errors stay generic.
+            message = f"{message[:-1]}: {exc.__cause__}."
         return ContainerJobToolError(
             code="assessment_scope_denied",
-            message="Container job exceeds the admitted assessment scope.",
+            message=message[:1024],
             http_status=403,
         )
     if isinstance(exc, ContainerJobNotFoundError):

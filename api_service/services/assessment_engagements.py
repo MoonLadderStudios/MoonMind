@@ -13,10 +13,15 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from moonmind.schemas.repository_scanner_models import host_key_fingerprint
 from moonmind.security.assessment_authorizations import (
     AssessmentAuthorization,
     authorization_scope,
     scope_digest,
+)
+from moonmind.security.endpoint_assessments import (
+    LIVE_HOST_ACTIONS,
+    LIVE_HOST_EXCLUSIONS,
 )
 from moonmind.security.operator_admission import OperatorAdmission
 
@@ -130,6 +135,19 @@ def _review_text(value: str) -> str:
     return re.sub(r"([\\`*_{}\[\]()#+.!|>~-])", r"\\\1", value)
 
 
+def _endpoint_host_line(host) -> str:
+    """One admitted live host: address, port, pinned identity and profiles."""
+    profiles = "; ".join(
+        f"{choice.profile} from {choice.datastream}" for choice in host.profiles
+    )
+    return (
+        f"Live {host.os_family} endpoint {host.address} port {host.port}; pinned "
+        f"SSH host key {host.host_key.split()[0]} {host_key_fingerprint(host.host_key)}; "
+        f"read-only OpenSCAP evaluation of: {profiles}. Reached only through the "
+        "native TCP authority below with a host_inspection credential grant."
+    )
+
+
 def build_assessment_proposal(
     payload: Mapping[str, Any], record: AssessmentAuthorization
 ) -> dict[str, Any]:
@@ -147,6 +165,8 @@ def build_assessment_proposal(
     ).hexdigest()
     targets, exclusions = [], list(scope.exclusions)
     realtime_operations = []
+    endpoint_operations: list[str] = []
+    endpoint_exclusions: list[str] = []
     for target in scope.targets:
         if target.web_origin:
             targets.extend(
@@ -192,6 +212,23 @@ def build_assessment_proposal(
                 + json.dumps(target.native_network.model_dump(mode="json", by_alias=True), sort_keys=True)
                 + "; connections, bytes, connection rate and concurrency are conservatively reserved across all jobs without refunds; duration is per job."
             ))
+        elif target.endpoint_host is not None:
+            host = target.endpoint_host
+            targets.append(_review_text(_endpoint_host_line(host)))
+            exclusions.extend(
+                _review_text(f"{host.address}:{host.port} rule {rule}")
+                for rule in host.excluded_rule_ids
+            )
+            endpoint_operations.extend(LIVE_HOST_ACTIONS)
+            endpoint_operations.append(
+                f"Elevated rights on {host.address}: "
+                + (
+                    "the evaluation runs through sudo -n (never prompts)."
+                    if host.elevated
+                    else "not used; the evaluation runs as the credential's account."
+                )
+            )
+            endpoint_exclusions.extend(LIVE_HOST_EXCLUSIONS)
         elif target.cloud_account:
             targets.append(
                 f'{target.cloud_provider} account {target.cloud_account}; regions {", ".join(target.cloud_regions)}'
@@ -315,6 +352,13 @@ def build_assessment_proposal(
         ]))
     if realtime_operations:
         sections.insert(3, ("Real-time operations", realtime_operations))
+    if endpoint_operations:
+        # Readable before launch: what a live host job will and will not do.
+        index = sections.index(("Targets", targets)) + 1
+        sections[index:index] = [
+            ("Endpoint host operations", list(dict.fromkeys(endpoint_operations))),
+            ("Endpoint host exclusions", list(dict.fromkeys(endpoint_exclusions))),
+        ]
     from moonmind.security.security_plan_run import review_items
 
     # Named before launch: planned work this run does not launch, and scoped

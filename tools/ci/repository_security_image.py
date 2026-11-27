@@ -60,6 +60,7 @@ RUNNER_FILES = (
     "security/oscal_export.py",
     "security/endpoint_assessments.py",
     "security/endpoint_assessment_runner.py",
+    "security/endpoint_host_tunnel.py",
     "schemas/repository_scanner_models.py",
     "schemas/agent_runtime_models.py",
     "schemas/managed_session_models.py",

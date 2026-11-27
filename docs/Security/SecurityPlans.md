@@ -180,9 +180,9 @@ derives, in order:
 - one concluding `security.assess` over the plan's standards as
   `frameworkPacks`, bound by `planRun: {planRef, planIdentity, excluded}`.
 
-Web and cloud jobs need the selected authorization's assessment reference
-(`assessment_ref`), and cloud jobs or test identities the granted
-`credentialRef` (`launch_bindings`). A registry image job's bound
+Web, cloud and live endpoint jobs need the selected authorization's assessment
+reference (`assessment_ref`), and cloud jobs, live endpoint hosts or test
+identities the granted `credentialRef` (`launch_bindings`). A registry image job's bound
 `credentialRef` becomes its `targetCredentialRef`; without one it reads the
 registry anonymously. A job without them, a kind with no
 launchable step, or one the operator lists in `excluded_jobs` is not launched
@@ -193,9 +193,9 @@ review covers the whole run. Its digest covers every derived step, so a
 changed plan or authorization needs a fresh review, and an unchanged rerun or
 schedule keeps the reviewed authority.
 
-In a scoped run, repository, image and endpoint job steps run without the
-assessment scope, as they do alone, because the container-job owner refuses
-those scans inside one. They can only lose authority, and no step of a scoped run can fan
+In a scoped run, repository, image and offline endpoint job steps run without
+the assessment scope, as they do alone, because the container-job owner
+refuses those scans inside one; a live endpoint step keeps it. They can only lose authority, and no step of a scoped run can fan
 out.
 
 Each job step writes a `security-plan-job/v1` outcome record that the agent

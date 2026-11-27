@@ -2,8 +2,11 @@
 
 An offline job evaluates a ComplianceAsCode (SCAP Security Guide) profile
 against a captured root filesystem or image archive, or imports ARF or XCCDF
-results the operator produced with OpenSCAP on the endpoint. No job mounts a
-container daemon socket, reaches a network, runs privileged or remediates.
+results the operator produced with OpenSCAP on the endpoint; it reaches no
+network. A live job evaluates an admitted running host over SSH through the
+assessment's native gateway, as an ``endpoint-host`` workload profile job with
+a host-inspection credential. No job mounts a container daemon socket, runs
+privileged in its container or remediates.
 
 Only an XCCDF ``TestResult`` rebuilt from allow-listed fields is retained: the
 copied content, OVAL system characteristics (which can quote file contents)
@@ -20,7 +23,11 @@ from xml.etree import ElementTree as ET
 
 from pydantic import AwareDatetime, Field
 
-from moonmind.schemas.repository_scanner_models import EndpointAssessment
+from moonmind.schemas.repository_scanner_models import (
+    EndpointAssessment,
+    host_key_digest,
+    host_key_fingerprint,
+)
 from moonmind.security.assessments import Contract, Items, Text
 
 INPUT_NAME = "endpoint"
@@ -106,7 +113,27 @@ OBSERVATION_STATEMENTS = {
         "MoonMind did not run the evaluation or observe the device; the target, "
         "content and timing are the result's own statements."
     ),
+    "live-host": (
+        "MoonMind evaluated the running host at the recorded address, after SSH "
+        "verified its pinned host key, with the host's own OpenSCAP and the "
+        "shipped content. The result describes the host as observed at the "
+        "recorded time; later changes are outside it."
+    ),
 }
+#: What a live endpoint job does and never does, for rules of engagement.
+LIVE_HOST_ACTIONS = (
+    "Verify the host's SSH key against the pinned identity before any "
+    "credential is used; an unknown or changed key stops the job.",
+    "Create a private temporary directory on the host, copy the selected "
+    "shipped datastream into it, run only `oscap xccdf eval` with the "
+    "admitted profile, read back its results and remove the directory.",
+)
+LIVE_HOST_EXCLUSIONS = (
+    "No remediation, fix script, configuration change, package installation, "
+    "agent installation or other command.",
+    "No file upload other than the datastream, no other host or port, and no "
+    "discovery or continuous monitoring.",
+)
 #: ComplianceAsCode datastreams the scanner image ships (``tools/ci``
 #: ``repository_security_image.CONTENT_PRODUCTS``): dpkg-based distributions,
 #: which the image's Debian-built OpenSCAP evaluates offline.
@@ -125,6 +152,10 @@ PLAN_REQUIRED_INPUTS = (
     "the saved environment, with a shipped ComplianceAsCode datastream "
     "(ssg-<product>-ds.xml) and one of its XCCDF profiles; or ARF or XCCDF "
     "results the operator produced by running OpenSCAP on the endpoint.",
+    "Or, for a running Linux host with OpenSCAP installed: target host with its "
+    "address, port, login account, pinned SSH host key, native limits and egress "
+    "policy. A saved authorization must admit the host and profile, and its "
+    "host_inspection grant and assessment are bound at launch.",
     "Optionally an XCCDF tailoring file as its own artifact, and the XCCDF rule "
     "IDs the selected standards name, so a profile that leaves one unselected "
     "is reported as partial.",
@@ -172,10 +203,57 @@ class EndpointResultsError(ValueError):
         self.code = code
 
 
+def endpoint_assessment_of(spec) -> EndpointAssessment | None:
+    """The endpoint evaluation a job carries, offline or as a host profile job."""
+    if getattr(spec, "endpoint_assessment", None) is not None:
+        return spec.endpoint_assessment
+    selection = getattr(spec, "workload_profile", None)
+    return selection.endpoint_assessment if selection is not None else None
+
+
+def build_endpoint_host_job(assessment: EndpointAssessment) -> dict:
+    """A live host as its ``endpoint-host`` profile selection, nothing more.
+
+    The deployment profile supplies the image, argv, egress and outputs;
+    admission renders and checks them. The native selection is the host's
+    own single endpoint, and the one credential is its host-inspection slot.
+    """
+    from moonmind.security.workload_profiles import (
+        ENDPOINT_HOST_MODE,
+        ENDPOINT_HOST_PROFILE_REF,
+        ENDPOINT_HOST_SLOT,
+    )
+
+    host = assessment.host
+    return {
+        "workloadProfile": {
+            "profileRef": ENDPOINT_HOST_PROFILE_REF,
+            "mode": ENDPOINT_HOST_MODE,
+            "assessmentRef": assessment.assessment_ref,
+            "nativeNetwork": host.native_selection().model_dump(
+                mode="json", by_alias=True
+            ),
+            "endpointAssessment": assessment.model_dump(mode="json", by_alias=True),
+            "credentials": [
+                {
+                    "slot": ENDPOINT_HOST_SLOT,
+                    "credentialRef": assessment.credential_ref,
+                    "account": host.account,
+                }
+            ],
+        },
+        "inputAttachments": [],
+        "resources": {"cpuMillis": 1000, "memoryMiB": 1024, "pids": 128},
+        "timeoutSeconds": assessment.timeout_seconds + 15,
+    }
+
+
 def build_endpoint_assessment_job(
     assessment: EndpointAssessment, *, image_source_ref: str = "repository-security"
 ) -> dict:
     """Workload only; admission stamps workspace and artifact authorization."""
+    if assessment.target == "host":
+        return build_endpoint_host_job(assessment)
     attachments = [
         {
             "name": INPUT_NAME,
@@ -237,6 +315,8 @@ def validate_endpoint_assessment_job(spec) -> None:
         )
     ):
         raise ValueError("endpoint assessment is its own workload")
+    if assessment.target == "host":
+        raise ValueError("a live host is evaluated through its endpoint-host profile")
     if spec.image_source_ref is None:
         raise ValueError("endpoint assessment uses a deployment-owned scanner image")
     if spec.input_attachments is None:
@@ -520,7 +600,7 @@ class ExtractionRecord(Contract):
 class EndpointExecution(Contract):
     """What the job did, written by the runner and checked by the worker."""
 
-    target: Literal["rootfs", "image", "results"]
+    target: Literal["rootfs", "image", "results", "host"]
     version: str = Field(
         pattern=r"^(?:[0-9]+\.){1,3}[0-9]+(?:[-+][A-Za-z0-9.-]+)?$|^unavailable$|^not_run$"
     )
@@ -564,17 +644,29 @@ class EndpointContent(Contract):
 
 
 class EndpointSubject(Contract):
-    """The examined subject: the scope asset and the exact bytes examined."""
+    """The examined subject: the scope asset and what identifies it.
+
+    An offline copy or import is the exact bytes examined. A live host is its
+    pinned SSH host key, with the address it was reached at.
+    """
 
     asset: Text
-    kind: Literal["rootfs", "image", "results"]
+    kind: Literal["rootfs", "image", "results", "host"]
     identity: str = Field(
-        pattern=r"^(?:rootfs|image-archive|openscap-results)@sha256:[0-9a-f]{64}$"
+        pattern=r"^(?:rootfs|image-archive|openscap-results|ssh-host)@sha256:[0-9a-f]{64}$"
     )
-    input_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    input_digest: str | None = Field(
+        None, pattern=r"^[0-9a-f]{64}$", exclude_if=lambda value: value is None
+    )
+    address: Text | None = Field(None, exclude_if=lambda value: value is None)
+    host_key_fingerprint: str | None = Field(
+        None,
+        pattern=r"^SHA256:[A-Za-z0-9+/]{43}$",
+        exclude_if=lambda value: value is None,
+    )
     os: EndpointOs | None = None
     declared_target: Text | None = None
-    observation: Literal["offline-copy", "operator-supplied"]
+    observation: Literal["offline-copy", "operator-supplied", "live-host"]
     statement: Text
 
 
@@ -625,6 +717,7 @@ def _identity(kind: str, digest: str) -> str:
         "rootfs": "rootfs",
         "image": "image-archive",
         "results": "openscap-results",
+        "host": "ssh-host",
     }
     return f"{prefix[kind]}@sha256:{digest}"
 
@@ -645,6 +738,7 @@ def summarize(
     """
     limits = set(limitations)
     evaluate = assessment.target != "results"
+    live = assessment.target == "host"
     if execution is None:
         limits.add("missing_or_invalid_execution_evidence")
     else:
@@ -653,7 +747,7 @@ def summarize(
             limits.add(f"scanner_{execution.state}")
     if native is None:
         limits.add("native_results_unavailable")
-    offline = execution.offline_rules if execution and evaluate else {}
+    offline = execution.offline_rules if execution and evaluate and not live else {}
     rules = []
     for rule in native.rules if native else ():
         kind = offline.get(rule.rule_id)
@@ -745,7 +839,20 @@ def summarize(
             limits.add("content_differs_from_admission")
         if not evaluate:
             limits.add("content_digest_not_recorded")
-    if execution is not None and execution.input_digest:
+    if live and execution is not None and native is not None:
+        # Results exist only after SSH accepted the pinned key, so the subject
+        # is the admitted host as identified by that key.
+        host = assessment.host
+        subject = EndpointSubject(
+            asset=assessment.asset,
+            kind="host",
+            identity=_identity("host", host_key_digest(host.host_key)),
+            address=host.authority,
+            hostKeyFingerprint=host_key_fingerprint(host.host_key),
+            observation="live-host",
+            statement=OBSERVATION_STATEMENTS["live-host"],
+        )
+    elif not live and execution is not None and execution.input_digest:
         observation = "offline-copy" if evaluate else "operator-supplied"
         subject = EndpointSubject(
             asset=assessment.asset,
@@ -760,8 +867,9 @@ def summarize(
     else:
         limits.add("target_identity_unavailable")
     observed_at = None
-    if native is not None and not evaluate:
-        # An import is observed as of the operator's own run.
+    if native is not None and (live or not evaluate):
+        # An import is observed as of the operator's own run, and a live host
+        # as of the evaluation that ran on it.
         observed_at = native.end_time or native.start_time
         if observed_at is None:
             limits.add("observation_time_unknown")

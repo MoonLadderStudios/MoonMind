@@ -16,6 +16,8 @@ from pydantic import (
 )
 from pydantic.alias_generators import to_camel
 
+from moonmind.security.native_network import NativeNetworkLimits
+
 Text = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1024)
 ]
@@ -275,29 +277,150 @@ class ImageAssessment(Contract):
         ]
 
 
-EndpointTarget = Literal["rootfs", "image", "results"]
+EndpointTarget = Literal["rootfs", "image", "results", "host"]
 MAX_ENDPOINT_REPORT_BYTES = 32 * 1024 * 1024
 #: XCCDF identifiers stay short, printable and separator-free.
 XCCDF_ID = r"^xccdf_[A-Za-z0-9.-]+_KIND_[A-Za-z0-9_.-]{1,128}$"
+XccdfRuleId = Annotated[
+    str, StringConstraints(pattern=XCCDF_ID.replace("KIND", "rule"))
+]
 #: Request words an evaluation never accepts; it reads, it does not change.
 _REMEDIATION_WORDS = ("remediat", "fix", "command", "script", "argv", "args")
+#: OpenSSH host key types a live host may be pinned to.
+HOST_KEY_TYPES = (
+    "ssh-ed25519",
+    "ecdsa-sha2-nistp256",
+    "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521",
+    "ssh-rsa",
+)
+_DOCKER_REF = r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$"
+
+
+def host_key(value: str) -> str:
+    """A pinned OpenSSH public host key as ``<type> <base64>``; comments drop.
+
+    The decoded key must name its own type, so a key of one type cannot be
+    pinned under another's name.
+    """
+    import base64
+    import binascii
+
+    parts = value.split() if isinstance(value, str) else []
+    if len(parts) not in (2, 3) or parts[0] not in HOST_KEY_TYPES:
+        raise ValueError("host identity must be an OpenSSH public host key")
+    try:
+        blob = base64.b64decode(parts[1], validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError("host identity must be an OpenSSH public host key") from None
+    size = int.from_bytes(blob[:4], "big") if len(blob) >= 4 else -1
+    if not 40 <= len(blob) <= 4096 or blob[4 : 4 + size] != parts[0].encode():
+        raise ValueError("host identity must be an OpenSSH public host key")
+    return f"{parts[0]} {parts[1]}"
+
+
+def host_key_digest(value: str) -> str:
+    """SHA-256 of the pinned key blob, as hex."""
+    import base64
+    import hashlib
+
+    return hashlib.sha256(base64.b64decode(value.split()[1])).hexdigest()
+
+
+def host_key_fingerprint(value: str) -> str:
+    """The OpenSSH ``SHA256:`` fingerprint an operator compares on the host."""
+    import base64
+
+    digest = bytes.fromhex(host_key_digest(value))
+    return "SHA256:" + base64.b64encode(digest).decode().rstrip("=")
+
+
+def _live_host_address(value: str) -> str:
+    from moonmind.security.native_network import canonical_host
+
+    if "/" in str(value):
+        raise ValueError("a live host is one address or DNS name, not a network")
+    return canonical_host(value)
+
+
+class EndpointHost(Contract):
+    """One running Linux host, reached over SSH through the native gateway.
+
+    ``address`` and ``port`` are the only endpoint the job's native network
+    selection names; ``limits`` are its reserved connection, byte, rate and
+    time budgets. ``hostKey`` pins the host's identity: SSH checks it before
+    any credential is used, and an unknown or changed key stops the job.
+    ``account`` is the login the host-inspection credential belongs to.
+    ``elevated`` runs the evaluation through ``sudo -n``; it is never implied.
+    Private addresses name the labeled container route that reaches them.
+    """
+
+    address: str = Field(max_length=253)
+    port: int = Field(22, ge=1, le=65535)
+    account: str = Field(pattern=r"^[a-z_][a-z0-9_-]{0,31}$")
+    host_key: str = Field(max_length=8192)
+    elevated: bool = Field(False, exclude_if=lambda value: not value)
+    target_network_ref: str | None = Field(
+        None, pattern=_DOCKER_REF, exclude_if=lambda value: value is None
+    )
+    target_container_ref: str | None = Field(
+        None, pattern=_DOCKER_REF, exclude_if=lambda value: value is None
+    )
+    limits: NativeNetworkLimits
+
+    _address = field_validator("address")(_live_host_address)
+    # A lambda: in this class body ``host_key`` names the field, not the check.
+    _key = field_validator("host_key")(lambda value: host_key(value))
+
+    @model_validator(mode="after")
+    def reachable_only_here(self):
+        # The derived selection is the job's whole native reach; building it
+        # applies the native route and private-address rules.
+        self.native_selection()
+        return self
+
+    @property
+    def authority(self) -> str:
+        return f"{self.address}:{self.port}"
+
+    def native_selection(self):
+        from moonmind.security.native_network import (
+            NativeNetworkSelection,
+            NativeNetworkTarget,
+        )
+
+        return NativeNetworkSelection(
+            targets=(
+                NativeNetworkTarget(
+                    hosts=(self.address,),
+                    ports=(self.port,),
+                    purpose="live-target",
+                    targetNetworkRef=self.target_network_ref,
+                    targetContainerRef=self.target_container_ref,
+                ),
+            ),
+            limits=self.limits,
+        )
 
 
 class EndpointAssessment(Contract):
-    """Offline OpenSCAP evaluation of an endpoint, or import of its results.
+    """OpenSCAP evaluation of an endpoint, offline or live, or result import.
 
     ``rootfs`` and ``image`` read a captured root filesystem tar or Docker/OCI
     image archive and evaluate a ComplianceAsCode profile shipped in the
     scanner image, with no network. ``results`` imports ARF or XCCDF results
     the operator produced with OpenSCAP on the endpoint. Neither is MoonMind's
-    own observation of the running device. Evaluation is read-only: the
+    own observation of the running device. ``host`` evaluates a running host
+    inside an admitted assessment: the shipped datastream is evaluated there
+    with the host's own ``oscap``, reached only through the admitted native
+    gateway with a host-inspection credential. Evaluation is read-only: the
     contract has no remediation, fix-generation or command input.
     """
 
     target: EndpointTarget
     # The endpoint's stable name in the assessment scope; findings attach to it.
     asset: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$")
-    input_artifact_ref: str = Field(pattern=r"^art_[0-9A-Za-z]{1,64}$")
+    input_artifact_ref: str | None = Field(None, pattern=r"^art_[0-9A-Za-z]{1,64}$")
     datastream: str | None = Field(None, pattern=r"^ssg-[a-z0-9]{2,32}-ds\.xml$")
     profile: str | None = Field(
         None, pattern=XCCDF_ID.replace("KIND", "profile"), max_length=176
@@ -305,9 +428,30 @@ class EndpointAssessment(Contract):
     tailoring_artifact_ref: str | None = Field(None, pattern=r"^art_[0-9A-Za-z]{1,64}$")
     # Rules this assessment must evaluate. Any the profile leaves unselected, or
     # that end without pass or fail, leave the run partial.
-    rule_ids: list[
-        Annotated[str, StringConstraints(pattern=XCCDF_ID.replace("KIND", "rule"))]
-    ] = Field(default_factory=list, max_length=256, exclude_if=lambda value: not value)
+    rule_ids: list[XccdfRuleId] = Field(
+        default_factory=list, max_length=256, exclude_if=lambda value: not value
+    )
+    # Live hosts only: the admitted assessment, the host-inspection credential
+    # reference (never its value) and the native egress policy that reaches it.
+    assessment_ref: str | None = Field(
+        None,
+        pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$",
+        exclude_if=lambda value: value is None,
+    )
+    credential_ref: str | None = Field(
+        None, min_length=4, max_length=1024, exclude_if=lambda value: value is None
+    )
+    egress_policy_ref: str | None = Field(
+        None,
+        pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$",
+        exclude_if=lambda value: value is None,
+    )
+    host: EndpointHost | None = Field(None, exclude_if=lambda value: value is None)
+    # Rules the evaluation skips (``oscap --skip-rule``); a live host's
+    # authorization can require them.
+    skip_rule_ids: list[XccdfRuleId] = Field(
+        default_factory=list, max_length=256, exclude_if=lambda value: not value
+    )
     output_directory: str = "endpoint-assessment"
     max_input_bytes: int = Field(2 * 1024**3, ge=1, le=4 * 1024**3)
     max_report_bytes: int = Field(
@@ -332,18 +476,66 @@ class EndpointAssessment(Contract):
     def output_relative(cls, value):
         return relative_path(value)
 
+    @field_validator("credential_ref")
+    @classmethod
+    def opaque_reference(cls, value):
+        if value is not None and "://" not in value:
+            raise ValueError("secret references must use an opaque reference URI")
+        return value
+
     @model_validator(mode="after")
     def admitted_choices(self):
         evaluate = self.target != "results"
+        live = self.target == "host"
         if evaluate and (self.datastream is None or self.profile is None):
             raise ValueError(
                 "offline evaluation names a shipped datastream and profile"
+                if not live
+                else "a live host evaluation names a shipped datastream and profile"
             )
         if not evaluate and (self.datastream or self.tailoring_artifact_ref):
             raise ValueError("imported results already name their content")
+        if live != (self.host is not None):
+            raise ValueError("host targets, and only they, name a live host")
+        if live:
+            if self.input_artifact_ref or self.tailoring_artifact_ref:
+                raise ValueError(
+                    "a live host is evaluated in place; it reads no input artifact"
+                )
+            if not (
+                self.assessment_ref and self.credential_ref and self.egress_policy_ref
+            ):
+                raise ValueError(
+                    "a live host needs its assessment, host-inspection credential "
+                    "and native egress policy"
+                )
+            if self.host.limits.max_duration_seconds > self.timeout_seconds:
+                raise ValueError("native duration cannot exceed the evaluation timeout")
+        else:
+            if self.input_artifact_ref is None:
+                raise ValueError(
+                    "offline evaluation and imports read an input artifact"
+                )
+            if (
+                self.assessment_ref
+                or self.credential_ref
+                or self.egress_policy_ref
+                or self.skip_rule_ids
+            ):
+                raise ValueError(
+                    "only a live host names an assessment, credential, egress "
+                    "policy or skipped rules"
+                )
         if len(set(self.rule_ids)) != len(self.rule_ids):
             raise ValueError("duplicate required rule")
-        if self.tailoring_artifact_ref == self.input_artifact_ref:
+        if len(set(self.skip_rule_ids)) != len(self.skip_rule_ids):
+            raise ValueError("duplicate skipped rule")
+        if set(self.rule_ids) & set(self.skip_rule_ids):
+            raise ValueError("a required rule cannot be skipped")
+        if (
+            self.tailoring_artifact_ref
+            and self.tailoring_artifact_ref == self.input_artifact_ref
+        ):
             raise ValueError("tailoring is its own artifact")
         return self
 

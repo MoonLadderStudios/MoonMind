@@ -313,3 +313,43 @@ def test_the_retained_report_lists_per_rule_evidence():
     assert "x_unselected" not in text
     assert "Unsupported coverage: windows" in text
     assert "not MoonMind's own observation" in text
+
+
+def live_summary(rules, *, end="2026-11-27T11:00:00+00:00"):
+    from tests.unit.security.test_endpoint_hosts import assessment
+
+    value = assessment()
+    value.update(asset=ASSET, ruleIds=[], skipRuleIds=[])
+    return summarize(
+        EndpointAssessment.model_validate(value),
+        EndpointExecution(
+            target="host",
+            version="1.3.7",
+            exitCode=2,
+            state="succeeded",
+            contentFile="ssg-debian12-ds.xml",
+            contentDigest="b" * 64,
+            contentRelease="0.1.82",
+        ),
+        parse_results(results(rules, end=end), 1 << 20),
+        native_ref="art_native",
+    )
+
+
+def test_a_live_host_reports_per_rule_evidence_through_the_same_path():
+    summary = live_summary(
+        {"sshd_disable_root_login": "pass", "package_nis_removed": "fail"}
+    )
+    observed = observe(summary, created=NOW)
+    # Observed as of the evaluation on the host, not the artifact's creation.
+    assert observed.observed_at == datetime(2026, 11, 27, 11, tzinfo=UTC)
+    assert observed.provenance["endpointObservation"] == "live-host"
+    assert observed.provenance["endpointSubject"].startswith("ssh-host@sha256:")
+    assert observed.coverage[0].intelligence["origin"] == "live-host"
+    assert [f.rule_id for f in observed.findings] == [P + "package_nis_removed"]
+    # Live results answer runtime checks: nothing is narrowed as offline-only.
+    assert objective(summary, ["sshd_disable_root_login"]).conclusion == "satisfied"
+    entry = _endpoint_entry(summary, "art_summary", observed)
+    text = _scanner_summary([entry])
+    assert f"`{P}package_nis_removed`: fail (failed)." in text
+    assert "running host" in text
