@@ -228,6 +228,63 @@ def test_missing_or_failed_answers_never_read_as_clean():
     assert failed.status == "partial"
 
 
+def corrected_with(**answers):
+    settings = assessment("corrected")
+    prepared = prepare_exports(settings, raw_exports(settings))
+    native = json.loads((FIXTURES / "native-corrected.json").read_text())
+    native["answers"].update(answers)
+    return summarize_network_config(
+        settings, prepared, native, native_ref="art_native", sanitized_refs={}
+    )
+
+
+@pytest.mark.parametrize(
+    "issue, lines",
+    [
+        (
+            {
+                "Type": "Convert warning (unimplemented)",
+                "Details": "Interface tunnel mode is not modeled",
+                "Nodes": None,
+                "Source_Lines": ["configs/edge-corrected.cfg:[16, 17]"],
+            },
+            [16, 17],
+        ),
+        (
+            {
+                "Type": "Convert warning (redflag)",
+                "Details": "No virtual address set for VRRP on GigabitEthernet0/1",
+                "Nodes": ["edge-rtr-1"],
+                "Source_Lines": None,
+            },
+            [],
+        ),
+    ],
+)
+def test_conversion_issues_downgrade_a_parsed_export(issue, lines):
+    result = corrected_with(initIssues=[issue])
+    gap = next(g for g in result.gaps if g.code == "conversion_issues")
+    assert (gap.file, gap.lines) == ("edge-corrected.cfg", lines)
+    assert issue["Type"] in gap.detail and issue["Details"] in gap.detail
+    assert result.file("edge-corrected.cfg").coverage == "partial"
+    assert result.status == "partial"
+
+
+@pytest.mark.parametrize("question", ["initIssues", "parseWarning"])
+def test_unavailable_parse_diagnostics_never_leave_coverage_complete(question):
+    result = corrected_with(**{question: {"error": "HTTPError"}})
+    assert ("question_failed", None) in {(g.code, g.file) for g in result.gaps}
+    assert result.file("edge-corrected.cfg").coverage == "partial"
+    assert result.status == "partial"
+
+
+def test_unattributed_conversion_issue_downgrades_every_parsed_export():
+    issue = {"Type": "Convert error", "Details": "Unexpected", "Nodes": ["other"]}
+    result = corrected_with(initIssues=[issue])
+    assert ("conversion_issues", None) in {(g.code, g.file) for g in result.gaps}
+    assert result.file("edge-corrected.cfg").coverage == "partial"
+
+
 def test_summary_records_provenance_and_point_in_time_freshness():
     result = summary("corrected")
     file = result.file("edge-corrected.cfg")
@@ -376,3 +433,45 @@ async def test_worker_prepares_and_collects_without_publishing_secrets(tmp_path)
     assert all(item.collection_status == "collected" for item in manifest)
     exported = datetime(2026, 11, 27, 8, tzinfo=UTC)
     assert result["files"][0]["exportedAt"].startswith(exported.date().isoformat())
+
+
+@pytest.mark.asyncio
+async def test_an_oversized_export_is_its_own_gap_not_the_batchs_failure(tmp_path):
+    from moonmind.workflows.temporal import container_job_attachments as attachments
+    from moonmind.workflows.temporal.container_job_backend import (
+        DockerContainerJobBackend,
+    )
+
+    settings = assessment("weakened")
+    spec = ContainerJobSpec.model_validate(build_network_config_job(settings))
+    bodies = {
+        e.artifact_ref: (FIXTURES / e.file_name).read_bytes() for e in settings.exports
+    }
+    oversized = settings.exports[2]
+    bodies[oversized.artifact_ref] = b"!\n" * settings.max_input_bytes
+
+    async def read(request, artifact_ref):
+        return bodies[artifact_ref]
+
+    backend = DockerContainerJobBackend(workspace_root=tmp_path, artifact_reader=read)
+    request = SimpleNamespace(
+        request=SimpleNamespace(spec=spec),
+        job_id="network-job",
+        ownership_token="owner",
+        resolved_workspace_ref=None,
+    )
+    await backend._prepare_attachments(request)
+    await backend._prepare_network_config_assessment(request)
+
+    storage = attachments.storage_for(tmp_path, "network-job")
+    captured = attachments.load_manifest(storage)["inputs"]["network-export-2"]
+    assert captured["coverage"]["limitations"] == ["input_too_large"]
+    configs = storage.outputs / settings.output_directory / "snapshot" / "configs"
+    assert sorted(p.name for p in configs.iterdir()) == [
+        "acme-unsupported.cfg",
+        "core-partial.cfg",
+        "edge-weakened.cfg",
+    ]
+    prepared = prepare_exports(settings, backend._network_exports(request))
+    assert prepared.dispositions[oversized.file_name] == "input_too_large"
+    assert "edge-weakened.cfg" in prepared.sanitized

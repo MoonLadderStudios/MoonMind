@@ -354,6 +354,17 @@ def capture_bytes(payload: bytes, destination: Path, file_name: str) -> dict:
     }
 
 
+def capture_omitted(destination: Path, reason: str) -> dict:
+    """Record an input left uncaptured, and why, in place of its bytes."""
+    destination.mkdir(parents=True)
+    return {
+        "identity": _content_identity([]),
+        "files": 0,
+        "bytes": 0,
+        "coverage": {"limitations": [reason]},
+    }
+
+
 async def prepare(
     storage: JobAttachmentStorage,
     *,

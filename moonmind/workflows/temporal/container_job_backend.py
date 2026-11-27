@@ -3484,9 +3484,17 @@ class DockerContainerJobBackend:
                     "input attachment artifact is not readable by the job owner",
                 ) from exc
             if len(payload) > item.max_bytes:
-                raise attachments.AttachmentStorageError(
-                    "input attachment exceeds its admitted bound"
+                if request.request.spec.network_config_assessment is None:
+                    raise attachments.AttachmentStorageError(
+                        "input attachment exceeds its admitted bound"
+                    )
+                # Each export is analyzed on its own, so an oversized one is
+                # that file's input_too_large gap, never the whole batch's
+                # failure. None of its bytes are captured.
+                captured = await asyncio.to_thread(
+                    attachments.capture_omitted, destination, "input_too_large"
                 )
+                return {**captured, "artifactRef": item.artifact_ref}
             captured = await asyncio.to_thread(
                 attachments.capture_bytes,
                 payload,

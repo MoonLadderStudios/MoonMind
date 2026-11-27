@@ -76,10 +76,12 @@ reruns the image over those fixtures.
 | `undefined-reference` | A reference to a structure the configuration never defines |
 
 Each file records its vendor, operating system, version, parse status and
-coverage. Unsupported vendors, unparsed lines, formats or versions MoonMind has
-not qualified (only Cisco IOS 12 to 17 so far), undecodable or oversized files,
-and failed questions are named coverage gaps that leave results partial, never
-clean. Cloud network exports and topology descriptions are kept, sanitized, for
+coverage. Unsupported vendors, unparsed lines, conversion issues (parsed
+content Batfish did not model), formats or versions MoonMind has not qualified
+(only Cisco IOS 12 to 17 so far), undecodable or oversized files, and failed
+questions are named coverage gaps that leave results partial, never clean. An
+oversized export is not captured, and the other exports are still analyzed.
+Cloud network exports and topology descriptions are kept, sanitized, for
 review; no qualified analyzer reads them yet. Optional `flows` (an IP address,
 port and protocol) ask the exported inbound filters whether they permit traffic
 to a destination; they send none.

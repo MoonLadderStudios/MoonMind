@@ -142,6 +142,7 @@ GapCode = Literal[
     "unsupported_format",
     "parse_failed",
     "unparsed_lines",
+    "conversion_issues",
     "format_not_qualified",
     "version_unidentified",
     "version_not_qualified",
@@ -476,6 +477,10 @@ _GAP_DETAIL = {
     ),
     "parse_failed": "The analyzer could not parse this export.",
     "unparsed_lines": "The analyzer did not recognize these lines; they were not checked.",
+    "conversion_issues": (
+        "The analyzer parsed this export but could not model all of it, so its "
+        "checks do not cover what it reported:"
+    ),
     "format_not_qualified": (
         "MoonMind has not qualified analyzer coverage of this format with fixtures; "
         "its results are partial."
@@ -506,6 +511,44 @@ _RULE_QUESTIONS = {
 def _config_file(value: Any) -> str | None:
     text = str(value or "")
     return text.removeprefix("configs/") if text.startswith("configs/") else None
+
+
+#: Initialization issue types the parse questions already report per file.
+_PARSE_ISSUE_TYPES = frozenset({"Parse status", "Parse warning"})
+
+
+def _conversion_issues(
+    rows: Iterable[Mapping], node_files: Mapping[str, str]
+) -> tuple[dict[str, tuple[set[int], list[str]]], list[str]]:
+    """Issues Batfish reports after parsing, by file, and those it names no file for.
+
+    Conversion problems mean the analyzer parsed lines whose meaning it did not
+    or could not model, so the checks do not cover them.
+    """
+    by_file: dict[str, tuple[set[int], list[str]]] = {}
+    unattributed: list[str] = []
+    for row in rows:
+        kind = str(row.get("Type") or "")
+        if kind in _PARSE_ISSUE_TYPES:
+            continue
+        text = f"{kind or 'Issue'}: {row.get('Details') or 'no detail'}"
+        sources = row.get("Source_Lines") or []
+        located: dict[str, list[int]] = {}
+        for source in [sources] if isinstance(sources, str) else sources:
+            name, lines = _source_lines(source)
+            if name:
+                located.setdefault(name, []).extend(lines)
+        for node in row.get("Nodes") or []:
+            name = node_files.get(str(node))
+            if name:
+                located.setdefault(name, [])
+        if not located:
+            unattributed.append(text)
+        for name, lines in located.items():
+            found, texts = by_file.setdefault(name, (set(), []))
+            found.update(lines)
+            texts.append(text)
+    return by_file, unattributed
 
 
 def _source_lines(value: Any) -> tuple[str | None, list[int]]:
@@ -606,6 +649,24 @@ def summarize_network_config(
         name, lines = _source_lines(row.get("Source_Lines"))
         if name:
             defined[(name, str(row.get("Structure_Name")))] = lines
+    parsed_nodes = {
+        str(node): name
+        for name, row in parse.items()
+        for node in row.get("Nodes") or []
+    }
+    conversion, unattributed = _conversion_issues(rows("initIssues"), parsed_nodes)
+    if unattributed:
+        gaps.append(
+            NetworkGap(
+                code="conversion_issues",
+                detail=_safe(
+                    f"{_GAP_DETAIL['conversion_issues']} {'; '.join(unattributed)}. "
+                    "No export is named, so no export's coverage is complete."
+                ),
+            )
+        )
+    # Without the parse diagnostics nothing shows which lines were not checked.
+    diagnostics_missing = bool(failed_questions & {"parseWarning", "initIssues"})
     node_file: dict[str, str] = {}
     files: list[NetworkFile] = []
     analyzed: set[str] = set()
@@ -692,6 +753,21 @@ def summarize_network_config(
                             detail=_GAP_DETAIL["unparsed_lines"],
                         )
                     )
+                if name in conversion:
+                    complete = False
+                    found, texts = conversion[name]
+                    gaps.append(
+                        NetworkGap(
+                            code="conversion_issues",
+                            file=name,
+                            lines=sorted(found)[:256],
+                            detail=_safe(
+                                f"{_GAP_DETAIL['conversion_issues']} {'; '.join(texts)}"
+                            ),
+                        )
+                    )
+                if unattributed or diagnostics_missing:
+                    complete = False
                 qualified = QUALIFIED_FORMATS.get(file_format)
                 code = None
                 if qualified is None:
