@@ -476,4 +476,18 @@ describe('Create floating submit bar on a desktop', () => {
     expect(bar.dataset.placement).toBe('floating');
     await expectBarShown(bar);
   });
+
+  it('keeps the first edit after a failed submit at 1280px', async () => {
+    const { instructions, bar, start } = await renderCreate(DESKTOP);
+    await userEvent.fill(instructions, 'Report on the desktop bar.');
+    failNextCreate = true;
+    await userEvent.click(start);
+    await within(bar).findByText(NETWORK_FAILURE);
+    // That first edit also dismisses the shown outcome; it must still land.
+    await userEvent.fill(instructions, 'Retry with this edit.');
+    expect(instructions.value).toBe('Retry with this edit.');
+    await userEvent.click(start);
+    await waitFor(() => expect(createRequests).toHaveLength(1));
+    expect(JSON.stringify(createRequests[0])).toContain('Retry with this edit.');
+  });
 });

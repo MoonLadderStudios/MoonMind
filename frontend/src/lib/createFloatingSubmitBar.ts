@@ -146,7 +146,10 @@ export function useCreateFloatingSubmitBar({
       }
     };
     const onInput = (event: Event) => {
-      if (event.target instanceof Node && barRef.current?.contains(event.target)) {
+      if (!(event.target instanceof Node) || !form.contains(event.target)) {
+        return;
+      }
+      if (barRef.current?.contains(event.target)) {
         return;
       }
       const key = revealKeyRef.current;
@@ -155,14 +158,18 @@ export function useCreateFloatingSubmitBar({
         setAcknowledgedRevealKey(key);
       }
     };
+    // React handles a field's input at its root, below the document. Listening
+    // on the form would re-render before that and reset the controlled field,
+    // so the browser drops the first edit after a submit outcome.
+    const doc = form.ownerDocument;
     form.addEventListener("focusin", onFocusIn);
     form.addEventListener("focusout", settle);
-    form.addEventListener("input", onInput);
+    doc.addEventListener("input", onInput);
     return () => {
       cancelSettle();
       form.removeEventListener("focusin", onFocusIn);
       form.removeEventListener("focusout", settle);
-      form.removeEventListener("input", onInput);
+      doc.removeEventListener("input", onInput);
     };
   }, [formRef, barRef]);
 
